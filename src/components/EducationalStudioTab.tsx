@@ -1133,7 +1133,7 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
   // ── Sub-tab 3: Reading Along Studio (Book + Pointer Hand + Whisper + MP4 Export) ──
   const [showKmOutroPreview, setShowKmOutroPreview] = useState(false);
   const { keys: clientKeys } = useClientApiKeys();
-  const [readingTitle, setReadingTitle] = useState('A Simple Morning Routine');
+  const [readingTitle, setReadingTitle] = useState('Why 5 AM Changes Everything!');
   const [readingTopic, setReadingTopic] = useState('Daily life · A1');
   const [readingPaletteId, setReadingPaletteId] =
     useState<ReadingBookPalette['id']>(

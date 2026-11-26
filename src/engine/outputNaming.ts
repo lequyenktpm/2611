@@ -59,11 +59,14 @@ export function cleanOutputTitleStem(raw: string, fallback = 'KineticSub Video')
   // Strip common media/subtitle/archive extensions (including chained ones like .mp4.part)
   text = text.replace(/\.(mp4|webm|mov|mkv|mp3|wav|m4a|srt|vtt|ass|zip|json|txt)$/i, '').trim();
 
-  // Normalize underscores and noisy separators into spaces
+  // Strip noisy filesystem characters cleanly without leaving awkward spaces inside 【...】 / [...]
   text = text
+    .replace(/[?!？]+(?=\s*[】\]\)])/g, '')
     .replace(/[\\/:*?"<>|\x00-\x1f]/g, ' ')
     .replace(/_/g, ' ')
     .replace(/\s*&\s*/g, ' and ')
+    .replace(/([【\[\(])\s+/g, '$1')
+    .replace(/\s+([】\]\)])/g, '$1')
     .replace(/\s+/g, ' ')
     .trim();
 
@@ -100,10 +103,10 @@ export function cleanOutputTitleStem(raw: string, fallback = 'KineticSub Video')
     return fallback;
   }
 
-  if (text.length > 100) {
-    const sliced = text.slice(0, 100);
+  if (text.length > 84) {
+    const sliced = text.slice(0, 84);
     const lastSpace = sliced.lastIndexOf(' ');
-    text = (lastSpace > 40 ? sliced.slice(0, lastSpace) : sliced).replace(/[.\-\s]+$/g, '').trim();
+    text = (lastSpace > 36 ? sliced.slice(0, lastSpace) : sliced).replace(/[.\-\s]+$/g, '').trim();
   }
 
   return text || fallback;

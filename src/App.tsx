@@ -657,7 +657,15 @@ export default function App() {
     if (next.aspectRatio) {
       const nextAspect = next.aspectRatio;
       setProject((prev) =>
-        prev.aspectRatio === nextAspect ? prev : { ...prev, aspectRatio: nextAspect },
+        prev.aspectRatio === nextAspect
+          ? prev
+          : {
+              ...prev,
+              aspectRatio: nextAspect,
+              elements: prev.elements.map((el) =>
+                el.layout.manualPosition ? { ...el, layout: { ...el.layout, manualPosition: false } } : el,
+              ),
+            },
       );
     }
   }, []);
@@ -772,6 +780,26 @@ export default function App() {
       ...prev,
       elements: prev.elements.map((el) =>
         el.id === id ? { ...el, layout: { ...el.layout, x, y, manualPosition: true } } : el,
+      ),
+    }));
+  }, []);
+
+  const handleApplySubtitlePositionToAll = useCallback((x: number, y: number) => {
+    setProject((prev) => ({
+      ...prev,
+      elements: prev.elements.map((el) =>
+        el.type === 'karaoke-card'
+          ? { ...el, layout: { ...el.layout, x, y, manualPosition: true } }
+          : el,
+      ),
+    }));
+  }, []);
+
+  const handleResetElementPosition = useCallback((id: string) => {
+    setProject((prev) => ({
+      ...prev,
+      elements: prev.elements.map((el) =>
+        el.id === id ? { ...el, layout: { ...el.layout, manualPosition: false } } : el,
       ),
     }));
   }, []);
@@ -990,43 +1018,96 @@ export default function App() {
         />
       )}
 
-      {/* Modern Studio Navigation Bar */}
-      <header className="sticky top-0 z-30 bg-white/95 backdrop-blur-md border-b border-slate-200/90 px-4 lg:px-6 py-2 shadow-xs">
-        <div className="max-w-[1400px] mx-auto flex flex-wrap items-center justify-between gap-3">
-          <a
-            href="#studio"
-            onClick={(e) => {
-              e.preventDefault();
-              setActiveTab('studio');
-            }}
-            className="flex items-center gap-2.5 shrink-0 group"
-          >
-            <div className="w-9 h-9 rounded-lg bg-slate-900 text-white flex items-center justify-center shadow-xs group-hover:bg-indigo-600 transition-colors">
-              <Clapperboard className="w-4 h-4" />
-            </div>
-            <div className="leading-tight">
-              <div className="flex items-center gap-2">
-                <span className="text-[15px] font-bold tracking-tight text-slate-900 font-display">
-                  KineticSub Studio
-                </span>
-                <span className="px-1.5 py-0.5 text-[10px] font-mono font-semibold text-indigo-700 bg-indigo-50 border border-indigo-200 rounded">
-                  {project.aspectRatio || mp4Settings.aspectRatio || '9:16'}
-                </span>
+      {/* Balanced Multi-Zone Studio Navigation Bar */}
+      <header className="sticky top-0 z-30 bg-white/95 backdrop-blur-md border-b border-slate-200/90 px-3 sm:px-5 lg:px-6 py-2.5 shadow-xs">
+        <div className="max-w-[1440px] mx-auto flex flex-col xl:flex-row xl:items-center xl:justify-between gap-2.5">
+          {/* Brand & Utility Actions on Narrow Screens, Brand on Left on XL */}
+          <div className="flex items-center justify-between gap-3 shrink-0">
+            <a
+              href="#studio"
+              onClick={(e) => {
+                e.preventDefault();
+                setActiveTab('studio');
+              }}
+              className="flex items-center gap-2.5 shrink-0 group"
+            >
+              <div className="w-8 h-8 rounded-lg bg-slate-900 text-white flex items-center justify-center shadow-xs group-hover:bg-indigo-600 transition-colors">
+                <Clapperboard className="w-4 h-4" />
               </div>
-              <div className="text-[10px] font-medium text-slate-500">
-                Video Học Ngoại Ngữ · Ambient · Python Exporter
+              <div className="leading-tight">
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[14px] sm:text-[15px] font-bold tracking-tight text-slate-900 font-display">
+                    KineticSub Studio
+                  </span>
+                  <span className="px-1.5 py-0.5 text-[10px] font-mono font-semibold text-indigo-700 bg-indigo-50 border border-indigo-200 rounded">
+                    {project.aspectRatio || mp4Settings.aspectRatio || '9:16'}
+                  </span>
+                </div>
+                <div className="hidden sm:block text-[10px] font-medium text-slate-500">
+                  Video Học Ngoại Ngữ · AI Choreography · MP4 Exporter
+                </div>
               </div>
-            </div>
-          </a>
+            </a>
 
+            {/* Compact mobile utility actions */}
+            <div className="flex xl:hidden items-center gap-1.5">
+              <button
+                type="button"
+                onClick={() => setIsComponentDbOpen(true)}
+                title="Kho Component"
+                className="inline-flex items-center gap-1 px-2.5 py-1.5 text-[11px] font-semibold text-slate-700 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 whitespace-nowrap"
+              >
+                <Database className="w-3.5 h-3.5 text-indigo-600" />
+                <span className="hidden sm:inline">Kho Component</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setIsBatchModalOpen(true)}
+                title="Chạy Batch Hàng Loạt"
+                className="inline-flex items-center gap-1 px-2.5 py-1.5 text-[11px] font-semibold text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 whitespace-nowrap"
+              >
+                <Layers className="w-3.5 h-3.5" />
+                <span>Batch</span>
+              </button>
+              {isConfirmingReset ? (
+                <div className="inline-flex items-center gap-1 bg-rose-50 border border-rose-200 rounded-lg px-1.5 py-1">
+                  <button
+                    type="button"
+                    onClick={() => void resetAllUserSettings()}
+                    className="px-1.5 py-0.5 text-[10px] font-semibold text-white bg-rose-600 rounded hover:bg-rose-700 whitespace-nowrap"
+                  >
+                    Reset
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setIsConfirmingReset(false)}
+                    className="px-1 text-[10px] font-medium text-slate-600"
+                  >
+                    Hủy
+                  </button>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setIsConfirmingReset(true)}
+                  title="Khôi phục tất cả cài đặt về mặc định"
+                  className="inline-flex items-center justify-center p-1.5 text-slate-500 bg-slate-50 border border-slate-200 rounded-lg hover:text-rose-700 hover:border-rose-300"
+                >
+                  <RotateCcw className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* Primary Segmented Workspace Navigation */}
           <nav
             aria-label="Menu chính"
-            className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl border border-slate-200/90 overflow-x-auto max-w-full"
+            className="flex flex-wrap sm:flex-nowrap items-center justify-center sm:justify-start gap-1 bg-slate-100/90 p-1 rounded-xl border border-slate-200/90 max-w-full w-full sm:w-auto self-start xl:self-auto"
           >
             <button
               type="button"
               onClick={() => setActiveTab('studio')}
-              className={`inline-flex items-center gap-2 px-3.5 py-1.5 text-xs font-semibold rounded-lg transition-all whitespace-nowrap shrink-0 ${
+              className={`inline-flex items-center gap-1.5 px-2.5 sm:px-3.5 py-1.5 text-[11px] sm:text-xs font-semibold rounded-lg transition-all whitespace-nowrap shrink-0 ${
                 activeTab === 'studio'
                   ? 'bg-white text-indigo-700 shadow-xs ring-1 ring-slate-200'
                   : 'text-slate-600 hover:text-slate-900 hover:bg-white/70'
@@ -1041,7 +1122,7 @@ export default function App() {
             <button
               type="button"
               onClick={() => setActiveTab('reels')}
-              className={`inline-flex items-center gap-2 px-3.5 py-1.5 text-xs font-semibold rounded-lg transition-all whitespace-nowrap shrink-0 ${
+              className={`inline-flex items-center gap-1.5 px-2.5 sm:px-3.5 py-1.5 text-[11px] sm:text-xs font-semibold rounded-lg transition-all whitespace-nowrap shrink-0 ${
                 activeTab === 'reels'
                   ? 'bg-white text-violet-700 shadow-xs ring-1 ring-slate-200'
                   : 'text-slate-600 hover:text-slate-900 hover:bg-white/70'
@@ -1056,7 +1137,7 @@ export default function App() {
             <button
               type="button"
               onClick={() => setActiveTab('edu-studio')}
-              className={`inline-flex items-center gap-2 px-3.5 py-1.5 text-xs font-semibold rounded-lg transition-all whitespace-nowrap shrink-0 ${
+              className={`inline-flex items-center gap-1.5 px-2.5 sm:px-3.5 py-1.5 text-[11px] sm:text-xs font-semibold rounded-lg transition-all whitespace-nowrap shrink-0 ${
                 activeTab === 'edu-studio'
                   ? 'bg-white text-emerald-700 shadow-xs ring-1 ring-slate-200'
                   : 'text-slate-600 hover:text-slate-900 hover:bg-white/70'
@@ -1069,8 +1150,28 @@ export default function App() {
             </button>
           </nav>
 
-          <div className="flex items-center gap-2 shrink-0">
-            <div className="hidden sm:block h-5 w-px bg-slate-200" aria-hidden="true" />
+          {/* Desktop Right Utility Group (Ordered by frequency & visual priority) */}
+          <div className="hidden xl:flex items-center gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={() => setIsComponentDbOpen(true)}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-700 bg-white border border-slate-200 rounded-lg hover:border-indigo-300 hover:bg-indigo-50/50 hover:text-indigo-700 transition-colors shadow-xs whitespace-nowrap shrink-0"
+            >
+              <Database className="w-3.5 h-3.5 text-indigo-600" />
+              <span>Kho Component</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setIsBatchModalOpen(true)}
+              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 transition-colors shadow-xs whitespace-nowrap shrink-0"
+            >
+              <Layers className="w-3.5 h-3.5" />
+              <span>Chạy Batch Hàng Loạt</span>
+            </button>
+
+            <div className="h-5 w-px bg-slate-200 mx-0.5" aria-hidden="true" />
+
             {isConfirmingReset ? (
               <div className="inline-flex items-center gap-1 bg-rose-50 border border-rose-200 rounded-lg px-2 py-1">
                 <button
@@ -1099,24 +1200,6 @@ export default function App() {
                 <span>Mặc định</span>
               </button>
             )}
-
-            <button
-              type="button"
-              onClick={() => setIsComponentDbOpen(true)}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-700 bg-white border border-slate-200 rounded-lg hover:border-indigo-300 hover:bg-indigo-50/50 hover:text-indigo-700 transition-colors shadow-xs whitespace-nowrap shrink-0"
-            >
-              <Database className="w-3.5 h-3.5 text-indigo-600" />
-              <span>Kho Component</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setIsBatchModalOpen(true)}
-              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 transition-colors shadow-xs whitespace-nowrap shrink-0"
-            >
-              <Layers className="w-3.5 h-3.5" />
-              <span>Chạy Batch Hàng Loạt</span>
-            </button>
           </div>
         </div>
       </header>
@@ -1203,7 +1286,7 @@ export default function App() {
                 exportProgress={exportProgress}
                 exportStageLabel={exportStageLabel}
                 lastExportSummary={lastExportSummary}
-                selectedElementId={isAdvancedOpen ? selectedElementId : null}
+                selectedElementId={selectedElementId}
                 onChangeMp4Settings={handleChangeMp4Settings}
                 onChangeComposition={handleChangeComposition}
                 onRandomizeComposition={handleRandomizeComposition}
@@ -1242,6 +1325,8 @@ export default function App() {
                 onChangeWatermark={handleChangeWatermark}
                 onSelectElement={setSelectedElementId}
                 onMoveElement={handleMoveElement}
+                onApplySubtitlePositionToAll={handleApplySubtitlePositionToAll}
+                onResetElementPosition={handleResetElementPosition}
                 onExportVideo={() => void handleExportVideo()}
                 onCancelExportVideo={handleCancelExportVideo}
                 onOpenOutputFolder={() => void handleOpenOutputFolder()}

@@ -27,6 +27,8 @@ const RE_HAS_SPOKEN_CHAR =
 const RE_HAS_PINYIN_TONE = /[āáǎàēéěèīíǐìōóǒòūúǔùǖǘǚǜĀÁǍÀĒÉĚÈĪÍǏÌŌÓǑÒŪÚǓÙǕǗǙǛ]/;
 const RE_VI_ASCII_SYLLABLE =
   /^(?:ngh|ng|nh|ch|tr|th|ph|kh|gh|gi|qu|[bcdfghklmnpqrstvwxz])?(?:a|e|i|o|u|y|ai|ao|au|ay|eo|eu|ia|ie|iu|oa|oe|oi|oo|ou|ua|ue|ui|uo|uu|uy|yai|yao|yeu|ieu|oai|oay|uay|uoi|uou|uya|uye|uyu)(?:ng|nh|ch|[cmnpt])?$/;
+const RE_PROFICIENCY_LEVEL_CODE =
+  /^(?:N[1-5]|JLPT|CEFR|HSK[1-9]?|TOPIK[1-6]?|[ABC][12])$/i;
 
 // Unaccented lowercase tokens that exist in Vietnamese phrases and do not collide with standard English words.
 const UNAMBIGUOUS_VI_ASCII = new Set([
@@ -419,6 +421,9 @@ function classifyLatinAsciiToken(
 ): 'def-vi' | 'def-foreign' | 'ambiguous' {
   const lower = rawWord.toLowerCase().replace(/^'+|'+$/g, '');
   if (!lower) return 'ambiguous';
+  if (RE_PROFICIENCY_LEVEL_CODE.test(rawWord)) {
+    return primary === 'vi' || secondary === 'vi' ? 'def-vi' : 'ambiguous';
+  }
   const isAllCapsAcronym = rawWord.length >= 2 && /^[A-Z0-9]{2,}$/.test(rawWord);
   if (isAllCapsAcronym) return 'def-foreign';
   if (UNAMBIGUOUS_VI_ASCII.has(lower)) return 'def-vi';
@@ -574,8 +579,9 @@ export function splitMixedLanguageTtsSpans(
   });
 
   // Tokenize into script-homogeneous pieces + separators with clause index tracking
+  // Allow trailing digits inside Latin tokens (e.g. N1..N5, HSK4, B1) so level tags aren't split into letter + number
   const regex =
-    /([\u3040-\u30ff\u31f0-\u31ff\uff65-\uff9f\u3400-\u4dbf\u4e00-\u9faf\u3005\u3006ー々]+)|([\uac00-\ud7af\u1100-\u11ff\u3130-\u318f]+)|([A-Za-zÀ-ỹāáǎàēéěèīíǐìōóǒòūúǔùǖǘǚǜĀÁǍÀĒÉĚÈĪÍǏÌŌÓǑÒŪÚǓÙǕǗǙǛ][A-Za-zÀ-ỹāáǎàēéěèīíǐìōóǒòūúǔùǖǘǚǜĀÁǍÀĒÉĚÈĪÍǏÌŌÓǑÒŪÚǓÙǕǗǙǛ'’-]*)|(\d+(?:[.,:/-]\d+)*%?)|(\s+|[^\sA-Za-zÀ-ỹ0-9\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9faf\uac00-\ud7af]+)/g;
+    /([\u3040-\u30ff\u31f0-\u31ff\uff65-\uff9f\u3400-\u4dbf\u4e00-\u9faf\u3005\u3006ー々]+)|([\uac00-\ud7af\u1100-\u11ff\u3130-\u318f]+)|([A-Za-zÀ-ỹāáǎàēéěèīíǐìōóǒòūúǔùǖǘǚǜĀÁǍÀĒÉĚÈĪÍǏÌŌÓǑÒŪÚǓÙǕǗǙǛ][A-Za-zÀ-ỹāáǎàēéěèīíǐìōóǒòūúǔùǖǘǚǜĀÁǍÀĒÉĚÈĪÍǏÌŌÓǑÒŪÚǓÙǕǗǙǛ0-9'’-]*)|(\d+(?:[.,:/-]\d+)*%?)|(\s+|[^\sA-Za-zÀ-ỹ0-9\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9faf\uac00-\ud7af]+)/g;
 
   const pieces: Array<RawPiece & { asciiClass?: 'def-vi' | 'def-foreign' | 'ambiguous' }> = [];
   let match: RegExpExecArray | null;
@@ -635,11 +641,33 @@ export function splitMixedLanguageTtsSpans(
       } else {
         asciiClass = classifyLatinAsciiToken(raw, primary, secondary);
         const lower = raw.toLowerCase();
-        const isAllCapsAcronym = raw.length >= 2 && /^[A-Z0-9]{2,}$/.test(raw);
-        if (asciiClass === 'def-vi') {
+        const isLevelCode = RE_PROFICIENCY_LEVEL_CODE.test(raw);
+        const isAllCapsAcronym = !isLevelCode && raw.length >= 2 && /^[A-Z0-9]{2,}$/.test(raw);
+        const hasEnFrEsTarget =
+          primary === 'en' ||
+          secondary === 'en' ||
+          primary === 'fr' ||
+          secondary === 'fr' ||
+          primary === 'es' ||
+          secondary === 'es';
+        if (isLevelCode && (inViClause || primary === 'vi' || textContainsViDiacritics || secondaryIsVi)) {
+          langHint = 'vi';
+          asciiClass = 'def-vi';
+        } else if (asciiClass === 'def-vi') {
           langHint = 'vi';
         } else if (asciiClass === 'def-foreign') {
-          langHint = foreignLatinLang;
+          if (
+            !hasEnFrEsTarget &&
+            inViClause &&
+            secondaryIsVi &&
+            raw.length <= 4 &&
+            /^[A-Z0-9]{1,4}$/.test(raw)
+          ) {
+            langHint = 'vi';
+            asciiClass = 'def-vi';
+          } else {
+            langHint = foreignLatinLang;
+          }
         } else if (
           (inViClause || primary === 'vi' || textContainsViDiacritics || secondaryIsVi) &&
           !isAllCapsAcronym &&

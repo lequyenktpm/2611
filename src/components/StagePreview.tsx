@@ -6,6 +6,7 @@ import {
   getStageDimensionsForAspect,
   hitTestElementLayout,
   renderProjectFrame,
+  resolveElementLayoutForAspect,
   seekBackgroundVideoTo,
   subscribeBgImageLoaded,
 } from '../engine/canvasRenderer';
@@ -82,6 +83,8 @@ interface StagePreviewProps {
   onChangeWatermark?: (wm: WatermarkOutroConfig) => void;
   onSelectElement: (id: string | null) => void;
   onMoveElement: (id: string, x: number, y: number) => void;
+  onApplySubtitlePositionToAll?: (x: number, y: number) => void;
+  onResetElementPosition?: (id: string) => void;
   onExportVideo: () => void;
   onCancelExportVideo?: () => void;
   onOpenOutputFolder?: () => void;
@@ -112,6 +115,8 @@ export const StagePreview: React.FC<StagePreviewProps> = ({
   onChangeWatermark,
   onSelectElement,
   onMoveElement,
+  onApplySubtitlePositionToAll,
+  onResetElementPosition,
   onExportVideo,
   onCancelExportVideo,
   onOpenOutputFolder,
@@ -261,7 +266,15 @@ export const StagePreview: React.FC<StagePreviewProps> = ({
   const handlePointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
     if (isPlaying || isExportingVideo) return;
     const { x, y } = toCanvasCoords(e);
-    const hit = hitTestElementLayout(project.elements, x, y, currentTime, effectiveAspect);
+    const hit = hitTestElementLayout(
+      project.elements,
+      x,
+      y,
+      currentTime,
+      effectiveAspect,
+      project.subtitleConfig,
+      project.compositionId,
+    );
     if (hit) {
       onSelectElement(hit.element.id);
       dragStateRef.current = {
@@ -279,8 +292,8 @@ export const StagePreview: React.FC<StagePreviewProps> = ({
     const drag = dragStateRef.current;
     if (!drag) return;
     const { x, y } = toCanvasCoords(e);
-    const clampedX = Math.max(120, Math.min(stageDims.width - 120, Math.round(x + drag.offsetX)));
-    const clampedY = Math.max(120, Math.min(stageDims.height - 120, Math.round(y + drag.offsetY)));
+    const clampedX = Math.max(80, Math.min(stageDims.width - 80, Math.round(x + drag.offsetX)));
+    const clampedY = Math.max(60, Math.min(stageDims.height - 60, Math.round(y + drag.offsetY)));
     onMoveElement(drag.id, clampedX, clampedY);
   };
 
@@ -856,12 +869,12 @@ export const StagePreview: React.FC<StagePreviewProps> = ({
       )}
 
       {/* Live Aspect-Adaptive Preview Canvas */}
-      <div className="my-3 flex items-center justify-center w-full">
+      <div className="my-3 flex flex-col items-center justify-center w-full gap-2">
         <div
           data-aspect-ratio={effectiveAspect}
           className={`relative overflow-hidden border border-slate-200 shadow-sm bg-slate-100 ${
             effectiveAspect === '16:9'
-              ? 'w-full max-w-[460px] aspect-video rounded-2xl'
+              ? 'w-full max-w-[540px] aspect-video rounded-2xl'
               : effectiveAspect === '1:1'
                 ? 'w-full max-w-[380px] aspect-square rounded-2xl'
                 : effectiveAspect === '4:5'
@@ -906,6 +919,63 @@ export const StagePreview: React.FC<StagePreviewProps> = ({
             </div>
           )}
         </div>
+
+        {(() => {
+          const selectedEl = selectedElementId
+            ? project.elements.find((el) => el.id === selectedElementId) ?? null
+            : null;
+          if (!selectedEl) return null;
+          const resolvedLayout =
+            resolveElementLayoutForAspect(
+              project.elements,
+              currentTime,
+              effectiveAspect,
+              project.subtitleConfig,
+              project.compositionId,
+            ).get(selectedEl.id) || selectedEl.layout;
+          return (
+            <div
+              data-testid="studio-layout-toolbar"
+              className="w-full px-2.5 py-1.5 rounded-lg bg-slate-50 border border-slate-200/80 flex flex-wrap items-center justify-between gap-2 text-[10px]"
+            >
+              <span className="text-slate-600 font-medium">
+                {selectedEl.label} ·{' '}
+                <span className="font-mono font-semibold text-indigo-700 tabular-nums">
+                  x:{Math.round(resolvedLayout.x)}, y:{Math.round(resolvedLayout.y)}
+                </span>
+                {selectedEl.type === 'karaoke-card' && (
+                  <span className="text-slate-400"> · Chỉ thẻ này</span>
+                )}
+              </span>
+              <div className="flex items-center gap-1.5">
+                {selectedEl.type === 'karaoke-card' && onApplySubtitlePositionToAll && (
+                  <button
+                    type="button"
+                    data-testid="studio-apply-sub-all"
+                    onClick={() =>
+                      onApplySubtitlePositionToAll(
+                        Math.round(resolvedLayout.x),
+                        Math.round(resolvedLayout.y),
+                      )
+                    }
+                    className="px-2 py-0.5 font-semibold text-indigo-700 bg-indigo-50 border border-indigo-200 rounded hover:bg-indigo-100"
+                  >
+                    Áp dụng cho tất cả Sub
+                  </button>
+                )}
+                {selectedEl.layout.manualPosition && onResetElementPosition && (
+                  <button
+                    type="button"
+                    onClick={() => onResetElementPosition(selectedEl.id)}
+                    className="px-2 py-0.5 font-semibold text-slate-700 bg-white border border-slate-200 rounded hover:bg-slate-100"
+                  >
+                    Đặt lại vị trí
+                  </button>
+                )}
+              </div>
+            </div>
+          );
+        })()}
       </div>
 
       {/* Transport & Scrubber */}

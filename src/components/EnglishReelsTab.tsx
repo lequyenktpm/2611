@@ -129,7 +129,9 @@ import { buildApiKeyHeaders, useClientApiKeys } from '../utils/apiKeysStore';
 import { resizeImageFileToStageDataUrl } from '../utils/imageResize';
 import {
   loadPersistedSettings,
+  PersistedReelsModeSettings,
   PersistedStudioSettings,
+  resolveReelsModeSettings,
   updatePersistedSettings,
   USER_SETTINGS_HYDRATED_EVENT,
   USER_SETTINGS_RESET_EVENT,
@@ -268,10 +270,35 @@ interface ReelsModeWorkspaceSnapshot {
     Record<ExportAspectRatioId, Record<string, ElementLayoutOverride>>
   >;
   selectedPreviewElementId: string | null;
+  includeQuizInPrompt: 'auto' | 'always' | 'none';
+  targetLang: string;
+  ttsProvider: string;
+  ttsVoice: string;
+  enableDualTts: boolean;
+  splitAudioByRole: boolean;
+  explanationTtsVoice: string;
+  ttsRate: number;
+  reelsAspectRatio: ExportAspectRatioId;
+  selectedTheme: CanvasThemeId;
+  selectedComposition: LayoutCompositionId;
+  subtitlePosition: SubtitlePosition;
+  subtitleSize: SubtitleSize;
+  subtitleBoxStyle: SubtitleBoxStyle;
+  backgroundImage: BackgroundImageConfig | undefined;
+  bgmPreset: StudioBgmPresetId;
+  bgmVolume: number;
+  watermarkConfig: WatermarkOutroConfig;
+  mp4Resolution: ExportResolutionId;
+  mp4Quality: ExportQualityId;
+  mp4Fps: ExportFpsOption;
 }
 
 export const EnglishReelsTab: React.FC<EnglishReelsTabProps> = ({ onSendToStudio }) => {
   const [initialReelsSaved] = useState(() => loadPersistedSettings().reels);
+  const initialCreationMode: ReelCreationMode = initialReelsSaved?.reelCreationMode || 'source';
+  const [initialModeSaved] = useState<PersistedReelsModeSettings>(() =>
+    resolveReelsModeSettings(initialReelsSaved, initialCreationMode),
+  );
   const skipNextPersistRef = useRef(false);
   const hasMountedPersistRef = useRef(false);
   const hasCustomCardsRef = useRef(
@@ -289,9 +316,7 @@ export const EnglishReelsTab: React.FC<EnglishReelsTabProps> = ({ onSendToStudio
   const createdAudioUrlsRef = useRef<Set<string>>(new Set());
 
   // ── 1. Creation Mode, URL Scraper & Content ───────────────────────────────
-  const [reelCreationMode, setReelCreationMode] = useState<ReelCreationMode>(
-    () => initialReelsSaved?.reelCreationMode || 'source',
-  );
+  const [reelCreationMode, setReelCreationMode] = useState<ReelCreationMode>(initialCreationMode);
   const [sourceDurationMinutes, setSourceDurationMinutes] = useState<number>(
     () => initialReelsSaved?.sourceDurationMinutes ?? 2,
   );
@@ -341,7 +366,7 @@ export const EnglishReelsTab: React.FC<EnglishReelsTabProps> = ({ onSendToStudio
     () => initialReelsSaved?.translationIncludeNuance ?? true,
   );
   const [includeQuizInPrompt, setIncludeQuizInPrompt] = useState<'auto' | 'always' | 'none'>(
-    () => initialReelsSaved?.includeQuizInPrompt || 'auto',
+    () => initialModeSaved.includeQuizInPrompt || 'auto',
   );
 
   const [urlInput, setUrlInput] = useState('');
@@ -350,8 +375,8 @@ export const EnglishReelsTab: React.FC<EnglishReelsTabProps> = ({ onSendToStudio
   const [scrapeResult, setScrapeResult] = useState<ReelScrapeResult | null>(null);
 
   const [initialStarter] = useState(() => {
-    const savedMode = initialReelsSaved?.reelCreationMode || 'source';
-    const savedExpl = initialReelsSaved?.targetLang || 'Tiếng Việt';
+    const savedMode = initialCreationMode;
+    const savedExpl = initialModeSaved.targetLang || 'Tiếng Việt';
     if (savedMode === 'translation' && !initialReelsSaved?.rawText) {
       return buildTranslationCardsFromInput({
         topicHint: initialReelsSaved?.translationTopicHint,
@@ -381,10 +406,10 @@ export const EnglishReelsTab: React.FC<EnglishReelsTabProps> = ({ onSendToStudio
   );
   const [rawText, setRawText] = useState(() => initialReelsSaved?.rawText || SAMPLE_ARTICLE_TEXT);
   const [mode, setMode] = useState<ReelMode>(
-    () => initialStarter?.mode || initialReelsSaved?.mode || 'auto',
+    () => initialStarter?.mode || initialModeSaved.mode || 'auto',
   );
   const [targetLang, setTargetLang] = useState(
-    () => initialReelsSaved?.targetLang || 'Tiếng Việt',
+    () => initialModeSaved.targetLang || 'Tiếng Việt',
   );
 
   // ── 2. Web AI Prompt & JSON Paste ──────────────────────────────────────────
@@ -397,14 +422,14 @@ export const EnglishReelsTab: React.FC<EnglishReelsTabProps> = ({ onSendToStudio
   // ── 3. Cards Editor State ──────────────────────────────────────────────────
   const [cards, setCards] = useState<ReelCard[]>(() => {
     if (initialStarter) return initialStarter.cards;
-    if (initialReelsSaved?.reelCreationMode === 'translation') {
+    if (initialCreationMode === 'translation') {
       return buildTranslationCardsFromInput({
         topicHint: initialReelsSaved?.translationTopicHint,
         customInputLines: initialReelsSaved?.translationCustomLines,
         learningLanguage: initialReelsSaved?.translationLearningLang || 'en',
         level: initialReelsSaved?.translationLevel || 'B1',
         itemCount: initialReelsSaved?.translationItemCount ?? 6,
-        targetLang: initialReelsSaved?.targetLang || 'Tiếng Việt',
+        targetLang: initialModeSaved.targetLang || 'Tiếng Việt',
         thinkSec: initialReelsSaved?.translationThinkSec ?? 4,
         repeatCount: initialReelsSaved?.translationRepeatCount ?? 2,
         includeNuanceTip: initialReelsSaved?.translationIncludeNuance ?? true,
@@ -413,9 +438,9 @@ export const EnglishReelsTab: React.FC<EnglishReelsTabProps> = ({ onSendToStudio
     const textToBuild = initialReelsSaved?.rawText || SAMPLE_ARTICLE_TEXT;
     return buildReelCardsRuleBased(textToBuild, {
       title: initialReelsSaved?.lessonTitle || 'Hotel Check-in & Polite Requests',
-      mode: initialReelsSaved?.mode || 'auto',
-      targetLang: initialReelsSaved?.targetLang || 'Tiếng Việt',
-      includeQuiz: (initialReelsSaved?.includeQuizInPrompt || 'auto') !== 'none',
+      mode: initialModeSaved.mode || 'auto',
+      targetLang: initialModeSaved.targetLang || 'Tiếng Việt',
+      includeQuiz: (initialModeSaved.includeQuizInPrompt || 'auto') !== 'none',
     }).cards;
   });
   const [activeCardIdx, setActiveCardIdx] = useState(0);
@@ -424,59 +449,64 @@ export const EnglishReelsTab: React.FC<EnglishReelsTabProps> = ({ onSendToStudio
   const [ttsProviders, setTtsProviders] = useState<TtsProviderInfo[]>([]);
   const [hasGeminiKey, setHasGeminiKey] = useState(false);
   const [hasElevenLabsKey, setHasElevenLabsKey] = useState(false);
-  const [ttsProvider, setTtsProvider] = useState(() => initialReelsSaved?.ttsProvider || 'auto');
+  const [ttsProvider, setTtsProvider] = useState(() => initialModeSaved.ttsProvider || 'auto');
   const [ttsVoice, setTtsVoice] = useState(() => {
-    const savedLang = initialReelsSaved?.creatorLearningLang || 'en';
-    const savedVoice = initialReelsSaved?.ttsVoice;
+    const savedLang =
+      initialCreationMode === 'creator'
+        ? initialReelsSaved?.creatorLearningLang || 'en'
+        : initialCreationMode === 'translation'
+          ? initialReelsSaved?.translationLearningLang || 'en'
+          : 'en';
+    const savedVoice = initialModeSaved.ttsVoice;
     if (savedVoice && (savedLang === 'en' || detectVoiceLangCode(savedVoice) === savedLang)) {
       return savedVoice;
     }
     return pickLearningDefaultVoice(savedLang);
   });
   const [enableDualTts, setEnableDualTts] = useState(
-    () => initialReelsSaved?.enableDualTts ?? true,
+    () => initialModeSaved.enableDualTts ?? true,
   );
   const [splitAudioByRole, setSplitAudioByRole] = useState(
-    () => initialReelsSaved?.splitAudioByRole ?? true,
+    () => initialModeSaved.splitAudioByRole ?? true,
   );
   const [explanationTtsVoice, setExplanationTtsVoice] = useState(
     () =>
-      initialReelsSaved?.explanationTtsVoice ||
-      pickExplanationDefaultVoice(initialReelsSaved?.targetLang || 'Tiếng Việt'),
+      initialModeSaved.explanationTtsVoice ||
+      pickExplanationDefaultVoice(initialModeSaved.targetLang || 'Tiếng Việt'),
   );
-  const [ttsRate, setTtsRate] = useState(() => initialReelsSaved?.ttsRate ?? 1.0);
+  const [ttsRate, setTtsRate] = useState(() => initialModeSaved.ttsRate ?? 1.0);
   const [reelsAspectRatio, setReelsAspectRatio] = useState<ExportAspectRatioId>(
-    () => initialReelsSaved?.reelsAspectRatio || '9:16',
+    () => initialModeSaved.reelsAspectRatio || '9:16',
   );
   const [selectedTheme, setSelectedTheme] = useState<CanvasThemeId>(
-    () => initialReelsSaved?.selectedTheme || 'pastel-sunrise',
+    () => initialModeSaved.selectedTheme || 'pastel-sunrise',
   );
   const [selectedComposition, setSelectedComposition] = useState<LayoutCompositionId>(
-    () => initialReelsSaved?.selectedComposition || 'story-scenes',
+    () => initialModeSaved.selectedComposition || 'story-scenes',
   );
   const [subtitlePosition, setSubtitlePosition] = useState<SubtitlePosition>(
     () =>
-      initialReelsSaved?.subtitlePosition ??
-      (initialReelsSaved?.selectedComposition === 'plain' ? 'center' : 'bottom'),
+      initialModeSaved.subtitlePosition ??
+      (initialModeSaved.selectedComposition === 'plain' ? 'center' : 'bottom'),
   );
   const [subtitleSize, setSubtitleSize] = useState<SubtitleSize>(
     () =>
-      initialReelsSaved?.subtitleSize ??
-      (initialReelsSaved?.selectedComposition === 'plain' ? 'lg' : 'md'),
+      initialModeSaved.subtitleSize ??
+      (initialModeSaved.selectedComposition === 'plain' ? 'lg' : 'md'),
   );
   const [subtitleBoxStyle, setSubtitleBoxStyle] = useState<SubtitleBoxStyle>(
     () =>
-      initialReelsSaved?.subtitleBoxStyle ??
-      (initialReelsSaved?.selectedComposition === 'plain' ? 'clean' : 'card'),
+      initialModeSaved.subtitleBoxStyle ??
+      (initialModeSaved.selectedComposition === 'plain' ? 'clean' : 'card'),
   );
   const [backgroundImage, setBackgroundImage] = useState<BackgroundImageConfig | undefined>(() => {
-    const pid = initialReelsSaved?.backgroundPresetId;
+    const pid = initialModeSaved.backgroundPresetId;
     if (!pid) return undefined;
     return {
       kind: 'preset',
       presetId: pid,
       scrimOpacity: 0.16,
-      learningScrimOpacity: initialReelsSaved?.learningScrimOpacity ?? 0.42,
+      learningScrimOpacity: initialModeSaved.learningScrimOpacity ?? 0.42,
     };
   });
   const [isProcessingBg, setIsProcessingBg] = useState(false);
@@ -492,23 +522,23 @@ export const EnglishReelsTab: React.FC<EnglishReelsTabProps> = ({ onSendToStudio
   const [studioError, setStudioError] = useState<string | null>(null);
   const [previewAudioUrl, setPreviewAudioUrl] = useState<string | null>(null);
   const [bgmPreset, setBgmPreset] = useState<StudioBgmPresetId>(
-    () => initialReelsSaved?.bgmPreset || 'lofi-calm',
+    () => initialModeSaved.bgmPreset || 'lofi-calm',
   );
-  const [bgmVolume, setBgmVolume] = useState<number>(() => initialReelsSaved?.bgmVolume ?? 0.18);
+  const [bgmVolume, setBgmVolume] = useState<number>(() => initialModeSaved.bgmVolume ?? 0.18);
   const [watermarkConfig, setWatermarkConfig] = useState<WatermarkOutroConfig>(() => ({
     ...DEFAULT_REELS_WATERMARK,
-    ...(initialReelsSaved?.watermarkConfig || {}),
+    ...(initialModeSaved.watermarkConfig || {}),
   }));
   const [isWatermarkExpanded, setIsWatermarkExpanded] = useState(false);
 
   // Live Video preview, interactive canvas layout editing & direct MP4 export state
   const [previewViewMode, setPreviewViewMode] = useState<'video' | 'cards'>(
-    () => initialReelsSaved?.previewViewMode || 'video',
+    () => initialModeSaved.previewViewMode || 'video',
   );
   const [selectedPreviewElementId, setSelectedPreviewElementId] = useState<string | null>(null);
   const [layoutOverridesByAspect, setLayoutOverridesByAspect] = useState<
     Partial<Record<ExportAspectRatioId, Record<string, ElementLayoutOverride>>>
-  >(() => initialReelsSaved?.layoutOverridesByAspect || {});
+  >(() => initialModeSaved.layoutOverridesByAspect || {});
   const dragStateRef = useRef<{
     id: string;
     offsetX: number;
@@ -533,13 +563,13 @@ export const EnglishReelsTab: React.FC<EnglishReelsTabProps> = ({ onSendToStudio
   const [exportStageLabel, setExportStageLabel] = useState('');
   const [exportNotice, setExportNotice] = useState<string | null>(null);
   const [mp4Resolution, setMp4Resolution] = useState<ExportResolutionId>(
-    () => initialReelsSaved?.mp4Resolution || DEFAULT_MP4_EXPORT_SETTINGS.resolution,
+    () => initialModeSaved.mp4Resolution || DEFAULT_MP4_EXPORT_SETTINGS.resolution,
   );
   const [mp4Quality, setMp4Quality] = useState<ExportQualityId>(
-    () => initialReelsSaved?.mp4Quality || DEFAULT_MP4_EXPORT_SETTINGS.quality,
+    () => initialModeSaved.mp4Quality || DEFAULT_MP4_EXPORT_SETTINGS.quality,
   );
   const [mp4Fps, setMp4Fps] = useState<ExportFpsOption>(
-    () => initialReelsSaved?.mp4Fps || DEFAULT_MP4_EXPORT_SETTINGS.fps,
+    () => initialModeSaved.mp4Fps || DEFAULT_MP4_EXPORT_SETTINGS.fps,
   );
 
   const currentAudioSignature = useMemo(
@@ -602,7 +632,10 @@ export const EnglishReelsTab: React.FC<EnglishReelsTabProps> = ({ onSendToStudio
       const r = (ev as CustomEvent<PersistedStudioSettings>).detail?.reels;
       if (!r) return;
       skipNextPersistRef.current = true;
-      if (r.reelCreationMode) setReelCreationMode(r.reelCreationMode);
+      modeWorkspacesRef.current = {};
+      const hydratedMode: ReelCreationMode = r.reelCreationMode || 'source';
+      const m = resolveReelsModeSettings(r, hydratedMode);
+      setReelCreationMode(hydratedMode);
       if (r.creatorTopicHint !== undefined) setCreatorTopicHint(r.creatorTopicHint);
       if (r.creatorFormat) setCreatorFormat(r.creatorFormat);
       if (r.creatorLearningLang) setCreatorLearningLang(r.creatorLearningLang);
@@ -625,49 +658,57 @@ export const EnglishReelsTab: React.FC<EnglishReelsTabProps> = ({ onSendToStudio
       if (typeof r.translationRepeatCount === 'number') setTranslationRepeatCount(r.translationRepeatCount);
       if (typeof r.translationItemCount === 'number') setTranslationItemCount(r.translationItemCount);
       if (typeof r.translationIncludeNuance === 'boolean') setTranslationIncludeNuance(r.translationIncludeNuance);
-      if (r.mode) setMode(r.mode);
-      if (r.targetLang) setTargetLang(r.targetLang);
-      if (r.ttsProvider) setTtsProvider(r.ttsProvider);
-      if (r.ttsVoice) setTtsVoice(r.ttsVoice);
-      if (typeof r.enableDualTts === 'boolean') setEnableDualTts(r.enableDualTts);
-      if (typeof r.splitAudioByRole === 'boolean') setSplitAudioByRole(r.splitAudioByRole);
-      if (r.explanationTtsVoice) setExplanationTtsVoice(r.explanationTtsVoice);
-      if (typeof r.ttsRate === 'number') setTtsRate(r.ttsRate);
-      if (r.reelsAspectRatio) setReelsAspectRatio(r.reelsAspectRatio);
-      if (r.selectedTheme) setSelectedTheme(r.selectedTheme);
-      if (r.selectedComposition) setSelectedComposition(r.selectedComposition);
-      if (r.subtitlePosition) setSubtitlePosition(r.subtitlePosition);
-      if (r.subtitleSize) setSubtitleSize(r.subtitleSize);
-      if (r.subtitleBoxStyle) setSubtitleBoxStyle(r.subtitleBoxStyle);
-      if (r.backgroundPresetId) {
+
+      setMode(m.mode || 'auto');
+      setTargetLang(m.targetLang || 'Tiếng Việt');
+      setTtsProvider(m.ttsProvider || 'auto');
+      if (m.ttsVoice) setTtsVoice(m.ttsVoice);
+      setEnableDualTts(m.enableDualTts ?? true);
+      setSplitAudioByRole(m.splitAudioByRole ?? true);
+      setExplanationTtsVoice(
+        m.explanationTtsVoice || pickExplanationDefaultVoice(m.targetLang || 'Tiếng Việt'),
+      );
+      setTtsRate(typeof m.ttsRate === 'number' ? m.ttsRate : 1.0);
+      setReelsAspectRatio(m.reelsAspectRatio || '9:16');
+      setSelectedTheme(m.selectedTheme || 'pastel-sunrise');
+      setSelectedComposition(m.selectedComposition || 'story-scenes');
+      setSubtitlePosition(
+        m.subtitlePosition ?? (m.selectedComposition === 'plain' ? 'center' : 'bottom'),
+      );
+      setSubtitleSize(m.subtitleSize ?? (m.selectedComposition === 'plain' ? 'lg' : 'md'));
+      setSubtitleBoxStyle(
+        m.subtitleBoxStyle ?? (m.selectedComposition === 'plain' ? 'clean' : 'card'),
+      );
+      if (m.backgroundPresetId) {
         setBackgroundImage({
           kind: 'preset',
-          presetId: r.backgroundPresetId,
+          presetId: m.backgroundPresetId,
           scrimOpacity: 0.16,
-          learningScrimOpacity:
-            typeof r.learningScrimOpacity === 'number' ? r.learningScrimOpacity : 0.42,
+          learningScrimOpacity: typeof m.learningScrimOpacity === 'number' ? m.learningScrimOpacity : 0.42,
         });
+      } else {
+        setBackgroundImage(undefined);
       }
-      if (r.bgmPreset) setBgmPreset(r.bgmPreset);
-      if (typeof r.bgmVolume === 'number') setBgmVolume(r.bgmVolume);
-      if (r.watermarkConfig) setWatermarkConfig({ ...DEFAULT_REELS_WATERMARK, ...r.watermarkConfig });
-      if (r.mp4Resolution) setMp4Resolution(r.mp4Resolution);
-      if (r.mp4Quality) setMp4Quality(r.mp4Quality);
-      if (r.mp4Fps) setMp4Fps(r.mp4Fps);
-      if (r.includeQuizInPrompt) setIncludeQuizInPrompt(r.includeQuizInPrompt);
-      if (r.previewViewMode) setPreviewViewMode(r.previewViewMode);
-      if (r.layoutOverridesByAspect) setLayoutOverridesByAspect(r.layoutOverridesByAspect);
+      setBgmPreset(m.bgmPreset || 'lofi-calm');
+      setBgmVolume(typeof m.bgmVolume === 'number' ? m.bgmVolume : 0.18);
+      setWatermarkConfig({ ...DEFAULT_REELS_WATERMARK, ...(m.watermarkConfig || {}) });
+      setMp4Resolution(m.mp4Resolution || DEFAULT_MP4_EXPORT_SETTINGS.resolution);
+      setMp4Quality(m.mp4Quality || DEFAULT_MP4_EXPORT_SETTINGS.quality);
+      setMp4Fps(m.mp4Fps || DEFAULT_MP4_EXPORT_SETTINGS.fps);
+      setIncludeQuizInPrompt(m.includeQuizInPrompt || 'auto');
+      setPreviewViewMode(m.previewViewMode || 'video');
+      setLayoutOverridesByAspect(m.layoutOverridesByAspect || {});
       if (r.lessonTitle) setLessonTitle(r.lessonTitle);
       if (r.rawText) setRawText(r.rawText);
 
-      if (r.reelCreationMode === 'translation' && (!r.rawText || r.rawText === SAMPLE_ARTICLE_TEXT)) {
+      if (hydratedMode === 'translation' && (!r.rawText || r.rawText === SAMPLE_ARTICLE_TEXT)) {
         const builtTr = buildTranslationCardsFromInput({
           topicHint: r.translationTopicHint,
           customInputLines: r.translationCustomLines,
           learningLanguage: r.translationLearningLang || 'en',
           level: r.translationLevel || 'B1',
           itemCount: r.translationItemCount ?? 6,
-          targetLang: r.targetLang || 'Tiếng Việt',
+          targetLang: m.targetLang || 'Tiếng Việt',
           thinkSec: r.translationThinkSec ?? 4,
           repeatCount: r.translationRepeatCount ?? 2,
           includeNuanceTip: r.translationIncludeNuance ?? true,
@@ -678,13 +719,13 @@ export const EnglishReelsTab: React.FC<EnglishReelsTabProps> = ({ onSendToStudio
         setActiveCardIdx(0);
         hasCustomCardsRef.current = Boolean(r.translationCustomLines?.trim());
         const trLang = r.translationLearningLang || 'en';
-        if (!r.ttsVoice || detectVoiceLangCode(r.ttsVoice) !== trLang) {
+        if (!m.ttsVoice || detectVoiceLangCode(m.ttsVoice) !== trLang) {
           setTtsVoice(pickLearningDefaultVoice(trLang));
         }
-      } else if (r.creatorLearningLang && r.creatorLearningLang !== 'en' && !r.rawText) {
+      } else if (hydratedMode === 'creator' && r.creatorLearningLang && r.creatorLearningLang !== 'en' && !r.rawText) {
         const starter = buildStarterLessonForLanguage(
           r.creatorLearningLang,
-          r.targetLang || 'Tiếng Việt',
+          m.targetLang || 'Tiếng Việt',
           r.creatorLevel,
         );
         setLessonTitle(r.lessonTitle || starter.title);
@@ -692,16 +733,16 @@ export const EnglishReelsTab: React.FC<EnglishReelsTabProps> = ({ onSendToStudio
         setCards(starter.cards);
         setActiveCardIdx(0);
         hasCustomCardsRef.current = false;
-        if (!r.ttsVoice || detectVoiceLangCode(r.ttsVoice) !== r.creatorLearningLang) {
+        if (!m.ttsVoice || detectVoiceLangCode(m.ttsVoice) !== r.creatorLearningLang) {
           setTtsVoice(pickLearningDefaultVoice(r.creatorLearningLang));
         }
       } else if (r.rawText) {
         hasCustomCardsRef.current = r.rawText !== SAMPLE_ARTICLE_TEXT;
         const rebuilt = buildReelCardsRuleBased(r.rawText, {
           title: r.lessonTitle,
-          mode: r.mode || 'auto',
-          targetLang: r.targetLang || 'Tiếng Việt',
-          includeQuiz: (r.includeQuizInPrompt || 'auto') !== 'none',
+          mode: m.mode || 'auto',
+          targetLang: m.targetLang || 'Tiếng Việt',
+          includeQuiz: (m.includeQuizInPrompt || 'auto') !== 'none',
         });
         setCards(rebuilt.cards);
         setActiveCardIdx(0);
@@ -802,6 +843,34 @@ export const EnglishReelsTab: React.FC<EnglishReelsTabProps> = ({ onSendToStudio
       skipNextPersistRef.current = false;
       return;
     }
+    const activeModeSnapshot: PersistedReelsModeSettings = {
+      includeQuizInPrompt,
+      mode,
+      targetLang,
+      ttsProvider,
+      ttsVoice,
+      enableDualTts,
+      splitAudioByRole,
+      explanationTtsVoice,
+      ttsRate,
+      reelsAspectRatio,
+      selectedTheme,
+      selectedComposition,
+      subtitlePosition,
+      subtitleSize,
+      subtitleBoxStyle,
+      backgroundPresetId:
+        backgroundImage?.kind === 'preset' ? backgroundImage.presetId || '' : '',
+      learningScrimOpacity: backgroundImage?.learningScrimOpacity ?? 0.42,
+      bgmPreset,
+      bgmVolume,
+      watermarkConfig,
+      mp4Resolution,
+      mp4Quality,
+      mp4Fps,
+      previewViewMode,
+      layoutOverridesByAspect,
+    };
     updatePersistedSettings({
       reels: {
         reelCreationMode,
@@ -823,32 +892,9 @@ export const EnglishReelsTab: React.FC<EnglishReelsTabProps> = ({ onSendToStudio
         translationIncludeNuance,
         lessonTitle,
         rawText,
-        includeQuizInPrompt,
-        mode,
-        targetLang,
-        ttsProvider,
-        ttsVoice,
-        enableDualTts,
-        splitAudioByRole,
-        explanationTtsVoice,
-        ttsRate,
-        reelsAspectRatio,
-        selectedTheme,
-        selectedComposition,
-        subtitlePosition,
-        subtitleSize,
-        subtitleBoxStyle,
-        backgroundPresetId:
-          backgroundImage?.kind === 'preset' ? backgroundImage.presetId || '' : '',
-        learningScrimOpacity: backgroundImage?.learningScrimOpacity ?? 0.42,
-        bgmPreset,
-        bgmVolume,
-        watermarkConfig,
-        mp4Resolution,
-        mp4Quality,
-        mp4Fps,
-        previewViewMode,
-        layoutOverridesByAspect,
+        byMode: {
+          [reelCreationMode]: activeModeSnapshot,
+        },
       },
     });
   }, [
@@ -1648,7 +1694,7 @@ export const EnglishReelsTab: React.FC<EnglishReelsTabProps> = ({ onSendToStudio
     setStudioError(null);
     setExportNotice(null);
 
-    // Snapshot current workspace so each of the 3 sub-tabs keeps its own isolated state & preview
+    // Snapshot current workspace & ALL visual/audio/export settings so each of the 3 sub-tabs stays 100% isolated
     modeWorkspacesRef.current[reelCreationMode] = {
       cards,
       lessonTitle,
@@ -1675,6 +1721,27 @@ export const EnglishReelsTab: React.FC<EnglishReelsTabProps> = ({ onSendToStudio
       previewViewMode,
       layoutOverridesByAspect,
       selectedPreviewElementId,
+      includeQuizInPrompt,
+      targetLang,
+      ttsProvider,
+      ttsVoice,
+      enableDualTts,
+      splitAudioByRole,
+      explanationTtsVoice,
+      ttsRate,
+      reelsAspectRatio,
+      selectedTheme,
+      selectedComposition,
+      subtitlePosition,
+      subtitleSize,
+      subtitleBoxStyle,
+      backgroundImage,
+      bgmPreset,
+      bgmVolume,
+      watermarkConfig,
+      mp4Resolution,
+      mp4Quality,
+      mp4Fps,
     };
 
     setReelCreationMode(nextMode);
@@ -1705,10 +1772,72 @@ export const EnglishReelsTab: React.FC<EnglishReelsTabProps> = ({ onSendToStudio
       setPreviewViewMode(saved.previewViewMode);
       setLayoutOverridesByAspect(saved.layoutOverridesByAspect);
       setSelectedPreviewElementId(saved.selectedPreviewElementId);
+      setIncludeQuizInPrompt(saved.includeQuizInPrompt);
+      setTargetLang(saved.targetLang);
+      setTtsProvider(saved.ttsProvider);
+      setTtsVoice(saved.ttsVoice);
+      setEnableDualTts(saved.enableDualTts);
+      setSplitAudioByRole(saved.splitAudioByRole);
+      setExplanationTtsVoice(saved.explanationTtsVoice);
+      setTtsRate(saved.ttsRate);
+      setReelsAspectRatio(saved.reelsAspectRatio);
+      setSelectedTheme(saved.selectedTheme);
+      setSelectedComposition(saved.selectedComposition);
+      setSubtitlePosition(saved.subtitlePosition);
+      setSubtitleSize(saved.subtitleSize);
+      setSubtitleBoxStyle(saved.subtitleBoxStyle);
+      setBackgroundImage(saved.backgroundImage);
+      setBgmPreset(saved.bgmPreset);
+      setBgmVolume(saved.bgmVolume);
+      setWatermarkConfig(saved.watermarkConfig);
+      setMp4Resolution(saved.mp4Resolution);
+      setMp4Quality(saved.mp4Quality);
+      setMp4Fps(saved.mp4Fps);
       return;
     }
 
-    // First time entering nextMode in this session: initialize clean defaults
+    // First time entering nextMode in this session: restore persisted per-mode settings or clean defaults
+    const persistedNext = resolveReelsModeSettings(loadPersistedSettings().reels, nextMode);
+    const nextComp = persistedNext.selectedComposition || 'story-scenes';
+    const nextTargetLang = persistedNext.targetLang || 'Tiếng Việt';
+    const nextProvider = persistedNext.ttsProvider || 'auto';
+    const nextIncludeQuiz = persistedNext.includeQuizInPrompt || 'auto';
+
+    setIncludeQuizInPrompt(nextIncludeQuiz);
+    setTargetLang(nextTargetLang);
+    setTtsProvider(nextProvider);
+    setEnableDualTts(persistedNext.enableDualTts ?? true);
+    setSplitAudioByRole(persistedNext.splitAudioByRole ?? true);
+    setExplanationTtsVoice(
+      persistedNext.explanationTtsVoice || pickExplanationDefaultVoice(nextTargetLang),
+    );
+    setTtsRate(typeof persistedNext.ttsRate === 'number' ? persistedNext.ttsRate : 1.0);
+    setReelsAspectRatio(persistedNext.reelsAspectRatio || '9:16');
+    setSelectedTheme(persistedNext.selectedTheme || 'pastel-sunrise');
+    setSelectedComposition(nextComp);
+    setSubtitlePosition(persistedNext.subtitlePosition ?? (nextComp === 'plain' ? 'center' : 'bottom'));
+    setSubtitleSize(persistedNext.subtitleSize ?? (nextComp === 'plain' ? 'lg' : 'md'));
+    setSubtitleBoxStyle(persistedNext.subtitleBoxStyle ?? (nextComp === 'plain' ? 'clean' : 'card'));
+    setBackgroundImage(
+      persistedNext.backgroundPresetId
+        ? {
+            kind: 'preset',
+            presetId: persistedNext.backgroundPresetId,
+            scrimOpacity: 0.16,
+            learningScrimOpacity:
+              typeof persistedNext.learningScrimOpacity === 'number'
+                ? persistedNext.learningScrimOpacity
+                : 0.42,
+          }
+        : undefined,
+    );
+    setBgmPreset(persistedNext.bgmPreset || 'lofi-calm');
+    setBgmVolume(typeof persistedNext.bgmVolume === 'number' ? persistedNext.bgmVolume : 0.18);
+    setWatermarkConfig({ ...DEFAULT_REELS_WATERMARK, ...(persistedNext.watermarkConfig || {}) });
+    setMp4Resolution(persistedNext.mp4Resolution || DEFAULT_MP4_EXPORT_SETTINGS.resolution);
+    setMp4Quality(persistedNext.mp4Quality || DEFAULT_MP4_EXPORT_SETTINGS.quality);
+    setMp4Fps(persistedNext.mp4Fps || DEFAULT_MP4_EXPORT_SETTINGS.fps);
+
     setPastedAiJson('');
     setAiJsonError(null);
     setAiJsonNotice(null);
@@ -1723,8 +1852,8 @@ export const EnglishReelsTab: React.FC<EnglishReelsTabProps> = ({ onSendToStudio
     setSynthesizedAudioSig('');
     setActiveCardIdx(0);
     setVideoTime(0.5);
-    setPreviewViewMode('video');
-    setLayoutOverridesByAspect({});
+    setPreviewViewMode(persistedNext.previewViewMode || 'video');
+    setLayoutOverridesByAspect(persistedNext.layoutOverridesByAspect || {});
     setSelectedPreviewElementId(null);
 
     if (nextMode === 'source') {
@@ -1734,22 +1863,31 @@ export const EnglishReelsTab: React.FC<EnglishReelsTabProps> = ({ onSendToStudio
       setScrapeResult(null);
       setRawText(SAMPLE_ARTICLE_TEXT);
       setLessonTitle('Hotel Check-in & Polite Requests');
-      setMode('auto');
+      setMode(persistedNext.mode || 'auto');
+      setTtsVoice(
+        persistedNext.ttsVoice || pickVoiceIdForProviderAndLang(nextProvider, 'en', availableVoices),
+      );
       setCards(
         buildReelCardsRuleBased(SAMPLE_ARTICLE_TEXT, {
           title: 'Hotel Check-in & Polite Requests',
-          mode: 'auto',
-          targetLang,
-          includeQuiz: includeQuizInPrompt !== 'none',
+          mode: persistedNext.mode || 'auto',
+          targetLang: nextTargetLang,
+          includeQuiz: nextIncludeQuiz !== 'none',
         }).cards,
       );
     } else if (nextMode === 'creator') {
-      applyStarterLesson(creatorLearningLang, targetLang, creatorLevel);
-      setTtsVoice(pickVoiceIdForProviderAndLang(ttsProvider, creatorLearningLang, availableVoices));
-    } else {
-      applyTranslationStarterOrCustom();
+      applyStarterLesson(creatorLearningLang, nextTargetLang, creatorLevel);
       setTtsVoice(
-        pickVoiceIdForProviderAndLang(ttsProvider, translationLearningLang, availableVoices),
+        persistedNext.ttsVoice && detectVoiceLangCode(persistedNext.ttsVoice) === creatorLearningLang
+          ? persistedNext.ttsVoice
+          : pickVoiceIdForProviderAndLang(nextProvider, creatorLearningLang, availableVoices),
+      );
+    } else {
+      applyTranslationStarterOrCustom({ explLang: nextTargetLang });
+      setTtsVoice(
+        persistedNext.ttsVoice && detectVoiceLangCode(persistedNext.ttsVoice) === translationLearningLang
+          ? persistedNext.ttsVoice
+          : pickVoiceIdForProviderAndLang(nextProvider, translationLearningLang, availableVoices),
       );
     }
   };
@@ -2625,14 +2763,14 @@ export const EnglishReelsTab: React.FC<EnglishReelsTabProps> = ({ onSendToStudio
             <div
               role="tablist"
               aria-label="Chế độ tạo video ngoại ngữ"
-              className="inline-flex p-0.5 bg-slate-100 border border-slate-200 rounded-lg"
+              className="inline-flex flex-wrap sm:flex-nowrap max-w-full gap-0.5 p-0.5 bg-slate-100 border border-slate-200 rounded-lg"
             >
               <button
                 type="button"
                 role="tab"
                 aria-selected={reelCreationMode === 'source'}
                 onClick={() => switchReelCreationMode('source')}
-                className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-colors whitespace-nowrap shrink-0 ${
+                className={`px-2.5 sm:px-3 py-1.5 text-[11px] sm:text-xs font-semibold rounded-md transition-colors whitespace-nowrap shrink-0 ${
                   reelCreationMode === 'source'
                     ? 'bg-white text-indigo-700 shadow-xs'
                     : 'text-slate-600 hover:text-slate-900'
@@ -2645,7 +2783,7 @@ export const EnglishReelsTab: React.FC<EnglishReelsTabProps> = ({ onSendToStudio
                 role="tab"
                 aria-selected={reelCreationMode === 'creator'}
                 onClick={() => switchReelCreationMode('creator')}
-                className={`inline-flex items-center gap-1 px-3 py-1.5 text-xs font-semibold rounded-md transition-colors whitespace-nowrap shrink-0 ${
+                className={`inline-flex items-center gap-1 px-2.5 sm:px-3 py-1.5 text-[11px] sm:text-xs font-semibold rounded-md transition-colors whitespace-nowrap shrink-0 ${
                   reelCreationMode === 'creator'
                     ? 'bg-indigo-600 text-white shadow-xs'
                     : 'text-slate-600 hover:text-slate-900'
@@ -2659,7 +2797,7 @@ export const EnglishReelsTab: React.FC<EnglishReelsTabProps> = ({ onSendToStudio
                 role="tab"
                 aria-selected={reelCreationMode === 'translation'}
                 onClick={() => switchReelCreationMode('translation')}
-                className={`inline-flex items-center gap-1 px-3 py-1.5 text-xs font-semibold rounded-md transition-colors whitespace-nowrap shrink-0 ${
+                className={`inline-flex items-center gap-1 px-2.5 sm:px-3 py-1.5 text-[11px] sm:text-xs font-semibold rounded-md transition-colors whitespace-nowrap shrink-0 ${
                   reelCreationMode === 'translation'
                     ? 'bg-amber-500 text-white shadow-xs'
                     : 'text-slate-600 hover:text-slate-900'
@@ -4171,11 +4309,16 @@ export const EnglishReelsTab: React.FC<EnglishReelsTabProps> = ({ onSendToStudio
             <div className="space-y-2.5">
               {(() => {
                 const activeAspectOverrides = layoutOverridesByAspect[reelsAspectRatio] ?? {};
+                const selectedPreviewElement = selectedPreviewElementId
+                  ? previewProject.elements.find((el) => el.id === selectedPreviewElementId) ?? null
+                  : null;
                 const resolvedPreviewLayouts = selectedPreviewElementId
                   ? resolveElementLayoutForAspect(
                       previewProject.elements,
                       videoTime,
                       reelsAspectRatio,
+                      previewProject.subtitleConfig,
+                      previewProject.compositionId,
                     )
                   : null;
                 const selectedCanvasLayout =
@@ -4203,6 +4346,8 @@ export const EnglishReelsTab: React.FC<EnglishReelsTabProps> = ({ onSendToStudio
                     y,
                     videoTime,
                     reelsAspectRatio,
+                    previewProject.subtitleConfig,
+                    previewProject.compositionId,
                   );
                   if (hit) {
                     setSelectedPreviewElementId(hit.element.id);
@@ -4251,7 +4396,7 @@ export const EnglishReelsTab: React.FC<EnglishReelsTabProps> = ({ onSendToStudio
                       data-aspect-ratio={reelsAspectRatio}
                       className={`relative mx-auto overflow-hidden border border-slate-200 shadow-sm bg-slate-100 ${
                         reelsAspectRatio === '16:9'
-                          ? 'w-full max-w-[460px] aspect-video rounded-2xl'
+                          ? 'w-full max-w-[540px] aspect-video rounded-2xl'
                           : reelsAspectRatio === '1:1'
                             ? 'w-full max-w-[360px] aspect-square rounded-2xl'
                             : reelsAspectRatio === '4:5'
@@ -4303,19 +4448,51 @@ export const EnglishReelsTab: React.FC<EnglishReelsTabProps> = ({ onSendToStudio
                       <span className="text-slate-600 font-medium">
                         {selectedCanvasLayout ? (
                           <>
-                            Đã chọn khối · Tọa độ{' '}
+                            {selectedPreviewElement?.label || 'Đã chọn khối'} · Tọa độ{' '}
                             <span
                               data-testid="reels-selected-coords"
                               className="font-mono font-semibold text-indigo-700 tabular-nums"
                             >
                               x:{Math.round(selectedCanvasLayout.x)}, y:{Math.round(selectedCanvasLayout.y)}
                             </span>
+                            {selectedPreviewElement?.type === 'karaoke-card' && (
+                              <span className="text-slate-400"> · Chỉ thẻ này</span>
+                            )}
                           </>
                         ) : (
                           'Kéo thả các khối trực tiếp trên video để chỉnh bố cục'
                         )}
                       </span>
-                      <div className="flex items-center gap-1.5">
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        {selectedPreviewElement?.type === 'karaoke-card' && selectedCanvasLayout && (
+                          <button
+                            type="button"
+                            data-testid="reels-apply-sub-all"
+                            onClick={() => {
+                              const targetX = Math.round(selectedCanvasLayout.x);
+                              const targetY = Math.round(selectedCanvasLayout.y);
+                              setLayoutOverridesByAspect((prev) => {
+                                const nextAspectOverrides = { ...(prev[reelsAspectRatio] ?? {}) };
+                                for (const el of previewProject.elements) {
+                                  if (el.type === 'karaoke-card') {
+                                    const existing = nextAspectOverrides[el.id];
+                                    nextAspectOverrides[el.id] = {
+                                      x: targetX,
+                                      y: targetY,
+                                      width: existing?.width ?? selectedCanvasLayout.width,
+                                      height: existing?.height ?? selectedCanvasLayout.height,
+                                      scale: existing?.scale ?? selectedCanvasLayout.scale,
+                                    };
+                                  }
+                                }
+                                return { ...prev, [reelsAspectRatio]: nextAspectOverrides };
+                              });
+                            }}
+                            className="px-2 py-0.5 font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 rounded hover:bg-emerald-100"
+                          >
+                            Áp dụng vị trí này cho tất cả Sub
+                          </button>
+                        )}
                         {selectedPreviewElementId && activeAspectOverrides[selectedPreviewElementId] && (
                           <button
                             type="button"

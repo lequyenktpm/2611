@@ -158,6 +158,8 @@ export function resolveElementLayoutForAspect(
     (midVisuals.length > 0 && (midCards.length > 0 || midQuizOpts.length > 0 || midMeters.length > 0)) ||
     mid3dBlocks.length >= 2;
 
+  const hasTopSubCollision = explicitPos === 'top';
+
   for (const el of elements) {
     if (el.layout.manualPosition) {
       out.set(el.id, el.layout);
@@ -167,9 +169,9 @@ export function resolveElementLayoutForAspect(
       out.set(el.id, {
         ...el.layout,
         x: 960,
-        y: 72,
+        y: hasTopSubCollision ? 58 : 72,
         width: 1460,
-        scale: 0.92,
+        scale: hasTopSubCollision ? 0.78 : 0.92,
       });
       continue;
     }
@@ -178,10 +180,10 @@ export function resolveElementLayoutForAspect(
       out.set(el.id, {
         ...el.layout,
         x: 960,
-        y: hasTopStrip ? 162 : 96,
+        y: hasTopSubCollision ? 295 : hasTopStrip ? 162 : 96,
         width: Math.min(1180, Math.max(660, el.layout.width)),
         height: el.layout.height ? Math.min(96, el.layout.height) : undefined,
-        scale: 0.96,
+        scale: 0.94,
       });
       continue;
     }
@@ -202,12 +204,19 @@ export function resolveElementLayoutForAspect(
 
     if (isQuizOptStrip(el)) {
       const hasMeter = midMeters.length > 0;
+      const baseQuizY = hasSplitColumns
+        ? hasMeter
+          ? 575
+          : 630
+        : hasMeter
+          ? 590
+          : 645;
       out.set(el.id, {
         ...el.layout,
         x: hasSplitColumns ? 1405 : 960,
-        y: hasMeter ? 635 : 685,
+        y: hasTopSubCollision ? Math.max(baseQuizY, 640) : baseQuizY,
         width: hasSplitColumns ? 820 : 1280,
-        scale: 0.88,
+        scale: hasSplitColumns ? 0.80 : 0.86,
       });
       continue;
     }
@@ -216,9 +225,9 @@ export function resolveElementLayoutForAspect(
       out.set(el.id, {
         ...el.layout,
         x: hasSplitColumns ? 1405 : 960,
-        y: midQuizOpts.length > 0 ? 790 : 720,
+        y: midQuizOpts.length > 0 ? 835 : 715,
         width: 780,
-        scale: 0.68,
+        scale: midQuizOpts.length > 0 ? 0.62 : 0.68,
       });
       continue;
     }
@@ -226,19 +235,19 @@ export function resolveElementLayoutForAspect(
     if (isLeftVisual(el)) {
       if (hasSplitColumns) {
         const vIdx = Math.max(0, midVisuals.findIndex((v) => v.id === el.id));
-        const yPos = midVisuals.length > 1 ? 375 + vIdx * 260 : 515;
+        const baseLeftY = midVisuals.length > 1 ? 375 + vIdx * 260 : 515;
         out.set(el.id, {
           ...el.layout,
           x: 515,
-          y: yPos,
+          y: hasTopSubCollision ? Math.max(baseLeftY, 555) : baseLeftY,
           width: 820,
-          scale: Math.min(0.96, el.layout.scale || 1),
+          scale: Math.min(0.95, el.layout.scale || 1),
         });
       } else {
         out.set(el.id, {
           ...el.layout,
           x: 960,
-          y: 515,
+          y: hasTopSubCollision ? 560 : 515,
           width: Math.min(1260, Math.round(el.layout.width * 1.2)),
           scale: Math.min(1.02, el.layout.scale || 1),
         });
@@ -248,14 +257,17 @@ export function resolveElementLayoutForAspect(
 
     if (isRightFocal(el)) {
       if (hasSplitColumns) {
-        const hasRightLower = midQuizOpts.length > 0 || midMeters.length > 0;
+        const hasQuiz = midQuizOpts.length > 0;
+        const hasRightLower = hasQuiz || midMeters.length > 0;
         const isToneWithSentence =
           el.type === 'tone-meter' && visible.some((v) => v.type === 'sentence-card');
-        let yPos = 515;
-        if (el.type === 'sentence-card' && hasRightLower) {
-          yPos = 395;
+        let yPos = hasTopSubCollision ? 555 : 515;
+        if (el.type === 'sentence-card' && hasQuiz) {
+          yPos = hasTopSubCollision ? 345 : 295;
+        } else if (el.type === 'sentence-card' && hasRightLower) {
+          yPos = hasTopSubCollision ? 430 : 395;
         } else if (el.type === 'sentence-card' && visible.some((v) => v.type === 'tone-meter')) {
-          yPos = 410;
+          yPos = hasTopSubCollision ? 445 : 410;
         } else if (isToneWithSentence) {
           yPos = 665;
         }
@@ -264,23 +276,23 @@ export function resolveElementLayoutForAspect(
           x: 1405,
           y: yPos,
           width: 820,
-          scale: hasRightLower ? 0.93 : 0.97,
+          scale: hasQuiz ? 0.84 : hasRightLower ? 0.92 : 0.97,
         });
       } else {
         const cIdx = Math.max(0, midCards.findIndex((c) => c.id === el.id));
         const hasCenterLower = midMeters.length > 0 || midQuizOpts.length > 0;
-        const yPos =
+        const baseY =
           midCards.length > 1
             ? 410 + cIdx * 240
             : hasCenterLower && el.type === 'sentence-card'
-              ? 400
+              ? 355
               : 515;
         out.set(el.id, {
           ...el.layout,
           x: 960,
-          y: yPos,
+          y: hasTopSubCollision ? Math.max(baseY, 445) : baseY,
           width: Math.min(1260, Math.round(el.layout.width * 1.25)),
-          scale: hasCenterLower ? 0.95 : 1,
+          scale: hasCenterLower ? 0.92 : 1,
         });
       }
       continue;
@@ -1553,7 +1565,7 @@ function drawComparisonStrip(
   elStartTime = 0,
 ) {
   const count = Math.max(1, props.items.length);
-  const safeStripW = Math.min(STAGE_WIDTH - 48, Math.max(360, width));
+  const safeStripW = Math.max(360, width);
   const elElapsed = Math.max(0, time - elStartTime);
 
   // Determine active index: latest item whose activateAt <= time
@@ -1567,7 +1579,7 @@ function drawComparisonStrip(
   const isLongStack = props.items.some((item) => item.label.trim().length > 16) || count > 4;
 
   if (isLongStack) {
-    const rowW = Math.min(860, safeStripW);
+    const rowW = Math.min(1200, safeStripW);
     const rowGap = 12;
     const layouts = props.items.map((item, idx) => {
       const isActive = idx === activeIdx;
@@ -1768,7 +1780,7 @@ function drawTopicPill(
   props: TopicPillProps,
   maxBoxWidth = 880,
 ) {
-  const safeBoxW = Math.min(STAGE_WIDTH - 48, Math.max(220, maxBoxWidth));
+  const safeBoxW = Math.max(220, maxBoxWidth);
   const maxTextW = Math.max(150, safeBoxW - 64);
   const fitted = fitWrappedTextBlock(ctx, props.text, maxTextW, 130, {
     fontWeight: 700,
@@ -4562,7 +4574,7 @@ function drawSentenceCard(
   width: number,
   elElapsed = 1,
 ) {
-  const safeWidth = Math.min(STAGE_WIDTH - 48, Math.max(260, width));
+  const safeWidth = Math.max(260, width);
   const innerMaxW = Math.max(180, safeWidth - 88);
   const textLen = props.text.trim().length;
   const widthScale = Math.min(1, safeWidth / 760);
@@ -4774,7 +4786,7 @@ function drawToneMeter(
   const value = props.valueStart + (props.valueEnd - props.valueStart) * eased;
 
   // Gradient bar
-  const barW = Math.min(STAGE_WIDTH - 80, Math.max(220, width));
+  const barW = Math.max(220, width);
 
   // Title
   ctx.textAlign = 'center';
@@ -4825,7 +4837,7 @@ function drawWordStack(
   width: number,
   time: number,
 ) {
-  const safeWidth = Math.min(STAGE_WIDTH - 48, Math.max(280, width));
+  const safeWidth = Math.max(280, width);
   const rowH = 128;
   const gap = 28;
   const totalH = props.rows.length * rowH + (props.rows.length - 1) * gap;
@@ -5137,11 +5149,12 @@ function drawKaraokeCard(
   const safeWidth = Math.min(maxAllowedW, Math.max(width, isCleanBox ? Math.round(stageW * 0.82) : width));
   const maxLineW = Math.max(220, isCleanBox ? safeWidth - 36 : safeWidth - 104);
 
+  const hasHelperNote = Boolean(props.helperText?.trim());
   const baseFont =
     stageW >= 1600
-      ? Math.round(minDim * 0.048) // ~52px in 1920x1080
-      : Math.round(minDim * 0.043); // ~46px in 1080x1920
-  let fontSize = Math.max(26, Math.min(92, Math.round(baseFont * sizeMul)));
+      ? Math.round(minDim * (hasHelperNote && (subCfg?.position ?? 'bottom') !== 'center' ? 0.041 : 0.046))
+      : Math.round(minDim * 0.043);
+  let fontSize = Math.max(26, Math.min(88, Math.round(baseFont * sizeMul)));
 
   while (fontSize > 24) {
     ctx.font = `700 ${fontSize}px ${FONT_DISPLAY}`;
@@ -5708,11 +5721,19 @@ export function hitTestElementLayout(
   canvasY: number,
   time: number,
   aspectRatio: ExportAspectRatioId = '9:16',
+  subtitleConfig?: SubtitleDisplayConfig,
+  compositionId?: LayoutCompositionId,
 ): { element: SceneElement; layout: ElementLayout } | null {
   const stage = getStageDimensionsForAspect(aspectRatio);
   const stageW = stage.width;
   const sorted = [...elements].sort((a, b) => b.layout.zIndex - a.layout.zIndex);
-  const layoutMap = resolveElementLayoutForAspect(sorted, time, aspectRatio);
+  const layoutMap = resolveElementLayoutForAspect(
+    sorted,
+    time,
+    aspectRatio,
+    subtitleConfig,
+    compositionId,
+  );
   for (const el of sorted) {
     const state = computeElementFrameState(el, time);
     if (!state.visible) continue;
@@ -5746,6 +5767,11 @@ export function hitTestElements(
   canvasY: number,
   time: number,
   aspectRatio: ExportAspectRatioId = '9:16',
+  subtitleConfig?: SubtitleDisplayConfig,
+  compositionId?: LayoutCompositionId,
 ): SceneElement | null {
-  return hitTestElementLayout(elements, canvasX, canvasY, time, aspectRatio)?.element ?? null;
+  return (
+    hitTestElementLayout(elements, canvasX, canvasY, time, aspectRatio, subtitleConfig, compositionId)
+      ?.element ?? null
+  );
 }

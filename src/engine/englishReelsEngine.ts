@@ -1601,7 +1601,7 @@ export function buildEnglishReelsWebAiPrompt(params: {
     'Bạn là giáo viên ngôn ngữ bản ngữ & đạo diễn kịch bản video bài giảng dọc 9:16 (TikTok / Reels / Shorts), tương thích chuẩn JSON cố định của English Reels Studio + KineticSub Studio.',
     '',
     '# QUY TẮC ĐẶT TÊN BÀI HỌC & MẠCH CHUYỂN TIẾP (CỰC KỲ QUAN TRỌNG)',
-    '- **TÊN BÀI HỌC (`"title"`) PHẢI ĐÚNG 100% NỘI DUNG NGUỒN**: Đọc kỹ toàn bộ `# NỘI DUNG GỐC CẦN CHUYỂN HÓA` bên dưới và đặt `"title"` (ở JSON gốc và ở thẻ `intro`) tóm tắt **chính xác chủ đề thật của bài học đó**. KHÔNG lấy tên mẫu minh họa, KHÔNG bịa tên lạc đề!',
+    '- **TÊN BÀI HỌC (`"title"`) PHẢI NGẮN GỌN, SÚC TÍCH, GÂY TÒ MÒ & CẢM XÚC (KHÔNG DÀI DÒNG)**: Đọc kỹ toàn bộ `# NỘI DUNG GỐC CẦN CHUYỂN HÓA` bên dưới và đặt `"title"` (ở JSON gốc và ở thẻ `intro`) thật ngắn gọn (~6–12 từ), đúng chủ đề bài học và mang sức hút tò mò (VD kiểu `"【Bạn có biết cách nói này?】..."` hoặc `"【このペースで言える？】..."` phù hợp ngôn ngữ bài học). KHÔNG lấy tên mẫu minh họa, KHÔNG bịa tên lạc đề!',
     '- **CHUYỂN TIẾP PHẢI CÓ LỜI DẪN NÓI (KHÔNG CHUYỂN TRONG IM LẶNG)**: Khi chuyển từ Mở đầu → Bài 1, từ Phần/Bài 1 → Phần/Bài 2, từ Bài đọc → Quiz, hoặc trước Tổng kết, BẮT BUỘC phải có lời dẫn nói tự nhiên trong `ttsText` / `explanationSpeech` (VD: `"Now let\'s move on to the next part..."`, `"Chuyển sang phần tiếp theo..."`, `"Now let\'s check what we just learned!"`).',
     '',
     '# CẤU TRÚC BÀI GIẢNG BẮT BUỘC (KHÔNG ĐƯỢC CHỈ XUẤT SUBTITLE TRƠN)',
@@ -2119,8 +2119,8 @@ export function buildAiCreatorWebAiPrompt(params: {
     '',
     '## 4. LESSON TITLE & VOICEOVER / TTS QUALITY RULES (`title`, `speech`, `explanationSpeech`)',
     topicHint
-      ? `- **EXACT TITLE RULE**: Root \`"title"\` and \`type: "title"\` card \`"title"\` MUST accurately reflect "${topicHint}" (${chosenLevel}) — do NOT invent an unrelated title or copy generic placeholder labels.`
-      : `- **EXACT TITLE RULE**: Root \`"title"\` and \`type: "title"\` card \`"title"\` MUST be a concrete, specific title summarizing the exact expressions you generated (NEVER leave placeholder text like "<Replace with Exact Topic Title>").`,
+      ? `- **EXACT & CATCHY SHORT TITLE RULE**: Root \`"title"\` and \`type: "title"\` card \`"title"\` MUST accurately reflect "${topicHint}" (${chosenLevel}) in a crisp, curiosity/emotion-driven hook (~6–12 words, e.g. \`【このペースで言える？】英会話のための瞬間英作文\` style matched to ${langOption.nativeName} + ${chosenLevel}).`
+      : `- **EXACT & CATCHY SHORT TITLE RULE**: Root \`"title"\` and \`type: "title"\` card \`"title"\` MUST be a concise, curiosity/emotion-driven hook (~6–12 words, e.g. \`【Đừng nói sai nữa!】...\` or \`【このペースで言える？】...\`) summarizing the exact expressions you generated (NEVER leave placeholder text).`,
     ...dualTtsRules,
     '- NEVER put `/IPA/` symbols, `&`, markdown (`**`, `#`), URLs, or emojis inside `speech` or `explanationSpeech`.',
     `- ${translationRule}`,
@@ -2354,7 +2354,7 @@ const CURATED_TRANSLATION_DECKS: Record<
 > = {
   en: {
     catchyHookTitle: (level) =>
-      `【Phản xạ dịch ${level}】"Coi chừng cô ấy đấy!" nói tiếng Anh sao cho tự nhiên?`,
+      `【Bật ra ngay ${level}】"Coi chừng cô ấy đấy!" nói tiếng Anh sao?`,
     introSubtitle: 'Listen to prompt · Speak aloud during countdown · Repeat after answer',
     items: [
       {
@@ -2431,7 +2431,7 @@ const CURATED_TRANSLATION_DECKS: Record<
   },
   zh: {
     catchyHookTitle: (level) =>
-      `【Phản xạ ${level}】"Cẩn thận với cô ấy đấy!" nói tiếng Trung sao cho chuẩn?`,
+      `【Phản xạ ${level}】"Cẩn thận với cô ấy!" nói sao cho chuẩn?`,
     introSubtitle: '听原句 · 倒计时开口说中文 · 核对地道表达与词汇语法',
     items: [
       {
@@ -2494,7 +2494,7 @@ const CURATED_TRANSLATION_DECKS: Record<
   },
   ja: {
     catchyHookTitle: (level) =>
-      `【瞬間作文 ${level}】"Coi chừng cô ấy đấy!" nói tiếng Nhật sao cho tự nhiên?`,
+      `【このペースで言える？】"Coi chừng cô ấy!" 瞬間和作文 (${level})`,
     introSubtitle: '日本語で瞬間英作文トレーニング · 重要語彙と文法ポイント付き',
     items: [
       {
@@ -2543,7 +2543,7 @@ const CURATED_TRANSLATION_DECKS: Record<
   },
   ko: {
     catchyHookTitle: (level) =>
-      `【Phản xạ ${level}】"Cẩn thận với cô ấy đấy!" nói tiếng Hàn sao cho tự nhiên?`,
+      `【Phản xạ ${level}】"Cẩn thận với cô ấy!" nói sao cho tự nhiên?`,
     introSubtitle: 'Nghe câu gốc · Bật nhanh câu tiếng Hàn trước khi hết giờ đếm ngược',
     items: [
       {
@@ -2585,7 +2585,7 @@ const CURATED_TRANSLATION_DECKS: Record<
   },
   fr: {
     catchyHookTitle: (level) =>
-      `【Phản xạ ${level}】"Coi chừng cô ấy đấy!" nói tiếng Pháp sao cho chuẩn?`,
+      `【Phản xạ ${level}】"Coi chừng cô ấy!" nói tiếng Pháp sao?`,
     introSubtitle: 'Nghe câu gợi ý · Tự phản xạ nói tiếng Pháp trước khi hiện đáp án',
     items: [
       {
@@ -2627,7 +2627,7 @@ const CURATED_TRANSLATION_DECKS: Record<
   },
   es: {
     catchyHookTitle: (level) =>
-      `【Phản xạ ${level}】"Coi chừng cô ấy đấy!" nói tiếng Tây Ban Nha sao cho chuẩn?`,
+      `【Phản xạ ${level}】"Coi chừng cô ấy!" nói tiếng TBN sao?`,
     introSubtitle: 'Nghe câu gợi ý · Tự nói nhanh tiếng Tây Ban Nha trước khi hết giờ',
     items: [
       {
@@ -2772,9 +2772,9 @@ export function buildTranslationChallengePrompt(params: {
       : `- **AI CREATIVE MODE**: User left custom lines blank — invent **${count} natural, punchy, non-textbook sentences** strictly calibrated to level **${chosenLevel}**.`,
     '',
     '## 2. CATCHY YOUTUBE-STYLE HOOK TITLE RULE (CRITICAL!)',
-    '- Study this proven viral title formula: `【Phản xạ dịch】"Coi chừng cô ấy đấy!" nói tiếng Anh sao cho chuẩn?` (curiosity gap quoting 1 striking, relatable sentence from item #01 or #02 inside the deck!).',
-    '- Root `"title"` AND the `"title"` card MUST use an irresistible, concise hook title quoting a concrete sentence from this exact lesson (e.g. `【Phản xạ ' + chosenLevel + '】"<Quoted Hook Sentence>" nói ' + viLangName + ' sao cho tự nhiên?`).',
-    '- NEVER output boring titles like "Lesson 1" or "Translation Practice".',
+    '- Study these proven ultra-concise viral hook formulas: `【このペースで言える？】英会話のための瞬間英作文` or `【Phản xạ dịch】"Coi chừng cô ấy!" nói sao cho chuẩn?` (short, curiosity + emotion hook quoting 1 striking line from item #01 or #02!).',
+    '- Root `"title"` AND the `"title"` card MUST stay concise (max ~6–12 words) with strong curiosity/emotion — match language & level `' + chosenLevel + '`.',
+    '- NEVER output boring textbook titles like "Lesson 1" or "Translation Practice".',
     '',
     '## 3. CARD STRUCTURE, VOCAB GLOSS & TARGET-LANGUAGE CHROME',
     `1. **Hook Intro Card (\`type: "title"\`)**: Catchy hook title, \`"kicker"\` & \`"visual"\` labels written in **${langOption.nativeName}** (matching target learning language), \`"speech": ""\`, and energetic 1-sentence hook in \`"explanationSpeech"\` in **${explainLangName}** inviting viewers to say each sentence aloud before the ${thinkSec}-second timer runs out!`,
@@ -2925,7 +2925,9 @@ export function buildTranslationCardsFromInput(params: {
   const topicLabel = params.topicHint?.trim();
   const title =
     rawLines.length > 0 || topicLabel
-      ? `【Phản xạ ${chosenLevel}】"${firstPromptQuote}"${topicLabel ? ` · ${topicLabel}` : ` nói ${viLangName} sao cho chuẩn?`}`
+      ? learningLang === 'ja'
+        ? `【このペースで言える？】"${firstPromptQuote}" (${topicLabel || chosenLevel})`
+        : `【Phản xạ ${chosenLevel}】"${firstPromptQuote}"${topicLabel ? ` · ${topicLabel}` : ' nói sao cho chuẩn?'}`
       : deck.catchyHookTitle(chosenLevel);
 
   const cards: ReelCard[] = [
@@ -3007,7 +3009,7 @@ export function buildTranslationCardsFromInput(params: {
   return { title, mode: 'vocab', cards };
 }
 
-export const STARTER_SAMPLE_TITLE_PREFIX = 'Mẫu bài học:';
+export const STARTER_SAMPLE_TITLE_PREFIX = '【Thử ngay】';
 
 export function buildStarterLessonForLanguage(
   learningLang: LearningLanguageId,
@@ -3020,7 +3022,7 @@ export function buildStarterLessonForLanguage(
   const chosenLevel = level || langMeta.defaultLevel;
 
   if (learningLang === 'zh') {
-    const title = `${STARTER_SAMPLE_TITLE_PREFIX} Giao tiếp Tiếng Trung (${chosenLevel})`;
+    const title = `${STARTER_SAMPLE_TITLE_PREFIX} Mở lời tiếng Trung cho khéo (${chosenLevel})`;
     const cards: ReelCard[] = [
       {
         id: 'starter-zh-intro',
@@ -3153,7 +3155,7 @@ export function buildStarterLessonForLanguage(
   }
 
   if (learningLang === 'ja') {
-    const title = `${STARTER_SAMPLE_TITLE_PREFIX} Tiếng Nhật Giao Tiếp (${chosenLevel})`;
+    const title = `${STARTER_SAMPLE_TITLE_PREFIX} 【このペースで言える？】Tiếng Nhật (${chosenLevel})`;
     const cards: ReelCard[] = [
       {
         id: 'starter-ja-intro',
@@ -3253,7 +3255,7 @@ export function buildStarterLessonForLanguage(
   }
 
   if (learningLang === 'ko') {
-    const title = `${STARTER_SAMPLE_TITLE_PREFIX} Tiếng Hàn Giao Tiếp (${chosenLevel})`;
+    const title = `${STARTER_SAMPLE_TITLE_PREFIX} Nói tiếng Hàn như bản xứ (${chosenLevel})`;
     const cards: ReelCard[] = [
       {
         id: 'starter-ko-intro',
@@ -3329,7 +3331,7 @@ export function buildStarterLessonForLanguage(
 
   if (learningLang === 'fr' || learningLang === 'es') {
     const isFr = learningLang === 'fr';
-    const title = `${STARTER_SAMPLE_TITLE_PREFIX} ${isFr ? 'Tiếng Pháp' : 'Tiếng Tây Ban Nha'} (${chosenLevel})`;
+    const title = `${STARTER_SAMPLE_TITLE_PREFIX} Mở lời ${isFr ? 'tiếng Pháp' : 'tiếng TBN'} cực khéo (${chosenLevel})`;
     const cards: ReelCard[] = [
       {
         id: `starter-${learningLang}-intro`,
@@ -3404,7 +3406,7 @@ export function buildStarterLessonForLanguage(
   }
 
   // English starter
-  const title = `${STARTER_SAMPLE_TITLE_PREFIX} Smart Upgrades (${chosenLevel})`;
+  const title = `${STARTER_SAMPLE_TITLE_PREFIX} Đừng dùng từ cũ nữa! (${chosenLevel})`;
   const cards: ReelCard[] = [
     {
       id: 'starter-en-intro',
@@ -4511,7 +4513,7 @@ export function reelCardsToLessonProject(
           endTime: preRevealEnd,
           enterAnimation: 'fade-scale',
           exitAnimation: 'fade-out',
-          layout: { x: 540, y: karaokeCenterY, width: 920, scale: 1, zIndex: 35, manualPosition: true },
+          layout: { x: 540, y: karaokeCenterY, width: 920, scale: 1, zIndex: 35 },
           props: {
             kind: 'karaoke-card',
             cueId: win.questionCue.id,
@@ -4544,7 +4546,7 @@ export function reelCardsToLessonProject(
             endTime: slotEnd,
             enterAnimation: 'pop-up',
             exitAnimation: 'fade-out',
-            layout: { x: 540, y: karaokeCenterY, width: 920, scale: 1, zIndex: 36, manualPosition: true },
+            layout: { x: 540, y: karaokeCenterY, width: 920, scale: 1, zIndex: 36 },
             props: {
               kind: 'karaoke-card',
               cueId: slot.cue.id,
@@ -4566,7 +4568,7 @@ export function reelCardsToLessonProject(
             endTime: end,
             enterAnimation: 'fade-scale',
             exitAnimation: 'fade-out',
-            layout: { x: 540, y: karaokeCenterY, width: 920, scale: 1, zIndex: 37, manualPosition: true },
+            layout: { x: 540, y: karaokeCenterY, width: 920, scale: 1, zIndex: 37 },
             props: {
               kind: 'karaoke-card',
               cueId: win.nuanceSlot.cue.id,
@@ -4592,7 +4594,7 @@ export function reelCardsToLessonProject(
           endTime: preRevealEnd,
           enterAnimation: 'fade-scale',
           exitAnimation: 'fade-out',
-          layout: { x: 540, y: karaokeCenterY, width: 920, scale: 1, zIndex: 35, manualPosition: true },
+          layout: { x: 540, y: karaokeCenterY, width: 920, scale: 1, zIndex: 35 },
           props: {
             kind: 'karaoke-card',
             cueId: win.questionCue.id,
@@ -4613,7 +4615,7 @@ export function reelCardsToLessonProject(
             endTime: end,
             enterAnimation: 'pop-up',
             exitAnimation: 'fade-out',
-            layout: { x: 540, y: karaokeCenterY, width: 920, scale: 1, zIndex: 36, manualPosition: true },
+            layout: { x: 540, y: karaokeCenterY, width: 920, scale: 1, zIndex: 36 },
             props: {
               kind: 'karaoke-card',
               cueId: win.answerCue.id,
@@ -4637,7 +4639,7 @@ export function reelCardsToLessonProject(
         endTime: end,
         enterAnimation: 'fade-scale',
         exitAnimation: 'fade-out',
-        layout: { x: 540, y: karaokeCenterY, width: 920, scale: 1, zIndex: 35, manualPosition: true },
+        layout: { x: 540, y: karaokeCenterY, width: 920, scale: 1, zIndex: 35 },
         props: {
           kind: 'karaoke-card',
           cueId: win.questionCue.id,

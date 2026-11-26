@@ -165,7 +165,7 @@ ${sourceBlock}
 # ĐỊNH DẠNG ĐẦU RA BẮT BUỘC (CHỈ TRẢ VỀ 1 KHỐI JSON)
 \`\`\`json
 {
-  "title": "Tiêu đề tiếng Anh ngắn gọn, thu hút",
+  "title": "Tiêu đề ngắn gọn (5–10 từ), khơi gợi tò mò & cảm xúc (VD kiểu 'Why 5 AM Changes Everything!' hoặc '【1-Min Challenge】Can You Read This Smoothly?')",
   "topicBadge": "CEFR ${level} · READING",
   "level": "${level}",
   "text": "Sentence one goes here.\\nSentence two goes here.\\nSentence three continues the story."

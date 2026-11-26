@@ -240,11 +240,13 @@ ${TYPOGRAPHY_MOBILE_READABILITY_PROMPT_BLOCK}
 - Mọi \`sceneIcon\` đều nằm trong danh sách 42 icon chuẩn; mọi \`variant\` có trong Kho hoặc dùng \`customPrimitives\`.
 - Mọi \`position\` thỏa \`x >= 0\`, \`y >= 0\`, \`x + width <= 1\`, \`y + height <= 0.75\`, và không chồng nhau trong cùng scene.
 
+- Đặt \`"title"\` thật ngắn gọn (tối đa ~8–12 từ), súc tích, khơi gợi tò mò & cảm xúc đúng với nội dung bài (VD kiểu \`"【Bạn có hay nói nhầm?】Đừng dùng 'Want Water' nữa!"\` hoặc \`"【このペースで言える？】英会話のための瞬間英作文"\` phù hợp ngôn ngữ bài học).
+
 # MẪU JSON OUTPUT CHUẨN v1.9
 \`\`\`json
 {
   "schema_version": "1.9",
-  "title": "${options?.title || 'Language Lesson'}",
+  "title": "${options?.title || '【Đừng nói sai nữa!】Cách mở lời tự nhiên nhất'}",
   "theme": "${resolvedTemplateTheme}",
   "compositionId": "${aiDecideComposition ? 'story-scenes' : compMeta?.id || 'story-scenes'}",
   "compositionReason": "<1 câu ngắn nêu đúng mô típ bài học>",

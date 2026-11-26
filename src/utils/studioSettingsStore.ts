@@ -41,6 +41,36 @@ export interface PersistedElementLayoutOverride {
   scale?: number;
 }
 
+export interface PersistedReelsModeSettings {
+  includeQuizInPrompt?: 'auto' | 'always' | 'none';
+  mode?: ReelMode;
+  targetLang?: string;
+  ttsProvider?: string;
+  ttsVoice?: string;
+  enableDualTts?: boolean;
+  splitAudioByRole?: boolean;
+  explanationTtsVoice?: string;
+  ttsRate?: number;
+  reelsAspectRatio?: ExportAspectRatioId;
+  selectedTheme?: CanvasThemeId;
+  selectedComposition?: LayoutCompositionId;
+  subtitlePosition?: SubtitlePosition;
+  subtitleSize?: SubtitleSize;
+  subtitleBoxStyle?: SubtitleBoxStyle;
+  backgroundPresetId?: BackgroundPresetId | '';
+  learningScrimOpacity?: number;
+  bgmPreset?: StudioBgmPresetId;
+  bgmVolume?: number;
+  watermarkConfig?: WatermarkOutroConfig;
+  mp4Resolution?: ExportResolutionId;
+  mp4Quality?: ExportQualityId;
+  mp4Fps?: ExportFpsOption;
+  previewViewMode?: 'video' | 'cards';
+  layoutOverridesByAspect?: Partial<
+    Record<ExportAspectRatioId, Record<string, PersistedElementLayoutOverride>>
+  >;
+}
+
 export interface PersistedStudioSettings {
   updatedAt?: number;
   activeTab?: 'studio' | 'reels' | 'edu-studio';
@@ -111,6 +141,7 @@ export interface PersistedStudioSettings {
     layoutOverridesByAspect?: Partial<
       Record<ExportAspectRatioId, Record<string, PersistedElementLayoutOverride>>
     >;
+    byMode?: Partial<Record<ReelCreationMode, PersistedReelsModeSettings>>;
   };
   audioModal?: {
     tab?: 'tts' | 'transcribe';
@@ -196,6 +227,52 @@ function deepMerge<T extends Record<string, any>>(base: T, patch: Record<string,
     }
   }
   return out as T;
+}
+
+/**
+ * Resolves isolated visual/audio/export settings for a specific Video Ngoại Ngữ AI sub-tab.
+ * Legacy flat fields inside `reels` only seed the mode that was active before `byMode` existed,
+ * preventing 9:16/16:9 or theme changes in one sub-tab from leaking into the other two.
+ */
+export function resolveReelsModeSettings(
+  reelsSaved: PersistedStudioSettings['reels'] | undefined,
+  mode: ReelCreationMode,
+): PersistedReelsModeSettings {
+  const fromByMode = reelsSaved?.byMode?.[mode];
+  if (fromByMode) {
+    return fromByMode;
+  }
+  const legacyMode: ReelCreationMode = reelsSaved?.reelCreationMode || 'source';
+  if (reelsSaved && legacyMode === mode && !reelsSaved.byMode) {
+    return {
+      includeQuizInPrompt: reelsSaved.includeQuizInPrompt,
+      mode: reelsSaved.mode,
+      targetLang: reelsSaved.targetLang,
+      ttsProvider: reelsSaved.ttsProvider,
+      ttsVoice: reelsSaved.ttsVoice,
+      enableDualTts: reelsSaved.enableDualTts,
+      splitAudioByRole: reelsSaved.splitAudioByRole,
+      explanationTtsVoice: reelsSaved.explanationTtsVoice,
+      ttsRate: reelsSaved.ttsRate,
+      reelsAspectRatio: reelsSaved.reelsAspectRatio,
+      selectedTheme: reelsSaved.selectedTheme,
+      selectedComposition: reelsSaved.selectedComposition,
+      subtitlePosition: reelsSaved.subtitlePosition,
+      subtitleSize: reelsSaved.subtitleSize,
+      subtitleBoxStyle: reelsSaved.subtitleBoxStyle,
+      backgroundPresetId: reelsSaved.backgroundPresetId,
+      learningScrimOpacity: reelsSaved.learningScrimOpacity,
+      bgmPreset: reelsSaved.bgmPreset,
+      bgmVolume: reelsSaved.bgmVolume,
+      watermarkConfig: reelsSaved.watermarkConfig,
+      mp4Resolution: reelsSaved.mp4Resolution,
+      mp4Quality: reelsSaved.mp4Quality,
+      mp4Fps: reelsSaved.mp4Fps,
+      previewViewMode: reelsSaved.previewViewMode,
+      layoutOverridesByAspect: reelsSaved.layoutOverridesByAspect,
+    };
+  }
+  return {};
 }
 
 export function loadPersistedSettings(): PersistedStudioSettings {

@@ -137,6 +137,7 @@ import {
   resolveSyncAnchorTiming,
 } from './storyboardV19';
 import { validateStoryboardDocument } from './storyboardValidator';
+import { resolveReelsModeSettings } from '../utils/studioSettingsStore';
 
 test('interpolateWordTimings distributes word timestamps across cue duration', () => {
   const words = interpolateWordTimings('Give me water please', 1.0, 3.0);
@@ -3291,6 +3292,145 @@ test('all prompt builders accept target duration minutes and scale guidance', ()
   });
   assert.ok(/3\s*phút/i.test(reelsSourcePrompt), 'Reels source prompt must include durationMinutes');
 });
+
+test('splitMixedLanguageTtsSpans keeps N1-N5 and CEFR/JLPT/HSK tags in Vietnamese voice instead of splitting to English', () => {
+  const spansN1 = splitMixedLanguageTtsSpans(
+    '[Phản xạ N1] Hôm nay cùng luyện phản xạ N5 đến N1 nhé!',
+    { primaryLang: 'vi', secondaryLang: 'ja' },
+  );
+  assert.equal(spansN1.length, 1, 'Vietnamese sentence with [Phản xạ N1] and N5/N1 must stay 1 unbroken VI span');
+  assert.equal(spansN1[0].lang, 'vi');
+
+  const spansTags = splitMixedLanguageTtsSpans(
+    'Luyện thi JLPT N2 và trình độ B1 hoặc HSK4 cực dễ.',
+    { primaryLang: 'vi', secondaryLang: 'ja' },
+  );
+  assert.equal(spansTags.length, 1);
+  assert.equal(spansTags[0].lang, 'vi');
+});
+
+test('cleanOutputTitleStem preserves Japanese brackets cleanly without stray spaces and respects concise stem length', () => {
+  assert.equal(
+    cleanOutputTitleStem('【このペースで言える？】英会話のための瞬間英作文'),
+    '【このペースで言える】英会話のための瞬間英作文',
+  );
+  const viTitle = cleanOutputTitleStem('【Phản xạ N1】"Coi chừng cô ấy!"');
+  assert.equal(viTitle, '【Phản xạ N1】 Coi chừng cô ấy!');
+  assert.ok(viTitle.length <= 84);
+});
+
+test('16:9 responsive layout centers plain Reels karaoke-card, stacks quiz split column cleanly, and hit-tests subtitle position', () => {
+  const builtTr = buildTranslationCardsFromInput({
+    learningLanguage: 'ja',
+    level: 'N5',
+    itemCount: 3,
+    targetLang: 'vi',
+  });
+  const plainReels = reelCardsToLessonProject(builtTr.cards, {
+    title: builtTr.title,
+    theme: 'studio-slate',
+    targetLang: 'vi',
+    aspectRatio: '16:9',
+    compositionId: 'plain',
+    subtitleConfig: { position: 'top', size: 'lg', boxStyle: 'card' },
+  });
+  const plainKaraoke = plainReels.elements.find((el) => el.type === 'karaoke-card')!;
+  assert.ok(!plainKaraoke.layout.manualPosition, 'Plain karaoke-card should not lock manualPosition by default');
+  const plainMid = (plainKaraoke.startTime + plainKaraoke.endTime) / 2;
+  const plainMap = resolveElementLayoutForAspect(
+    plainReels.elements,
+    plainMid,
+    '16:9',
+    plainReels.subtitleConfig,
+    'plain',
+  );
+  const resolvedPlain = plainMap.get(plainKaraoke.id)!;
+  assert.equal(resolvedPlain.x, 960);
+  assert.ok((resolvedPlain.width ?? 0) > 1200, `Expected wide 16:9 plain subtitle width >1200, got ${resolvedPlain.width}`);
+
+  const topHit = hitTestElementLayout(
+    plainReels.elements,
+    960,
+    resolvedPlain.y,
+    plainMid,
+    '16:9',
+    plainReels.subtitleConfig,
+    'plain',
+  );
+  assert.ok(topHit && topHit.element.id === plainKaraoke.id, 'Expected hitTestElementLayout to hit top-positioned subtitle in 16:9');
+
+  // Quiz split-column non-overlap in 16:9
+  const builtQuiz = buildReelCardsRuleBased(
+    `Tom checks his passport at the counter.
+Q1. Where does Tom check his passport?
+A) At the counter
+B) At the hotel pool
+C) On the train
+Answer: A`,
+    { mode: 'reading', targetLang: 'vi', includeQuiz: true },
+  );
+  const quizProj = reelCardsToLessonProject(builtQuiz.cards, {
+    title: 'Quiz 16:9',
+    theme: 'studio-slate',
+    targetLang: 'vi',
+    aspectRatio: '16:9',
+  });
+  const meter = quizProj.elements.find((el) => el.id.includes('countdown-meter-'))!;
+  assert.ok(meter, 'Expected reel-q-countdown-meter-* element');
+  const quizMid = (meter.startTime + meter.endTime) / 2;
+  const quizMap = resolveElementLayoutForAspect(quizProj.elements, quizMid, '16:9');
+  const sentEl = quizProj.elements.find(
+    (el) => el.type === 'sentence-card' && quizMid >= el.startTime && quizMid <= el.endTime,
+  )!;
+  const optsEl = quizProj.elements.find(
+    (el) => el.id.includes('-quiz-opts-') && quizMid >= el.startTime && quizMid <= el.endTime,
+  )!;
+  const sentBox = quizMap.get(sentEl.id)!;
+  const optsBox = quizMap.get(optsEl.id)!;
+  const meterBox = quizMap.get(meter.id)!;
+  assert.ok(
+    sentBox.y + 100 < optsBox.y && optsBox.y < meterBox.y,
+    `Expected clean vertical stack in 16:9 split column: sent=${sentBox.y}, opts=${optsBox.y}, meter=${meterBox.y}`,
+  );
+});
+
+test('resolveReelsModeSettings isolates aspectRatio and styling across the 3 Reels sub-tabs', () => {
+  const saved = {
+    reelCreationMode: 'source' as const,
+    reelsAspectRatio: '16:9' as const,
+    selectedTheme: 'warm-paper' as const,
+    byMode: {
+      source: {
+        reelsAspectRatio: '16:9' as const,
+        selectedTheme: 'warm-paper' as const,
+        subtitlePosition: 'top' as const,
+      },
+      creator: {
+        reelsAspectRatio: '9:16' as const,
+        selectedTheme: 'studio-slate' as const,
+      },
+    },
+  };
+
+  assert.equal(resolveReelsModeSettings(saved, 'source').reelsAspectRatio, '16:9');
+  assert.equal(resolveReelsModeSettings(saved, 'source').subtitlePosition, 'top');
+  assert.equal(resolveReelsModeSettings(saved, 'creator').reelsAspectRatio, '9:16');
+  assert.equal(resolveReelsModeSettings(saved, 'creator').selectedTheme, 'studio-slate');
+  assert.equal(
+    resolveReelsModeSettings(saved, 'translation').reelsAspectRatio,
+    undefined,
+    'Unconfigured third sub-tab must not inherit source 16:9 setting',
+  );
+
+  // Legacy migration (no byMode yet) seeds only the legacy active mode
+  const legacyOnly = {
+    reelCreationMode: 'source' as const,
+    reelsAspectRatio: '16:9' as const,
+  };
+  assert.equal(resolveReelsModeSettings(legacyOnly, 'source').reelsAspectRatio, '16:9');
+  assert.equal(resolveReelsModeSettings(legacyOnly, 'creator').reelsAspectRatio, undefined);
+});
+
 
 
 
