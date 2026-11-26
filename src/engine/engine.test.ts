@@ -114,16 +114,20 @@ import {
   createDefaultVisualBuilderConfig,
   VISUAL_LAYOUT_PRESETS,
 } from './visualComponentBuilder';
-import { alignKnownTextToPcmFloat, parseWavBufferToMonoFloat32 } from './forcedAligner';
+import { alignKnownTextToPcmFloat, parseWavBufferToMonoFloat32, tokenizeTextForAlignment } from './forcedAligner';
 import {
   buildReadingWebAiPrompt,
   cleanReadingWorksheetInput,
+  computeReadingTargetLength,
   parseReadingWebAiResponse,
+  READING_STARTER_BY_LANG,
 } from './readingPromptBuilder';
 import {
+  buildEstimatedReadingWords,
   computeReadingTimelineMetrics,
   paginateReadingWords,
   READING_BOOK_FRAMES,
+  READING_BOOK_PALETTES,
   READING_POINTER_STYLES,
 } from './eduStudioEffects';
 import {
@@ -1498,10 +1502,20 @@ test('readingPromptBuilder generates web-url & topic prompts and parses fenced J
   assert.ok(plain!.text.includes('barista clearly'));
 });
 
-test('eduStudioEffects provides 6 book frames (including plain), 7 pointer styles, non-overlapping outro metrics, and multi-page pagination', () => {
-  assert.equal(READING_BOOK_FRAMES.length, 6);
+test('eduStudioEffects provides 12 palettes, 12 book/plain frames, 13 pointer styles (incl. highlight-only), non-overlapping outro metrics, and multi-page pagination', () => {
+  assert.equal(READING_BOOK_PALETTES.length, 12);
+  assert.ok(READING_BOOK_PALETTES.some((p) => p.id === 'Sakura Blossom'));
+  assert.ok(READING_BOOK_PALETTES.some((p) => p.id === 'Midnight Ink' && p.isDark));
+
+  assert.equal(READING_BOOK_FRAMES.length, 12);
   assert.ok(READING_BOOK_FRAMES.some((f) => f.id === 'plain'));
-  assert.equal(READING_POINTER_STYLES.length, 7);
+  assert.ok(READING_BOOK_FRAMES.some((f) => f.id === 'plain-glass'));
+  assert.ok(READING_BOOK_FRAMES.some((f) => f.id === 'plain-kinetic'));
+  assert.ok(READING_BOOK_FRAMES.some((f) => f.id === 'washi-scroll'));
+
+  assert.equal(READING_POINTER_STYLES.length, 13);
+  assert.ok(READING_POINTER_STYLES.some((p) => p.id === 'none'));
+  assert.ok(READING_POINTER_STYLES.some((p) => p.id === 'calligraphy-brush'));
 
   const words = [
     { word: 'Practice', start: 0.2, end: 1.1 },
@@ -3518,6 +3532,92 @@ test('buildVideoDescription produces localized descriptions, chapters, and hasht
   assert.ok(enPack.hashtags.includes('#LearnChinese'));
   assert.ok(enPack.hashtags.length <= 10);
 });
+
+test('Tab 3 multilingual reading prompt, CJK/Korean alignment tokenization, and compact CJK pagination work across zh, ko, and ja', () => {
+  // 1. Starter passages exist for all 6 languages
+  for (const lang of ['en', 'ja', 'zh', 'ko', 'fr', 'es'] as const) {
+    const starter = READING_STARTER_BY_LANG[lang];
+    assert.ok(starter.title.length > 0);
+    assert.ok(starter.text.length > 20);
+  }
+
+  // 2. Multilingual Web AI prompt supports blank topic (autonomous mode) & dynamic duration budget
+  const jaTarget = computeReadingTargetLength('ja', 3);
+  assert.ok(jaTarget.count >= 450 && jaTarget.unitShort === 'ký tự');
+  const jaPrompt = buildReadingWebAiPrompt({
+    mode: 'topic',
+    learningLanguage: 'ja',
+    topic: '',
+    level: 'N4',
+    durationMinutes: 3,
+    wordCount: jaTarget.count,
+  });
+  assert.ok(jaPrompt.includes('CHẾ ĐỘ AI TỰ CHỌN Ý TƯỞNG'));
+  assert.ok(jaPrompt.includes('JLPT N4'));
+  assert.ok(jaPrompt.includes('3 phút'));
+
+  const zhPrompt = buildReadingWebAiPrompt({
+    mode: 'topic',
+    learningLanguage: 'zh',
+    topic: '周末去公园',
+    level: 'HSK 2',
+    durationMinutes: 2,
+  });
+  assert.ok(zhPrompt.includes('HSK 2'));
+  assert.ok(zhPrompt.includes('周末去公园'));
+
+  // 3. CJK & Korean tokenization and forced alignment on synthesized 16kHz PCM audio
+  const zhText = '今天天气很好。我们去公园散步吧！';
+  const zhTokens = tokenizeTextForAlignment(zhText, 'zh');
+  assert.ok(zhTokens.length >= 6, `Expected >= 6 segmented Chinese tokens, got ${zhTokens.length}`);
+
+  const sr = 16000;
+  const totalSamples = sr * 4;
+  const pcm = new Float32Array(totalSamples);
+  for (let i = Math.floor(sr * 0.2); i < Math.floor(sr * 3.8); i++) {
+    pcm[i] = Math.sin((2 * Math.PI * 220 * i) / sr) * 0.35;
+  }
+  const zhAligned = alignKnownTextToPcmFloat(zhText, pcm, sr, { lang: 'zh' });
+  assert.equal(zhAligned.words.length, zhTokens.length);
+  for (let i = 0; i < zhAligned.words.length; i++) {
+    assert.ok(zhAligned.words[i].end > zhAligned.words[i].start);
+    assert.ok(zhAligned.words[i].end <= 4.05);
+    if (i > 0) assert.ok(zhAligned.words[i].start >= zhAligned.words[i - 1].start);
+  }
+
+  const koText = '저는 매일 아침 여섯 시 반에 일어납니다.';
+  const koTokens = tokenizeTextForAlignment(koText, 'ko');
+  assert.equal(koTokens.length, 7);
+  const koAligned = alignKnownTextToPcmFloat(koText, pcm, sr, { lang: 'ko' });
+  assert.equal(koAligned.words.length, 7);
+
+  // 4. Dense CJK JSON/plain response splits cleanly on fullwidth punctuation
+  const parsedZh = parseReadingWebAiResponse('今天天气很好。我们去公园散步吧！你觉得怎么样？', 'HSK 2');
+  assert.ok(parsedZh !== null);
+  assert.ok(parsedZh!.text.split('\n').length >= 3);
+
+  // 5. buildEstimatedReadingWords + paginateReadingWords keep CJK tokens cleanly inside bounds
+  const estWords = buildEstimatedReadingWords(zhText, 4, 'zh');
+  assert.ok(estWords.length >= 6);
+  const zhPages = paginateReadingWords(
+    estWords,
+    (w) => w.length * 22,
+    {
+      startX: 20,
+      maxW: 160,
+      startY: 50,
+      maxY: 300,
+      lineHeight: 36,
+      wordGap: 10,
+      getWordGap: (w) => (/[\u3040-\u30ff\u4e00-\u9fff]/.test(w) ? 3 : 10),
+    },
+  );
+  assert.ok(zhPages.flat().length === estWords.length);
+  for (const item of zhPages.flat()) {
+    assert.ok(item.x + item.w <= 20 + 160 + 1);
+  }
+});
+
 
 
 

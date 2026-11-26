@@ -1,5 +1,6 @@
 import { drawPresetBackground } from './backgroundPresets';
 import { drawLoadedImageCover, getCachedBgImage, getCachedBgVideo } from './canvasRenderer';
+import { tokenizeTextForAlignment } from './forcedAligner';
 import { parseTranscriptAuto } from './transcriptParser';
 import {
   BackgroundImageConfig,
@@ -259,8 +260,22 @@ export function buildEduKaraokeAss(
   return lines.join('\n') + '\n';
 }
 
+export type ReadingBookPaletteId =
+  | 'Sunny Yellow'
+  | 'Sky Blue'
+  | 'Mint Green'
+  | 'Warm Cream'
+  | 'Lavender'
+  | 'Sakura Blossom'
+  | 'Matcha Kyoto'
+  | 'Midnight Ink'
+  | 'Sunset Coral'
+  | 'Ocean Breeze'
+  | 'Vintage Kraft'
+  | 'Nordic Slate';
+
 export interface ReadingBookPalette {
-  id: 'Sunny Yellow' | 'Sky Blue' | 'Mint Green' | 'Warm Cream' | 'Lavender';
+  id: ReadingBookPaletteId;
   bgTop: string;
   bgBottom: string;
   pageBg: string;
@@ -273,6 +288,7 @@ export interface ReadingBookPalette {
   highlightText: string;
   spokenText: string;
   accent: string;
+  isDark?: boolean;
 }
 
 export const READING_BOOK_PALETTES: ReadingBookPalette[] = [
@@ -351,17 +367,129 @@ export const READING_BOOK_PALETTES: ReadingBookPalette[] = [
     spokenText: '#4338CA',
     accent: '#7C3AED',
   },
+  {
+    id: 'Sakura Blossom',
+    bgTop: '#FFE4E6',
+    bgBottom: '#FECDD3',
+    pageBg: '#FFF9FA',
+    pageBorder: '#FB7185',
+    spineColor: '#E11D48',
+    headerBg: '#FFE4E6',
+    headerText: '#9F1239',
+    bodyText: '#1E293B',
+    highlightBg: '#E11D48',
+    highlightText: '#FFFFFF',
+    spokenText: '#64748B',
+    accent: '#E11D48',
+  },
+  {
+    id: 'Matcha Kyoto',
+    bgTop: '#ECFCCB',
+    bgBottom: '#D9F99D',
+    pageBg: '#FCFDF7',
+    pageBorder: '#84CC16',
+    spineColor: '#4D7C0F',
+    headerBg: '#ECFCCB',
+    headerText: '#365314',
+    bodyText: '#1A2E05',
+    highlightBg: '#4D7C0F',
+    highlightText: '#FFFFFF',
+    spokenText: '#4B5563',
+    accent: '#4D7C0F',
+  },
+  {
+    id: 'Midnight Ink',
+    bgTop: '#0F172A',
+    bgBottom: '#1E293B',
+    pageBg: '#111827',
+    pageBorder: '#334155',
+    spineColor: '#020617',
+    headerBg: '#1E293B',
+    headerText: '#F8FAFC',
+    bodyText: '#E2E8F0',
+    highlightBg: '#F59E0B',
+    highlightText: '#0F172A',
+    spokenText: '#94A3B8',
+    accent: '#F59E0B',
+    isDark: true,
+  },
+  {
+    id: 'Sunset Coral',
+    bgTop: '#FFEDD5',
+    bgBottom: '#FED7AA',
+    pageBg: '#FFFAF5',
+    pageBorder: '#FB923C',
+    spineColor: '#C2410C',
+    headerBg: '#FFEDD5',
+    headerText: '#9A3412',
+    bodyText: '#27272A',
+    highlightBg: '#EA580C',
+    highlightText: '#FFFFFF',
+    spokenText: '#52525B',
+    accent: '#EA580C',
+  },
+  {
+    id: 'Ocean Breeze',
+    bgTop: '#CCFBF1',
+    bgBottom: '#99F6E4',
+    pageBg: '#F6FEFD',
+    pageBorder: '#2DD4BF',
+    spineColor: '#0F766E',
+    headerBg: '#CCFBF1',
+    headerText: '#115E59',
+    bodyText: '#0F172A',
+    highlightBg: '#0F766E',
+    highlightText: '#FFFFFF',
+    spokenText: '#475569',
+    accent: '#0F766E',
+  },
+  {
+    id: 'Vintage Kraft',
+    bgTop: '#E7D8C9',
+    bgBottom: '#D6C1AC',
+    pageBg: '#F9F2E7',
+    pageBorder: '#A47551',
+    spineColor: '#6F4E37',
+    headerBg: '#EFE3D3',
+    headerText: '#4A3222',
+    bodyText: '#2B1E16',
+    highlightBg: '#B45309',
+    highlightText: '#FFFFFF',
+    spokenText: '#6B5344',
+    accent: '#B45309',
+  },
+  {
+    id: 'Nordic Slate',
+    bgTop: '#E2E8F0',
+    bgBottom: '#CBD5E1',
+    pageBg: '#FFFFFF',
+    pageBorder: '#94A3B8',
+    spineColor: '#334155',
+    headerBg: '#EEF2FF',
+    headerText: '#312E81',
+    bodyText: '#0F172A',
+    highlightBg: '#4338CA',
+    highlightText: '#FFFFFF',
+    spokenText: '#475569',
+    accent: '#4338CA',
+  },
 ];
 
 export type ReadingIllustrationStyle = 'Flat 2D' | '2.5D' | '3D Cartoon';
 
 export type ReadingBookFrameId =
   | 'plain'
+  | 'plain-glass'
+  | 'plain-kinetic'
+  | 'plain-editorial'
   | 'classic-page'
   | 'open-spread'
   | 'spiral-notebook'
   | 'textbook-card'
-  | 'chalkboard';
+  | 'chalkboard'
+  | 'washi-scroll'
+  | 'ipad-reader'
+  | 'editorial-mag';
 
 export interface ReadingBookFrameMeta {
   id: ReadingBookFrameId;
@@ -371,21 +499,33 @@ export interface ReadingBookFrameMeta {
 
 export const READING_BOOK_FRAMES: ReadingBookFrameMeta[] = [
   { id: 'plain', label: 'Plain — Chỉ Chữ & Nền (Tối giản)', description: 'Không khung sách — chỉ hình/video nền có opacity dịu mắt và chữ nổi ở giữa' },
+  { id: 'plain-glass', label: 'Plain Kính Mờ (Frosted Glass)', description: 'Không khung sách — hộp kính mờ sang trọng nổi bật trên nền ảnh/video' },
+  { id: 'plain-kinetic', label: 'Plain Chữ Lớn Kinetic (Tập trung)', description: 'Chữ to đậm tối giản kèm highlight viên thuốc và thanh tiến độ đọc' },
+  { id: 'plain-editorial', label: 'Plain Trích Dẫn Báo Chí (Editorial)', description: 'Thanh gạch dọc nhấn bên trái tinh tế, hợp đọc truyện & podcast' },
   { id: 'classic-page', label: 'Trang Sách Cổ Điển', description: 'Khung trang sách bo tròn có gáy nổi truyền thống' },
   { id: 'open-spread', label: 'Sách Mở Hai Trang', description: 'Mở trang đôi kèm dải ruy-băng đánh dấu trang' },
   { id: 'spiral-notebook', label: 'Sổ Lò Xo Dòng Kẻ', description: 'Gáy xoắn lò xo phía trên kèm dòng kẻ vở học tập' },
   { id: 'textbook-card', label: 'Giáo Trình Hiện Đại', description: 'Header dải màu toàn phần phong cách Oxford/Cambridge' },
   { id: 'chalkboard', label: 'Bảng Phấn Lớp Học', description: 'Bảng đen viền gỗ với chữ phấn trắng nổi bật' },
+  { id: 'washi-scroll', label: 'Giấy Washi Á Đông (Nhật / Trung)', description: 'Khung giấy Washi viền kép kèm dấu triện đỏ cổ phong' },
+  { id: 'ipad-reader', label: 'Máy Đọc Sách Tablet (e-Reader)', description: 'Khung màn hình Tablet viền đen tối giản, cực rõ trên mọi tỉ lệ' },
+  { id: 'editorial-mag', label: 'Tạp Chí Biên Tập (Editorial Mag)', description: 'Tiêu đề tạp chí hiện đại kết hợp dải chân trang tinh gọn' },
 ];
 
 export type ReadingPointerStyleId =
+  | 'none'
   | 'hand-classic'
   | 'magic-wand'
   | 'highlighter'
   | 'laser-dot'
   | 'bouncing-arrow'
   | 'fountain-pen'
-  | 'underline-only';
+  | 'underline-only'
+  | 'calligraphy-brush'
+  | 'glow-orb'
+  | 'bracket-focus'
+  | 'feather-quill'
+  | 'ribbon-wave';
 
 export interface ReadingPointerStyleMeta {
   id: ReadingPointerStyleId;
@@ -394,6 +534,7 @@ export interface ReadingPointerStyleMeta {
 }
 
 export const READING_POINTER_STYLES: ReadingPointerStyleMeta[] = [
+  { id: 'none', label: 'Không có con trỏ — Chỉ bôi sáng chữ', description: 'Ẩn hoàn toàn con trỏ, chỉ tô sáng nổi bật từ đang đọc' },
   { id: 'hand-classic', label: 'Ngón Tay Chỉ Chữ', description: 'Bàn tay hoạt hình di chuyển mượt theo từng từ' },
   { id: 'magic-wand', label: 'Đũa Phép Ngôi Sao', description: 'Đũa sao phát sáng lướt nhẹ dưới từ đang đọc' },
   { id: 'highlighter', label: 'Bút Dạ Quang', description: 'Ngòi bút highlight kèm vệt sáng đánh dấu từ' },
@@ -401,6 +542,11 @@ export const READING_POINTER_STYLES: ReadingPointerStyleMeta[] = [
   { id: 'bouncing-arrow', label: 'Mũi Tên Nhún Nhảy', description: 'Mũi tên chỉ lên nhịp nhàng theo tốc độ đọc' },
   { id: 'fountain-pen', label: 'Bút Máy Cổ Điển', description: 'Ngòi bút máy nghiêng theo nhịp từng chữ' },
   { id: 'underline-only', label: 'Gạch Chân Tối Giản', description: 'Thanh gạch chân động mượt mà, không che chữ' },
+  { id: 'calligraphy-brush', label: 'Bút Lông Thư Pháp (Trung / Nhật / Hàn)', description: 'Cọ thư pháp tre lướt nhẹ dưới chữ, rất hợp bài đọc Á Đông' },
+  { id: 'glow-orb', label: 'Quả Cầu Phát Sáng Aurora', description: 'Vòng ánh sáng phát quang mềm mại trôi theo từng từ' },
+  { id: 'bracket-focus', label: 'Khung Ngắm Focus [ ]', description: 'Cặp ngoặc góc tối giản ôm gọn từ đang đọc, không che dòng dưới' },
+  { id: 'feather-quill', label: 'Bút Lông Vũ Cổ Điển', description: 'Lông vũ trắng viền vàng chấm nhẹ theo nhịp phát âm' },
+  { id: 'ribbon-wave', label: 'Dải Sóng Neon Mềm', description: 'Đường sóng sáng mềm mại kèm điểm sáng trượt theo âm tiết' },
 ];
 
 export interface ReadingAlongRenderOptions {
@@ -487,6 +633,15 @@ export interface PaginatedPositionedWord {
   pageIndex: number;
 }
 
+const RE_CJK_BOUNDARY = /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff]/;
+
+function isCompactCjkGap(prevWord: string, nextWord: string): boolean {
+  if (!prevWord || !nextWord) return false;
+  const lastChar = prevWord.slice(-1);
+  const firstChar = nextWord.slice(0, 1);
+  return RE_CJK_BOUNDARY.test(lastChar) && RE_CJK_BOUNDARY.test(firstChar);
+}
+
 export function paginateReadingWords(
   wordsList: WordTiming[],
   measureWidth: (word: string) => number,
@@ -497,6 +652,7 @@ export function paginateReadingWords(
     maxY: number;
     lineHeight: number;
     wordGap: number;
+    getWordGap?: (prevWord: string, nextWord: string) => number;
   },
 ): PaginatedPositionedWord[][] {
   const pages: PaginatedPositionedWord[][] = [[]];
@@ -525,7 +681,15 @@ export function paginateReadingWords(
       index: i,
       pageIndex: curPageIdx,
     });
-    curX += w + bounds.wordGap;
+    const nextItem = wordsList[i + 1];
+    const gap = nextItem
+      ? bounds.getWordGap
+        ? bounds.getWordGap(item.word, nextItem.word)
+        : isCompactCjkGap(item.word, nextItem.word)
+          ? Math.max(2, Math.round(bounds.wordGap * 0.25))
+          : bounds.wordGap
+      : bounds.wordGap;
+    curX += w + gap;
   }
   return pages;
 }
@@ -552,12 +716,22 @@ function roundRectPath(
   ctx.closePath();
 }
 
-export function buildEstimatedReadingWords(text: string, totalDuration = 12): WordTiming[] {
-  const tokens = text.replace(/\s+/g, ' ').trim().split(' ').filter(Boolean);
+export function buildEstimatedReadingWords(
+  text: string,
+  totalDuration = 12,
+  lang?: string,
+): WordTiming[] {
+  const tokens = tokenizeTextForAlignment(text, lang);
   if (tokens.length === 0) return [];
-  const weights = tokens.map((t) => Math.max(2, t.replace(/[^a-zA-Z0-9\u00C0-\u024F\u3040-\u30FF\u4E00-\u9FFF]/g, '').length + (/[,.!?]$/.test(t) ? 2.5 : 0)));
+  const weights = tokens.map((t) =>
+    Math.max(
+      2,
+      t.replace(/[^a-zA-Z0-9\u00C0-\u024F\u3040-\u30FF\u4E00-\u9FFF\uAC00-\uD7AF]/g, '').length +
+        (/[,.!?。！？]$/.test(t) ? 2.5 : 0),
+    ),
+  );
   const totalWeight = weights.reduce((a, b) => a + b, 0);
-  const safeDur = Math.max(tokens.length * 0.25, totalDuration);
+  const safeDur = Math.max(tokens.length * 0.22, totalDuration);
   let cursor = 0.15;
   const usable = Math.max(0.5, safeDur - 0.3);
   return tokens.map((word, idx) => {
@@ -579,17 +753,160 @@ function drawReadingPointer(
   palette: ReadingBookPalette,
   scale: number,
   timeSec: number,
-  isChalkboard: boolean,
+  isDarkSurface: boolean,
 ) {
+  if (style === 'none') {
+    return;
+  }
+
   const bob = Math.sin(timeSec * 7.5) * 2.2;
   ctx.save();
 
   switch (style) {
     case 'underline-only': {
       const barY = y - 2;
-      ctx.fillStyle = isChalkboard ? '#FACC15' : palette.highlightBg;
+      ctx.fillStyle = isDarkSurface ? '#FACC15' : palette.highlightBg;
       roundRectPath(ctx, x - wordW / 2 - 4, barY, wordW + 8, Math.max(4, Math.round(fontSize * 0.14)), 4);
       ctx.fill();
+      ctx.restore();
+      return;
+    }
+
+    case 'bracket-focus': {
+      const padX = Math.max(8, wordW * 0.5 + 8);
+      const topY = y - fontSize - 10;
+      const botY = y - 2;
+      const arm = Math.max(8, Math.round(fontSize * 0.32));
+      ctx.strokeStyle = isDarkSurface ? '#FACC15' : palette.accent;
+      ctx.lineWidth = Math.max(3, Math.round(3.5 * scale));
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      // Left bracket
+      ctx.beginPath();
+      ctx.moveTo(x - padX + arm, topY);
+      ctx.lineTo(x - padX, topY);
+      ctx.lineTo(x - padX, botY);
+      ctx.lineTo(x - padX + arm, botY);
+      ctx.stroke();
+      // Right bracket
+      ctx.beginPath();
+      ctx.moveTo(x + padX - arm, topY);
+      ctx.lineTo(x + padX, topY);
+      ctx.lineTo(x + padX, botY);
+      ctx.lineTo(x + padX - arm, botY);
+      ctx.stroke();
+      ctx.restore();
+      return;
+    }
+
+    case 'ribbon-wave': {
+      const barW = Math.max(wordW + 14, 34);
+      const startX = x - barW / 2;
+      const baseY = y + 2;
+      const waveGrad = ctx.createLinearGradient(startX, baseY, startX + barW, baseY);
+      waveGrad.addColorStop(0, '#38BDF8');
+      waveGrad.addColorStop(0.5, isDarkSurface ? '#FACC15' : palette.accent);
+      waveGrad.addColorStop(1, '#F472B6');
+      ctx.strokeStyle = waveGrad;
+      ctx.lineWidth = Math.max(4, 4.5 * scale);
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      for (let i = 0; i <= 16; i++) {
+        const t = i / 16;
+        const px = startX + t * barW;
+        const py = baseY + Math.sin(t * Math.PI * 3 + timeSec * 8) * 3;
+        if (i === 0) ctx.moveTo(px, py);
+        else ctx.lineTo(px, py);
+      }
+      ctx.stroke();
+      ctx.fillStyle = '#FFFFFF';
+      ctx.beginPath();
+      ctx.arc(x, baseY + Math.sin(Math.PI * 1.5 + timeSec * 8) * 3, Math.max(3.5, 4 * scale), 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+      return;
+    }
+
+    case 'glow-orb': {
+      const orbX = x;
+      const orbY = y + 8 + bob * 0.5;
+      const r = Math.max(9, 13 * scale);
+      const aura = ctx.createRadialGradient(orbX, orbY, 2, orbX, orbY, r * 2.4);
+      aura.addColorStop(0, 'rgba(56, 189, 248, 0.95)');
+      aura.addColorStop(0.5, 'rgba(167, 139, 250, 0.45)');
+      aura.addColorStop(1, 'rgba(56, 189, 248, 0)');
+      ctx.fillStyle = aura;
+      ctx.beginPath();
+      ctx.arc(orbX, orbY, r * 2.4, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(255,255,255,0.85)';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.ellipse(orbX, orbY, r * 1.35, r * 0.48, Math.sin(timeSec * 3) * 0.25, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.fillStyle = '#FFFFFF';
+      ctx.beginPath();
+      ctx.arc(orbX, orbY, r * 0.42, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+      return;
+    }
+
+    case 'calligraphy-brush': {
+      ctx.translate(x + 4, y + 6 + bob * 0.45);
+      ctx.scale(scale, scale);
+      ctx.rotate(-0.32);
+      ctx.shadowColor = 'rgba(15, 23, 42, 0.28)';
+      ctx.shadowBlur = 8;
+      // Ink tip
+      ctx.fillStyle = '#0F172A';
+      ctx.beginPath();
+      ctx.moveTo(0, -5);
+      ctx.quadraticCurveTo(8, 7, 5, 16);
+      ctx.lineTo(-5, 16);
+      ctx.quadraticCurveTo(-8, 7, 0, -5);
+      ctx.closePath();
+      ctx.fill();
+      // White collar
+      ctx.fillStyle = '#F8FAFC';
+      ctx.fillRect(-6, 15, 12, 6);
+      // Bamboo handle
+      ctx.fillStyle = '#B45309';
+      roundRectPath(ctx, -5.5, 21, 11, 42, 4);
+      ctx.fill();
+      ctx.fillStyle = '#92400E';
+      ctx.fillRect(-5.5, 34, 11, 2.5);
+      ctx.fillRect(-5.5, 48, 11, 2.5);
+      ctx.restore();
+      return;
+    }
+
+    case 'feather-quill': {
+      ctx.translate(x + 4, y + 4 + bob * 0.45);
+      ctx.scale(scale, scale);
+      ctx.rotate(-0.38);
+      ctx.shadowColor = 'rgba(15, 23, 42, 0.24)';
+      ctx.shadowBlur = 8;
+      // Feather vane
+      ctx.fillStyle = '#FEF3C7';
+      ctx.strokeStyle = '#D97706';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(0, -3);
+      ctx.quadraticCurveTo(16, 14, 10, 48);
+      ctx.lineTo(0, 56);
+      ctx.lineTo(-7, 46);
+      ctx.quadraticCurveTo(-11, 16, 0, -3);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+      // Quill shaft
+      ctx.strokeStyle = '#B45309';
+      ctx.lineWidth = 2.5;
+      ctx.beginPath();
+      ctx.moveTo(0, -3);
+      ctx.lineTo(2, 58);
+      ctx.stroke();
       ctx.restore();
       return;
     }
@@ -621,7 +938,7 @@ function drawReadingPointer(
       ctx.shadowColor = 'rgba(15, 23, 42, 0.25)';
       ctx.shadowBlur = 8;
       ctx.shadowOffsetY = 3;
-      ctx.fillStyle = isChalkboard ? '#38BDF8' : palette.accent;
+      ctx.fillStyle = isDarkSurface ? '#38BDF8' : palette.accent;
       ctx.strokeStyle = '#FFFFFF';
       ctx.lineWidth = 3;
       ctx.beginPath();
@@ -782,13 +1099,18 @@ export function renderReadingAlongFrame(
   const bookFrame: ReadingBookFrameId = opts.bookFrame ?? 'classic-page';
   const pointerStyle: ReadingPointerStyleId = opts.pointerStyle ?? 'hand-classic';
   const isChalkboard = bookFrame === 'chalkboard';
-  const isPlainFrame = bookFrame === 'plain';
+  const isDarkPage = isChalkboard || Boolean(palette.isDark);
+  const isPlainFrame =
+    bookFrame === 'plain' ||
+    bookFrame === 'plain-glass' ||
+    bookFrame === 'plain-kinetic' ||
+    bookFrame === 'plain-editorial';
 
   // Background gradient fallback
   const grad = ctx.createLinearGradient(0, 0, 0, height);
   if (isChalkboard || isPlainFrame) {
-    grad.addColorStop(0, '#1E293B');
-    grad.addColorStop(1, '#0F172A');
+    grad.addColorStop(0, palette.isDark ? palette.bgTop : '#1E293B');
+    grad.addColorStop(1, palette.isDark ? palette.bgBottom : '#0F172A');
   } else {
     grad.addColorStop(0, palette.bgTop);
     grad.addColorStop(1, palette.bgBottom);
@@ -911,25 +1233,40 @@ export function renderReadingAlongFrame(
       const subSize = opts.subtitleSize ?? 'Lớn';
       const sizeScale = subSize === 'Nhỏ' ? 0.78 : subSize === 'Lớn' ? 1.24 : 1.0;
       const baseFs = isLandscape ? Math.round(height * 0.052) : Math.round(width * 0.048);
-      const fontSize = Math.max(26, Math.min(82, Math.round(baseFs * sizeScale)));
+      const kineticScale = bookFrame === 'plain-kinetic' ? 1.12 : 1.0;
+      const fontSize = Math.max(24, Math.min(86, Math.round(baseFs * sizeScale * kineticScale)));
       const lineHeight = Math.round(fontSize * 1.48);
       const wordGap = Math.round(fontSize * 0.34);
-      const maxLineW = Math.round(width * 0.84);
-      ctx.font = `700 ${fontSize}px "Outfit", "Plus Jakarta Sans", sans-serif`;
+      const maxLineW = Math.round(width * (bookFrame === 'plain-glass' || bookFrame === 'plain-editorial' ? 0.78 : 0.84));
+      const fontFamily =
+        bookFrame === 'plain-editorial'
+          ? `"Georgia", "Noto Serif", "Plus Jakarta Sans", serif`
+          : `"Outfit", "Plus Jakarta Sans", sans-serif`;
+      ctx.font = `700 ${fontSize}px ${fontFamily}`;
 
-      // Wrap all words into centered lines, then group into compact 3-line subtitle pages
-      const wrappedLines: Array<{ words: Array<{ item: WordTiming; index: number; w: number }>; totalW: number }> = [];
-      let curWords: Array<{ item: WordTiming; index: number; w: number }> = [];
+      // Wrap all words into centered lines with CJK-aware compact gaps
+      const wrappedLines: Array<{
+        words: Array<{ item: WordTiming; index: number; w: number; gapAfter: number }>;
+        totalW: number;
+      }> = [];
+      let curWords: Array<{ item: WordTiming; index: number; w: number; gapAfter: number }> = [];
       let curW = 0;
       wordsList.forEach((item, index) => {
         const w = ctx.measureText(item.word).width;
-        const nextW = curWords.length === 0 ? w : curW + wordGap + w;
+        const prevItem = curWords.length > 0 ? curWords[curWords.length - 1].item : null;
+        const prevGap = prevItem
+          ? isCompactCjkGap(prevItem.word, item.word)
+            ? Math.max(2, Math.round(wordGap * 0.22))
+            : wordGap
+          : 0;
+        const nextW = curWords.length === 0 ? w : curW + prevGap + w;
         if (nextW > maxLineW && curWords.length > 0) {
           wrappedLines.push({ words: curWords, totalW: curW });
-          curWords = [{ item, index, w }];
+          curWords = [{ item, index, w, gapAfter: 0 }];
           curW = w;
         } else {
-          curWords.push({ item, index, w });
+          if (curWords.length > 0) curWords[curWords.length - 1].gapAfter = prevGap;
+          curWords.push({ item, index, w, gapAfter: 0 });
           curW = nextW;
         }
       });
@@ -966,8 +1303,68 @@ export function renderReadingAlongFrame(
       const activeLines = pages[activePageIdx] ?? wrappedLines.slice(0, linesPerPage);
       const blockH = activeLines.length * lineHeight;
       const anchorY =
-        subPos === 'Trên' ? height * 0.2 : subPos === 'Dưới' ? height * 0.8 : height * 0.5;
+        subPos === 'Trên' ? height * 0.22 : subPos === 'Dưới' ? height * 0.78 : height * 0.5;
       const startY = anchorY - blockH / 2 + lineHeight / 2;
+
+      // Plain layout backdrops (frosted glass / editorial left accent / kinetic progress)
+      if (bookFrame === 'plain-glass') {
+        ctx.save();
+        const cardW = Math.min(width * 0.9, maxLineW + 64);
+        const cardH = blockH + (opts.topicBadge ? 74 : 44);
+        const cardX = width / 2 - cardW / 2;
+        const cardY = anchorY - cardH / 2 - (opts.topicBadge ? 10 : 0);
+        ctx.fillStyle = 'rgba(15, 23, 42, 0.54)';
+        roundRectPath(ctx, cardX, cardY, cardW, cardH, 26);
+        ctx.fill();
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.22)';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+        if (opts.topicBadge) {
+          ctx.fillStyle = palette.accent;
+          const badgeW = Math.min(cardW * 0.6, 260);
+          roundRectPath(ctx, width / 2 - badgeW / 2, cardY + 14, badgeW, 24, 12);
+          ctx.fill();
+          ctx.fillStyle = '#FFFFFF';
+          ctx.font = `700 12px "Plus Jakarta Sans", sans-serif`;
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillText(opts.topicBadge, width / 2, cardY + 26, badgeW - 16);
+        }
+        ctx.restore();
+      } else if (bookFrame === 'plain-editorial') {
+        ctx.save();
+        const quoteX = width / 2 - maxLineW / 2 - 22;
+        ctx.fillStyle = 'rgba(15, 23, 42, 0.42)';
+        roundRectPath(ctx, quoteX - 16, anchorY - blockH / 2 - 44, maxLineW + 76, blockH + 88, 18);
+        ctx.fill();
+        ctx.fillStyle = palette.highlightBg;
+        roundRectPath(ctx, quoteX, anchorY - blockH / 2 - 18, 6, blockH + 36, 3);
+        ctx.fill();
+        if (opts.title) {
+          ctx.fillStyle = 'rgba(226, 232, 240, 0.86)';
+          ctx.font = `700 ${Math.max(13, Math.round(fontSize * 0.36))}px "Plus Jakarta Sans", sans-serif`;
+          ctx.textAlign = 'left';
+          ctx.textBaseline = 'bottom';
+          ctx.fillText(opts.title.toUpperCase(), quoteX + 18, anchorY - blockH / 2 - 12, maxLineW);
+        }
+        ctx.restore();
+      } else if (bookFrame === 'plain-kinetic') {
+        ctx.save();
+        const progRatio =
+          wordsList.length > 1 ? Math.max(0.03, (globalActiveIdx + 1) / wordsList.length) : 1;
+        const barW = Math.min(width * 0.56, 480);
+        const barY = anchorY + blockH / 2 + 34;
+        ctx.fillStyle = 'rgba(255,255,255,0.18)';
+        roundRectPath(ctx, width / 2 - barW / 2, barY, barW, 6, 3);
+        ctx.fill();
+        ctx.fillStyle = palette.highlightBg;
+        roundRectPath(ctx, width / 2 - barW / 2, barY, barW * progRatio, 6, 3);
+        ctx.fill();
+        ctx.restore();
+      }
+
+      let activePlainTarget: { cx: number; cy: number; w: number } | null = null;
+      let nextPlainTarget: { cx: number; cy: number; w: number } | null = null;
 
       ctx.save();
       ctx.textAlign = 'left';
@@ -978,30 +1375,82 @@ export function renderReadingAlongFrame(
         ln.words.forEach((pw) => {
           const isActive = pw.index === globalActiveIdx;
           const isSpoken = pw.index < globalActiveIdx;
+          if (isActive) {
+            activePlainTarget = { cx, cy, w: pw.w };
+          } else if (pw.index === globalActiveIdx + 1) {
+            nextPlainTarget = { cx, cy, w: pw.w };
+          }
           ctx.save();
           ctx.shadowColor = 'rgba(2, 6, 23, 0.9)';
           ctx.shadowBlur = 14;
           ctx.shadowOffsetY = 3;
           ctx.lineWidth = Math.max(3, Math.round(fontSize * 0.08));
           ctx.strokeStyle = 'rgba(2, 6, 23, 0.72)';
-          ctx.font = `${isActive ? 800 : 700} ${fontSize}px "Outfit", "Plus Jakarta Sans", sans-serif`;
+          ctx.font = `${isActive ? 800 : 700} ${fontSize}px ${fontFamily}`;
           if (isActive) {
-            ctx.translate(cx + pw.w / 2, cy);
-            ctx.scale(1.06, 1.06);
-            ctx.textAlign = 'center';
-            ctx.strokeText(pw.item.word, 0, 0);
-            ctx.fillStyle = '#FACC15';
-            ctx.fillText(pw.item.word, 0, 0);
+            if (bookFrame === 'plain-kinetic' || pointerStyle === 'none' || pointerStyle === 'highlighter') {
+              ctx.save();
+              ctx.shadowBlur = 0;
+              ctx.fillStyle =
+                pointerStyle === 'highlighter' ? 'rgba(250, 204, 21, 0.92)' : palette.highlightBg;
+              roundRectPath(ctx, cx - 10, cy - fontSize * 0.56, pw.w + 20, fontSize * 1.12, 12);
+              ctx.fill();
+              ctx.restore();
+              ctx.fillStyle =
+                pointerStyle === 'highlighter' ? '#0F172A' : palette.highlightText;
+              ctx.fillText(pw.item.word, cx, cy);
+            } else {
+              ctx.translate(cx + pw.w / 2, cy);
+              ctx.scale(1.06, 1.06);
+              ctx.textAlign = 'center';
+              ctx.strokeText(pw.item.word, 0, 0);
+              ctx.fillStyle = '#FACC15';
+              ctx.fillText(pw.item.word, 0, 0);
+            }
           } else {
             ctx.strokeText(pw.item.word, cx, cy);
             ctx.fillStyle = isSpoken ? '#FFFFFF' : 'rgba(241, 245, 249, 0.82)';
             ctx.fillText(pw.item.word, cx, cy);
           }
           ctx.restore();
-          cx += pw.w + wordGap;
+          cx += pw.w + pw.gapAfter;
         });
       });
       ctx.restore();
+
+      if (activePlainTarget && pointerStyle !== 'none') {
+        const tgt = activePlainTarget as { cx: number; cy: number; w: number };
+        let px = tgt.cx + tgt.w / 2;
+        let py = tgt.cy + fontSize * 0.58 + 6;
+        let pwInterp = tgt.w;
+        const activeWordObj = wordsList[globalActiveIdx];
+        if (nextPlainTarget && activeWordObj) {
+          const nxt = nextPlainTarget as { cx: number; cy: number; w: number };
+          const wordDur = Math.max(0.08, activeWordObj.end - activeWordObj.start);
+          const transitionWindow = Math.min(0.14, wordDur * 0.34);
+          const timeRemaining = activeWordObj.end - clampedWordTime;
+          if (timeRemaining >= 0 && timeRemaining < transitionWindow) {
+            const rawT = 1 - timeRemaining / transitionWindow;
+            const ease = rawT * rawT * (3 - 2 * rawT);
+            px = px + (nxt.cx + nxt.w / 2 - px) * ease;
+            py = py + (nxt.cy + fontSize * 0.58 + 6 - py) * ease;
+            pwInterp = tgt.w + (nxt.w - tgt.w) * ease;
+          }
+        }
+        const scale = Math.max(0.65, Math.min(width, height) / 1080);
+        drawReadingPointer(
+          ctx,
+          pointerStyle,
+          px,
+          py,
+          pwInterp,
+          fontSize,
+          palette,
+          scale,
+          opts.currentTime,
+          true,
+        );
+      }
     }
 
     // Watermark + Outro still apply on plain mode
@@ -1101,7 +1550,27 @@ export function renderReadingAlongFrame(
     ctx.restore();
   }
 
-  // Book main surface
+  // Book main surface & frame-specific outer styling
+  if (bookFrame === 'ipad-reader') {
+    // Tablet outer dark bezel
+    ctx.save();
+    ctx.shadowColor = 'rgba(15, 23, 42, 0.34)';
+    ctx.shadowBlur = Math.min(width, height) * 0.05;
+    ctx.shadowOffsetY = Math.min(width, height) * 0.015;
+    ctx.fillStyle = '#0F172A';
+    roundRectPath(ctx, bookX - 10, bookY - 14, bookW + 20, bookH + 28, frameRadius + 10);
+    ctx.fill();
+    ctx.strokeStyle = '#475569';
+    ctx.lineWidth = 2.5;
+    ctx.stroke();
+    // Top camera dot
+    ctx.fillStyle = '#334155';
+    ctx.beginPath();
+    ctx.arc(bookX + bookW / 2, bookY - 5, 3.5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+
   ctx.save();
   ctx.shadowColor = 'rgba(15, 23, 42, 0.18)';
   ctx.shadowBlur = Math.min(width, height) * 0.04;
@@ -1109,18 +1578,53 @@ export function renderReadingAlongFrame(
   ctx.fillStyle = isChalkboard ? '#14332B' : palette.pageBg;
   roundRectPath(ctx, bookX, bookY, bookW, bookH, frameRadius);
   ctx.fill();
-  ctx.lineWidth = isChalkboard ? Math.max(8, Math.min(width, height) * 0.014) : Math.max(2, Math.min(width, height) * 0.004);
-  ctx.strokeStyle = isChalkboard ? '#92400E' : palette.pageBorder;
+  ctx.lineWidth = isChalkboard
+    ? Math.max(8, Math.min(width, height) * 0.014)
+    : bookFrame === 'ipad-reader'
+      ? 1.5
+      : Math.max(2, Math.min(width, height) * 0.004);
+  ctx.strokeStyle = isChalkboard ? '#92400E' : bookFrame === 'ipad-reader' ? '#334155' : palette.pageBorder;
   ctx.stroke();
   ctx.restore();
 
   // Frame-specific chrome accents
-  if (bookFrame === 'textbook-card') {
+  if (bookFrame === 'textbook-card' || bookFrame === 'editorial-mag') {
     ctx.save();
     roundRectPath(ctx, bookX, bookY, bookW, bookH, frameRadius);
     ctx.clip();
     ctx.fillStyle = palette.accent;
-    ctx.fillRect(bookX, bookY, bookW, Math.max(12, Math.round(bookH * 0.022)));
+    ctx.fillRect(
+      bookX,
+      bookY,
+      bookW,
+      Math.max(12, Math.round(bookH * (bookFrame === 'editorial-mag' ? 0.032 : 0.022))),
+    );
+    if (bookFrame === 'editorial-mag') {
+      ctx.fillStyle = palette.headerBg;
+      ctx.fillRect(bookX, bookY + bookH - 18, bookW, 18);
+    }
+    ctx.restore();
+  } else if (bookFrame === 'washi-scroll') {
+    ctx.save();
+    // Double inner border
+    ctx.strokeStyle = palette.accent;
+    ctx.globalAlpha = 0.35;
+    ctx.lineWidth = 2;
+    roundRectPath(ctx, bookX + 12, bookY + 12, bookW - 24, bookH - 24, Math.max(8, frameRadius - 8));
+    ctx.stroke();
+    ctx.globalAlpha = 0.88;
+    // Traditional red hanko seal in bottom-left
+    const sealSize = Math.max(26, Math.round(Math.min(width, height) * 0.038));
+    const sealX = bookX + bookW * 0.06;
+    const sealY = bookY + bookH - sealSize - Math.max(16, bookH * 0.028);
+    ctx.fillStyle = '#DC2626';
+    roundRectPath(ctx, sealX, sealY, sealSize, sealSize, 5);
+    ctx.fill();
+    ctx.fillStyle = '#FFFFFF';
+    ctx.font = `800 ${Math.round(sealSize * 0.52)}px "Plus Jakarta Sans", sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('読', sealX + sealSize / 2, sealY + sealSize / 2);
     ctx.restore();
   } else if (bookFrame === 'open-spread') {
     // Satin bookmark ribbon hanging from top right
@@ -1426,7 +1930,7 @@ export function renderReadingAlongFrame(
       ctx.save();
       const pgLabel = `Trang ${activePageIdx + 1}/${pages.length}`;
       ctx.font = `700 ${Math.max(12, Math.round(refH * 0.014))}px "Plus Jakarta Sans", sans-serif`;
-      ctx.fillStyle = isChalkboard ? 'rgba(255,255,255,0.65)' : palette.spokenText;
+      ctx.fillStyle = isDarkPage ? 'rgba(255,255,255,0.65)' : palette.spokenText;
       ctx.textAlign = 'right';
       ctx.textBaseline = 'bottom';
       ctx.fillText(pgLabel, bookX + bookW - bookW * 0.05, bookY + bookH - Math.max(14, bookH * 0.026));
@@ -1435,7 +1939,7 @@ export function renderReadingAlongFrame(
 
     // Pointer cursor smoothly glided toward next word on the same page
     const activePosIdx = activePageWords.findIndex((p) => p.index === globalActiveIdx);
-    if (activePosIdx >= 0 && activePageWords[activePosIdx]) {
+    if (activePosIdx >= 0 && activePageWords[activePosIdx] && pointerStyle !== 'none') {
       const target = activePageWords[activePosIdx];
       const nextTarget =
         activePosIdx + 1 < activePageWords.length ? activePageWords[activePosIdx + 1] : null;
@@ -1469,7 +1973,7 @@ export function renderReadingAlongFrame(
         palette,
         scale,
         opts.currentTime,
-        isChalkboard,
+        isDarkPage,
       );
     }
   }

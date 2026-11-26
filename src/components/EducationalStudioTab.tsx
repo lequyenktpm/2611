@@ -60,10 +60,19 @@ import {
   TAB_OUTPUT_SUBFOLDERS,
 } from '../engine/outputNaming';
 import {
-  cleanReadingWorksheetInput,
   buildReadingWebAiPrompt,
+  cleanReadingWorksheetInput,
+  computeReadingTargetLength,
   parseReadingWebAiResponse,
+  READING_STARTER_BY_LANG,
+  ReadingLearningLang,
 } from '../engine/readingPromptBuilder';
+import {
+  getLevelsForLearningLanguage,
+  LEARNING_LANGUAGE_OPTIONS,
+  LearningLanguageId,
+} from '../engine/englishReelsEngine';
+import { tokenizeTextForAlignment } from '../engine/forcedAligner';
 import {
   concatAudioFilesWithGaps,
   DEFAULT_BGM_PRESET,
@@ -1169,8 +1178,11 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
   // ── Sub-tab 3: Reading Along Studio (Book + Pointer Hand + Whisper + MP4 Export) ──
   const [showKmOutroPreview, setShowKmOutroPreview] = useState(false);
   const { keys: clientKeys } = useClientApiKeys();
+  const [readingLearningLang, setReadingLearningLang] = useState<LearningLanguageId>(
+    () => initialEduSaved?.readingLearningLang || 'en',
+  );
   const [readingTitle, setReadingTitle] = useState('Why 5 AM Changes Everything!');
-  const [readingTopic, setReadingTopic] = useState('Daily life · A1');
+  const [readingTopic, setReadingTopic] = useState('CEFR B1 · DAILY HABITS');
   const [readingPaletteId, setReadingPaletteId] =
     useState<ReadingBookPalette['id']>(
       () => (initialEduSaved?.readingPaletteId as ReadingBookPalette['id']) || 'Sunny Yellow',
@@ -1319,13 +1331,21 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
       if (typeof s.kmMusicVol === 'number') setKmMusicVol(s.kmMusicVol);
       if (typeof s.kmSfxVol === 'number') setKmSfxVol(s.kmSfxVol);
       if (typeof s.kmVoiceVol === 'number') setKmVoiceVol(s.kmVoiceVol);
+      if (s.readingLearningLang) setReadingLearningLang(s.readingLearningLang);
+      if (s.readingAiLevel) setReadingAiLevel(s.readingAiLevel);
+      if (s.readingAiTopic !== undefined) setReadingAiTopic(s.readingAiTopic);
       if (s.readingPaletteId) setReadingPaletteId(s.readingPaletteId as ReadingBookPalette['id']);
       if (s.readingIllustration) setReadingIllustration(s.readingIllustration as ReadingIllustrationStyle);
       if (s.readingBookFrame) setReadingBookFrame(s.readingBookFrame as ReadingBookFrameId);
       if (s.readingPointerStyle) setReadingPointerStyle(s.readingPointerStyle as ReadingPointerStyleId);
       if (typeof s.readingDurationMinutes === 'number' && s.readingDurationMinutes > 0) {
         setReadingDurationMinutes(s.readingDurationMinutes);
-        setReadingAiLength(Math.max(50, Math.min(1500, Math.round(s.readingDurationMinutes * 125))));
+        setReadingAiLength(
+          computeReadingTargetLength(
+            (s.readingLearningLang || 'en') as ReadingLearningLang,
+            s.readingDurationMinutes,
+          ).count,
+        );
       }
       if (s.readingSubtitlePosition) setReadingSubtitlePosition(s.readingSubtitlePosition);
       if (s.readingSubtitleSize) setReadingSubtitleSize(s.readingSubtitleSize);
@@ -1390,12 +1410,15 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
       setKmMusicVol(DEFAULT_BGM_VOLUME);
       setKmSfxVol(DEFAULT_BGM_VOLUME);
       setKmVoiceVol(1.0);
+      setReadingLearningLang('en');
+      setReadingAiLevel('B1');
+      setReadingAiTopic('');
       setReadingPaletteId('Sunny Yellow');
       setReadingIllustration('2.5D');
       setReadingBookFrame('classic-page');
       setReadingPointerStyle('hand-classic');
       setReadingDurationMinutes(1);
-      setReadingAiLength(110);
+      setReadingAiLength(computeReadingTargetLength('en', 1).count);
       setReadingSubtitlePosition('center');
       setReadingSubtitleSize('lg');
       if (readingVideoBlobUrlRef.current) {
@@ -1454,6 +1477,9 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
         kmMusicVol,
         kmSfxVol,
         kmVoiceVol,
+        readingLearningLang,
+        readingAiLevel,
+        readingAiTopic,
         readingPaletteId,
         readingIllustration,
         readingBookFrame,
@@ -1499,6 +1525,9 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
     kmMusicVol,
     kmSfxVol,
     kmVoiceVol,
+    readingLearningLang,
+    readingAiLevel,
+    readingAiTopic,
     readingPaletteId,
     readingIllustration,
     readingBookFrame,
@@ -1530,18 +1559,31 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
     title: string;
     rawText: string;
   } | null>(null);
-  const [readingWebPromptMode, setReadingWebPromptMode] = useState<'web-url' | 'topic'>('web-url');
+  const [readingWebPromptMode, setReadingWebPromptMode] = useState<'web-url' | 'topic'>('topic');
   const [isWebPromptOpen, setIsWebPromptOpen] = useState<boolean>(false);
   const [copiedReadingPrompt, setCopiedReadingPrompt] = useState<boolean>(false);
   const [pastedReadingAiResponse, setPastedReadingAiResponse] = useState<string>('');
   const [pastedReadingAiError, setPastedReadingAiError] = useState<string | null>(null);
-  const [readingAiTopic, setReadingAiTopic] = useState('Morning habits for better focus');
-  const [readingAiLevel, setReadingAiLevel] = useState<'A1' | 'A2' | 'B1' | 'B2' | 'C1'>('B1');
+  const [readingAiTopic, setReadingAiTopic] = useState(() => initialEduSaved?.readingAiTopic ?? '');
+  const [readingAiLevel, setReadingAiLevel] = useState<string>(
+    () => initialEduSaved?.readingAiLevel || 'B1',
+  );
   const [readingAiLength, setReadingAiLength] = useState<number>(() =>
-    typeof initialEduSaved?.readingDurationMinutes === 'number' &&
-    initialEduSaved.readingDurationMinutes > 0
-      ? Math.max(50, Math.min(1500, Math.round(initialEduSaved.readingDurationMinutes * 125)))
-      : 110,
+    computeReadingTargetLength(
+      (initialEduSaved?.readingLearningLang || 'en') as ReadingLearningLang,
+      typeof initialEduSaved?.readingDurationMinutes === 'number' &&
+        initialEduSaved.readingDurationMinutes > 0
+        ? initialEduSaved.readingDurationMinutes
+        : 1,
+    ).count,
+  );
+  const readingLevelOptions = useMemo(
+    () => getLevelsForLearningLanguage(readingLearningLang),
+    [readingLearningLang],
+  );
+  const targetReadingLengthMeta = useMemo(
+    () => computeReadingTargetLength(readingLearningLang as ReadingLearningLang, readingDurationMinutes),
+    [readingLearningLang, readingDurationMinutes],
   );
   const [isScrapingOrGeneratingReading, setIsScrapingOrGeneratingReading] = useState(false);
   const [readingAiProgress, setReadingAiProgress] = useState(0);
@@ -1597,11 +1639,61 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
     return ttsVoices.find((p) => p.id === readingProvider)?.voices ?? [];
   }, [ttsVoices, readingProvider, effectiveReadingGeminiKey, effectiveReadingElevenLabsKey]);
 
+  const pickReadingDefaultVoice = useCallback(
+    (lang: LearningLanguageId, providers: TtsProviderItem[]) => {
+      const langMeta = LEARNING_LANGUAGE_OPTIONS.find((l) => l.id === lang);
+      const preferred = langMeta?.defaultVoice || 'en-US-JennyNeural';
+      const pool = providers.flatMap((p) => p.voices);
+      const exact = pool.find((v) => v.id === preferred);
+      if (exact) return exact.id;
+      const prefix = pool.find((v) => (v.lang || '').toLowerCase().startsWith(lang));
+      return prefix?.id || preferred;
+    },
+    [],
+  );
+
+  const buildDefaultIntroForLang = useCallback((lang: LearningLanguageId, cleanTitle: string) => {
+    switch (lang) {
+      case 'ja':
+        return `今日のリーディング：${cleanTitle}。音声を聞きながら一緒に読んでみましょう。`;
+      case 'zh':
+        return `今天的跟读练习：${cleanTitle}。请跟着声音一起读。`;
+      case 'ko':
+        return `오늘의 읽기 연습: ${cleanTitle}. 소리를 들으며 따라 읽어 보세요.`;
+      case 'fr':
+        return `Lecture du jour : ${cleanTitle}. Écoutez attentivement et suivez chaque mot.`;
+      case 'es':
+        return `Lectura de hoy: ${cleanTitle}. Escucha con atención y sigue cada palabra.`;
+      default:
+        return `Today's reading lesson: ${cleanTitle}. Listen carefully and read along word by word.`;
+    }
+  }, []);
+
+  const applyReadingStarterPassage = useCallback(
+    (lang: LearningLanguageId, overrideLevel?: string) => {
+      const starter = READING_STARTER_BY_LANG[(lang as ReadingLearningLang) || 'en'] || READING_STARTER_BY_LANG.en;
+      setReadingTitle(starter.title);
+      setReadingTopic(overrideLevel ? `${starter.topicBadge.split('·')[0].replace(/\S+$/, overrideLevel)} · READING` : starter.topicBadge);
+      setReadingText(starter.text);
+      if (!isReadingIntroCustom) {
+        setReadingIntroText(starter.introSubtitle);
+      }
+      setAlignResult(null);
+      setAlignCurrentSec(0);
+      setSynthesizedReadingSig('');
+      setReadingVoice(pickReadingDefaultVoice(lang, ttsVoices));
+      setReadingAiStageLabel(
+        `Đã nạp bài đọc mẫu ${LEARNING_LANGUAGE_OPTIONS.find((l) => l.id === lang)?.nativeName || lang}!`,
+      );
+    },
+    [isReadingIntroCustom, pickReadingDefaultVoice, ttsVoices],
+  );
+
   useEffect(() => {
     if (allReadingVoices.length > 0 && !allReadingVoices.some((v) => v.id === readingVoice)) {
-      setReadingVoice(allReadingVoices[0].id);
+      setReadingVoice(pickReadingDefaultVoice(readingLearningLang, ttsVoices));
     }
-  }, [allReadingVoices, readingVoice]);
+  }, [allReadingVoices, readingVoice, readingLearningLang, ttsVoices, pickReadingDefaultVoice]);
 
   useEffect(() => {
     return () => {
@@ -1611,12 +1703,13 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
 
   useEffect(() => {
     if (!isReadingIntroCustom) {
-      const cleanTitle = readingTitle.trim() || 'English Reading Practice';
-      setReadingIntroText(
-        `Today's reading lesson: ${cleanTitle}. Listen carefully and read along word by word.`,
-      );
+      const cleanTitle =
+        readingTitle.trim() ||
+        READING_STARTER_BY_LANG[(readingLearningLang as ReadingLearningLang) || 'en']?.title ||
+        'Reading Practice';
+      setReadingIntroText(buildDefaultIntroForLang(readingLearningLang, cleanTitle));
     }
-  }, [readingTitle, isReadingIntroCustom]);
+  }, [readingTitle, readingLearningLang, isReadingIntroCustom, buildDefaultIntroForLang]);
 
   const outroSpeechText = useMemo(
     () => [watermarkOutro.outroLine1.trim(), watermarkOutro.outroLine2.trim()].filter(Boolean).join('. '),
@@ -1664,14 +1757,15 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
 
   const effectiveReadingWords = useMemo(() => {
     if (alignResult && alignResult.words.length > 0) return alignResult.words;
+    const tokenCount = Math.max(1, tokenizeTextForAlignment(readingText, readingLearningLang).length);
     const estTotal = alignAudioUrl
       ? Math.max(4, alignAudioDur - activeIntroSec)
-      : Math.max(6, readingText.split(/\s+/).filter(Boolean).length * 0.42);
+      : Math.max(6, tokenCount * 0.42);
     return shiftReadingWordsForIntro(
-      buildEstimatedReadingWords(readingText, estTotal),
+      buildEstimatedReadingWords(readingText, estTotal, readingLearningLang),
       activeIntroSec,
     );
-  }, [alignResult, readingText, alignAudioDur, alignAudioUrl, activeIntroSec]);
+  }, [alignResult, readingText, readingLearningLang, alignAudioDur, alignAudioUrl, activeIntroSec]);
 
   const effectiveReadingContentDuration = useMemo(() => {
     const lastWordEnd =
@@ -1711,6 +1805,7 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
     () =>
       buildReadingWebAiPrompt({
         mode: readingWebPromptMode,
+        learningLanguage: readingLearningLang as ReadingLearningLang,
         url: readingUrl || scrapedWebSource?.url,
         sourceTitle: scrapedWebSource?.title,
         sourceText: scrapedWebSource?.rawText,
@@ -1721,6 +1816,7 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
       }),
     [
       readingWebPromptMode,
+      readingLearningLang,
       readingUrl,
       scrapedWebSource,
       readingAiTopic,
@@ -1786,7 +1882,7 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
         totalDuration: readingTimeline.effectiveTotalDuration,
         introEnabled: readingIntroEnabled && readingIntroText.trim().length > 0,
         introSeconds: activeIntroSec,
-        introTitle: 'HÔM NAY HỌC GÌ? · TODAY GOAL',
+        introTitle: 'HÔM NAY ĐỌC GÌ? · READING GOAL',
         introSubtitle: readingIntroText.trim() || readingTitle,
         paletteId: readingPaletteId,
         illustrationStyle: readingIllustration,
@@ -1928,10 +2024,12 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
 
       const cleanReadingTitle = cleanOutputTitleStem(cleanTitle, 'Reading Along');
       const voiceObj = allReadingVoices.find((v) => v.id === readingVoice);
-      const baseLang = voiceObj?.lang || 'en-US';
+      const langFallback =
+        LEARNING_LANGUAGE_OPTIONS.find((l) => l.id === readingLearningLang)?.voiceLang || 'en-US';
+      const baseLang = voiceObj?.lang || langFallback;
       const activeIntroText = readingIntroEnabled
         ? (!isReadingIntroCustom
-            ? `Today's reading lesson: ${cleanTitle}. Listen carefully and read along word by word.`
+            ? buildDefaultIntroForLang(readingLearningLang, cleanTitle)
             : readingIntroText.trim())
         : '';
 
@@ -2287,7 +2385,7 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
       const readingDescription = buildVideoDescription({
         title: targetTitle,
         nativeLang: 'vi',
-        learningLang: readingVoice.split('-')[0] || 'auto',
+        learningLang: readingLearningLang,
         style: 'phrase-pack',
         durationSec: targetTotalDur,
         topicHint: readingTopic,
@@ -2327,7 +2425,7 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
               totalDuration: targetTotalDur,
               introEnabled: targetIntroEnabled,
               introSeconds: targetIntroSec,
-              introTitle: 'HÔM NAY HỌC GÌ? · TODAY GOAL',
+              introTitle: 'HÔM NAY ĐỌC GÌ? · READING GOAL',
               introSubtitle: targetIntroSub,
               paletteId: readingPaletteId,
               illustrationStyle: readingIllustration,
@@ -2407,6 +2505,7 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
           headers: buildApiKeyHeaders({ 'Content-Type': 'application/json' }),
           body: JSON.stringify({
             mode: 'adapt-url',
+            learningLanguage: readingLearningLang,
             level: readingAiLevel,
             wordCount: readingAiLength,
             durationMinutes: readingDurationMinutes,
@@ -2423,19 +2522,20 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
         if (aiRes.ok && aiData.text?.trim()) {
           setReadingAiProgress(100);
           setReadingTitle(aiData.title || scraped.title || readingTitle);
-          setReadingTopic(aiData.topicBadge || `CEFR ${readingAiLevel} · WEB`);
+          setReadingTopic(aiData.topicBadge || `${readingAiLevel} · WEB`);
           setReadingText(aiData.text.trim());
           setAlignResult(null);
           setAlignCurrentSec(0);
+          setSynthesizedReadingSig('');
           setReadingAiStageLabel(`Đã lấy bài từ web & chuyển thể trình độ ${readingAiLevel}!`);
           return;
         }
       }
 
       const rawLines = extractedText
-        .split(/(?<=[.!?])\s+|\r?\n+/)
+        .split(/(?<=[.!?。！？])\s+|\r?\n+/)
         .map((s) => s.trim())
-        .filter((s) => s.length >= 12)
+        .filter((s) => s.length >= 6)
         .slice(0, 14);
       setReadingAiProgress(100);
       if (scraped.title?.trim()) setReadingTitle(scraped.title.trim().slice(0, 80));
@@ -2443,6 +2543,7 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
       setReadingText((rawLines.length > 0 ? rawLines : [extractedText.slice(0, 900)]).join('\n'));
       setAlignResult(null);
       setAlignCurrentSec(0);
+      setSynthesizedReadingSig('');
       setIsWebPromptOpen(true);
       setReadingAiStageLabel(
         effectiveReadingGeminiKey
@@ -2458,17 +2559,20 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
   };
 
   const handleAiGenerateReadingPassage = async () => {
-    if (isScrapingOrGeneratingReading || !readingAiTopic.trim()) return;
+    if (isScrapingOrGeneratingReading) return;
     setAlignError(null);
     setIsScrapingOrGeneratingReading(true);
     setReadingAiProgress(18);
-    setReadingAiStageLabel(`AI đang viết bài đọc trình độ ${readingAiLevel}...`);
+    const langLabel =
+      LEARNING_LANGUAGE_OPTIONS.find((l) => l.id === readingLearningLang)?.nativeName || readingLearningLang;
+    setReadingAiStageLabel(`AI đang sáng tạo bài đọc ${langLabel} (${readingAiLevel})...`);
     try {
       const res = await fetch('/api/ai/generate-reading', {
         method: 'POST',
         headers: buildApiKeyHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({
           mode: 'generate',
+          learningLanguage: readingLearningLang,
           topic: readingAiTopic.trim(),
           level: readingAiLevel,
           wordCount: readingAiLength,
@@ -2485,12 +2589,13 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
         throw new Error(data.error || 'AI không tạo được bài đọc.');
       }
       setReadingAiProgress(100);
-      setReadingTitle(data.title || readingAiTopic.trim());
-      setReadingTopic(data.topicBadge || `CEFR ${readingAiLevel}`);
+      setReadingTitle(data.title || readingAiTopic.trim() || `${langLabel} Reading`);
+      setReadingTopic(data.topicBadge || `${readingAiLevel} · READING`);
       setReadingText(data.text.trim());
       setAlignResult(null);
       setAlignCurrentSec(0);
-      setReadingAiStageLabel(`AI đã tạo xong bài đọc trình độ ${readingAiLevel}!`);
+      setSynthesizedReadingSig('');
+      setReadingAiStageLabel(`AI đã tạo xong bài đọc ${langLabel} trình độ ${readingAiLevel}!`);
     } catch (err) {
       setAlignError(err instanceof Error ? err.message : 'Lỗi AI tạo bài đọc.');
       setReadingAiStageLabel('');
@@ -2513,7 +2618,7 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
     setPastedReadingAiError(null);
     const parsed = parseReadingWebAiResponse(pastedReadingAiResponse, readingAiLevel);
     if (!parsed) {
-      setPastedReadingAiError('Hãy dán kết quả JSON hoặc văn bản tiếng Anh từ ChatGPT/Gemini vào ô trên.');
+      setPastedReadingAiError('Hãy dán kết quả JSON hoặc đoạn văn bản bài đọc từ ChatGPT/Gemini vào ô trên.');
       return;
     }
     setReadingTitle(parsed.title);
@@ -2521,6 +2626,7 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
     setReadingText(parsed.text);
     setAlignResult(null);
     setAlignCurrentSec(0);
+    setSynthesizedReadingSig('');
     setReadingAiStageLabel(`Đã nạp nội dung từ Web AI (${parsed.title}) vào trang sách!`);
   };
 
@@ -3564,21 +3670,53 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
             {/* ── SUB-TAB 3: READING ALONG STUDIO (Book + Pointer + Export MP4) ── */}
             {subTab === 'align' && (
               <>
-                {/* Webpage URL Scraper + Web AI Prompt + Inline Gemini API */}
+                {/* AI Content Director + Webpage URL Scraper + Web AI Prompt (Multilingual) */}
                 <div className="p-3.5 rounded-xl bg-gradient-to-br from-indigo-50/80 via-white to-sky-50/70 border border-indigo-200/80 space-y-3">
                   <div className="flex flex-wrap items-center justify-between gap-2">
-                    <div className="text-xs font-bold text-indigo-950 inline-flex items-center gap-1.5">
-                      <Globe className="w-4 h-4 text-indigo-600" />
-                      <span>Lấy bài từ Trang Web, Prompt Web AI hoặc Gemini API</span>
+                    <div>
+                      <div className="text-xs font-bold text-indigo-950 inline-flex items-center gap-1.5">
+                        <Sparkles className="w-4 h-4 text-indigo-600" />
+                        <span>AI Tạo Bài Đọc Theo Chữ · Prompt Web AI &amp; Lấy Bài Web</span>
+                      </div>
+                      <p className="text-[11px] text-slate-600 mt-0.5">
+                        Chọn ngôn ngữ đọc, trình độ ({readingLevelOptions[0]?.id} → {readingLevelOptions[readingLevelOptions.length - 1]?.id}) &amp; số phút mong muốn — bỏ trống chủ đề AI sẽ tự chọn ý tưởng cuốn hút nhất.
+                      </p>
                     </div>
-                    <button
-                      type="button"
-                      onClick={() => setIsWebPromptOpen((o) => !o)}
-                      className="inline-flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-semibold text-indigo-700 bg-white border border-indigo-200 rounded-lg hover:bg-indigo-50"
-                    >
-                      <Sparkles className="w-3.5 h-3.5" />
-                      <span>{isWebPromptOpen ? 'Ẩn Prompt Web AI' : 'Tạo Prompt cho Web AI (Không cần API Key)'}</span>
-                    </button>
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => applyReadingStarterPassage(readingLearningLang, readingAiLevel)}
+                        className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-semibold text-indigo-700 bg-indigo-50 border border-indigo-200 rounded-lg hover:bg-indigo-100 whitespace-nowrap shrink-0"
+                      >
+                        <BookOpen className="w-3.5 h-3.5" />
+                        <span>
+                          Nạp mẫu thử {LEARNING_LANGUAGE_OPTIONS.find((l) => l.id === readingLearningLang)?.nativeName || readingLearningLang}
+                        </span>
+                      </button>
+                      {effectiveReadingGeminiKey && (
+                        <button
+                          type="button"
+                          disabled={isScrapingOrGeneratingReading}
+                          onClick={() => void handleAiGenerateReadingPassage()}
+                          className="inline-flex items-center gap-1.5 px-3 py-1 text-[11px] font-semibold text-white bg-emerald-600 rounded-lg hover:bg-emerald-700 disabled:opacity-50 whitespace-nowrap shrink-0"
+                        >
+                          {isScrapingOrGeneratingReading ? (
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                          ) : (
+                            <Sparkles className="w-3.5 h-3.5" />
+                          )}
+                          <span>{isScrapingOrGeneratingReading ? 'AI đang sáng tạo...' : 'AI Tự Sáng Tạo Ngay'}</span>
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => setIsWebPromptOpen((o) => !o)}
+                        className="inline-flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-semibold text-indigo-700 bg-white border border-indigo-200 rounded-lg hover:bg-indigo-50 whitespace-nowrap shrink-0"
+                      >
+                        <Copy className="w-3.5 h-3.5" />
+                        <span>{isWebPromptOpen ? 'Ẩn Prompt Web AI' : 'Tạo Prompt cho Web AI (Không cần API Key)'}</span>
+                      </button>
+                    </div>
                   </div>
 
                   <ApiKeyInlineControl
@@ -3588,16 +3726,178 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
                     compact
                   />
 
+                  {/* Topic Hint (Optional) + Language + Level + Duration + Target Length */}
+                  <div className="grid grid-cols-1 sm:grid-cols-12 gap-2.5 pt-2 border-t border-indigo-100">
+                    <div className="sm:col-span-6">
+                      <div className="flex items-center justify-between gap-2 mb-1">
+                        <label htmlFor="reading-ai-topic" className="text-[11px] font-semibold text-slate-700">
+                          Chủ đề / Gợi ý (tùy chọn — bỏ trống AI tự chọn)
+                        </label>
+                        <PasteButton
+                          size="sm"
+                          onPaste={(txt) => setReadingAiTopic(txt.trim())}
+                          title="Dán nhanh chủ đề bài đọc"
+                        />
+                      </div>
+                      <input
+                        id="reading-ai-topic"
+                        type="text"
+                        value={readingAiTopic}
+                        onChange={(e) => setReadingAiTopic(e.target.value)}
+                        placeholder={
+                          READING_STARTER_BY_LANG[(readingLearningLang as ReadingLearningLang) || 'en']
+                            ?.aiTopicPlaceholder || 'Bỏ trống để AI tự nghĩ chủ đề...'
+                        }
+                        className="w-full px-2.5 py-1.5 text-xs bg-white border border-slate-200 rounded-lg"
+                      />
+                    </div>
+                    <div className="sm:col-span-3">
+                      <label htmlFor="reading-learning-lang" className="block text-[11px] font-semibold text-slate-700 mb-1">
+                        Ngôn ngữ đọc
+                      </label>
+                      <select
+                        id="reading-learning-lang"
+                        value={readingLearningLang}
+                        onChange={(e) => {
+                          const nextLang = e.target.value as LearningLanguageId;
+                          setReadingLearningLang(nextLang);
+                          const nextLevels = getLevelsForLearningLanguage(nextLang);
+                          const langMeta = LEARNING_LANGUAGE_OPTIONS.find((l) => l.id === nextLang);
+                          const nextLvl = langMeta?.defaultLevel || nextLevels[0]?.id || 'B1';
+                          setReadingAiLevel(nextLvl);
+                          setReadingAiLength(
+                            computeReadingTargetLength(
+                              nextLang as ReadingLearningLang,
+                              readingDurationMinutes,
+                            ).count,
+                          );
+                          setReadingVoice(pickReadingDefaultVoice(nextLang, ttsVoices));
+                          if (alignLang !== 'auto') {
+                            setAlignLang(nextLang);
+                          }
+                          const isBuiltInStarter = Object.values(READING_STARTER_BY_LANG).some(
+                            (st) => st.text.trim() === readingText.trim(),
+                          );
+                          if (isBuiltInStarter) {
+                            applyReadingStarterPassage(nextLang, nextLvl);
+                          }
+                        }}
+                        className="w-full px-2.5 py-1.5 text-xs bg-white border border-slate-200 rounded-lg font-medium"
+                      >
+                        {LEARNING_LANGUAGE_OPTIONS.map((lang) => (
+                          <option key={lang.id} value={lang.id}>
+                            {lang.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="sm:col-span-3">
+                      <label htmlFor="reading-ai-level" className="block text-[11px] font-semibold text-slate-700 mb-1">
+                        Trình độ (Dễ → Khó)
+                      </label>
+                      <select
+                        id="reading-ai-level"
+                        value={readingAiLevel}
+                        onChange={(e) => setReadingAiLevel(e.target.value)}
+                        className="w-full px-2.5 py-1.5 text-xs bg-white border border-slate-200 rounded-lg font-semibold"
+                      >
+                        {readingLevelOptions.map((lvl) => (
+                          <option key={lvl.id} value={lvl.id}>
+                            {lvl.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-12 gap-2.5">
+                    <div className="sm:col-span-6">
+                      <label htmlFor="reading-duration-min" className="block text-[11px] font-semibold text-slate-700 mb-1">
+                        Thời lượng đọc (phút · 0.5 – 30 phút)
+                      </label>
+                      <div className="flex items-center gap-1.5">
+                        <input
+                          id="reading-duration-min"
+                          type="number"
+                          min={0.5}
+                          max={30}
+                          step={0.5}
+                          value={readingDurationMinutes}
+                          onChange={(e) => {
+                            const raw = Number(e.target.value);
+                            const nextMin = Number.isFinite(raw) ? Math.max(0.5, Math.min(30, raw)) : 1;
+                            setReadingDurationMinutes(nextMin);
+                            setReadingAiLength(
+                              computeReadingTargetLength(
+                                readingLearningLang as ReadingLearningLang,
+                                nextMin,
+                              ).count,
+                            );
+                          }}
+                          className="w-20 px-2.5 py-1.5 text-xs bg-white border border-slate-200 rounded-lg tabular-nums"
+                        />
+                        <select
+                          aria-label="Chọn nhanh thời lượng đọc"
+                          value={[0.5, 1, 2, 3, 5, 10].includes(readingDurationMinutes) ? String(readingDurationMinutes) : 'custom'}
+                          onChange={(e) => {
+                            if (e.target.value === 'custom') return;
+                            const mins = Number(e.target.value);
+                            setReadingDurationMinutes(mins);
+                            setReadingAiLength(
+                              computeReadingTargetLength(
+                                readingLearningLang as ReadingLearningLang,
+                                mins,
+                              ).count,
+                            );
+                          }}
+                          className="flex-1 min-w-0 px-2.5 py-1.5 text-xs bg-white border border-slate-200 rounded-lg font-medium"
+                        >
+                          <option value="0.5">~30 giây (0.5 phút)</option>
+                          <option value="1">~1 phút</option>
+                          <option value="2">~2 phút</option>
+                          <option value="3">~3 phút</option>
+                          <option value="5">~5 phút</option>
+                          <option value="10">~10 phút</option>
+                          {![0.5, 1, 2, 3, 5, 10].includes(readingDurationMinutes) && (
+                            <option value="custom">{readingDurationMinutes} phút</option>
+                          )}
+                        </select>
+                      </div>
+                    </div>
+                    <div className="sm:col-span-6">
+                      <label htmlFor="reading-ai-length" className="block text-[11px] font-semibold text-slate-700 mb-1">
+                        Độ dài bài đọc mục tiêu ({targetReadingLengthMeta.unitShort} · gợi ý ~{targetReadingLengthMeta.count} {targetReadingLengthMeta.unitShort})
+                      </label>
+                      <div className="flex items-center gap-1.5">
+                        <input
+                          id="reading-ai-length"
+                          type="number"
+                          min={40}
+                          max={5600}
+                          step={10}
+                          value={readingAiLength}
+                          onChange={(e) =>
+                            setReadingAiLength(Math.max(40, Math.min(5600, Math.round(Number(e.target.value) || 120))))
+                          }
+                          className="w-28 px-2.5 py-1.5 text-xs bg-white border border-slate-200 rounded-lg tabular-nums"
+                        />
+                        <span className="text-[11px] text-slate-500">
+                          {targetReadingLengthMeta.unitLabel}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+
                   {/* URL Input */}
-                  <div className="flex flex-col sm:flex-row gap-2">
+                  <div className="flex flex-col sm:flex-row gap-2 pt-1 border-t border-indigo-100/80">
                     <div className="relative flex-1">
                       <Link2 className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
                       <input
                         type="url"
-                        aria-label="Đường link bài báo hoặc truyện tiếng Anh"
+                        aria-label="Đường link bài báo hoặc truyện cần chuyển thể"
                         value={readingUrl}
                         onChange={(e) => setReadingUrl(e.target.value)}
-                        placeholder="Dán link bài báo/truyện tiếng Anh (vd: https://...) để lấy vào bài đọc"
+                        placeholder="Hoặc dán link bài báo/truyện (https://...) để lấy nội dung Web về sách"
                         className="w-full pl-8 pr-3 py-1.5 text-xs bg-white border border-slate-200 rounded-lg"
                       />
                     </div>
@@ -3638,83 +3938,23 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
                     </div>
                   )}
 
-                  {/* AI Generate Topic + Level + Duration + Length */}
-                  <div className="grid grid-cols-1 sm:grid-cols-12 gap-2 pt-2 border-t border-indigo-100">
-                    <input
-                      type="text"
-                      aria-label="Chủ đề bài đọc"
-                      value={readingAiTopic}
-                      onChange={(e) => setReadingAiTopic(e.target.value)}
-                      placeholder="Chủ đề bài đọc (vd: A rainy day in London, Space travel...)"
-                      className="sm:col-span-4 px-2.5 py-1.5 text-xs bg-white border border-slate-200 rounded-lg"
-                    />
-                    <select
-                      aria-label="Trình độ CEFR"
-                      value={readingAiLevel}
-                      onChange={(e) =>
-                        setReadingAiLevel(e.target.value as 'A1' | 'A2' | 'B1' | 'B2' | 'C1')
-                      }
-                      className="sm:col-span-2 px-2 py-1.5 text-xs bg-white border border-slate-200 rounded-lg font-semibold"
-                    >
-                      <option value="A1">A1 · Cơ bản</option>
-                      <option value="A2">A2 · Sơ cấp</option>
-                      <option value="B1">B1 · Trung cấp</option>
-                      <option value="B2">B2 · Khá</option>
-                      <option value="C1">C1 · Nâng cao</option>
-                    </select>
-                    <select
-                      aria-label="Thời lượng render (phút)"
-                      value={readingDurationMinutes}
-                      onChange={(e) => {
-                        const mins = Number(e.target.value);
-                        setReadingDurationMinutes(mins);
-                        setReadingAiLength(Math.max(50, Math.min(1500, Math.round(mins * 125))));
-                      }}
-                      className="sm:col-span-2 px-2 py-1.5 text-xs bg-white border border-slate-200 rounded-lg font-semibold"
-                    >
-                      <option value={0.5}>~30 giây</option>
-                      <option value={1}>~1 phút</option>
-                      <option value={2}>~2 phút</option>
-                      <option value={3}>~3 phút</option>
-                      <option value={5}>~5 phút</option>
-                      <option value={10}>~10 phút</option>
-                    </select>
-                    <select
-                      aria-label="Độ dài bài đọc"
-                      value={readingAiLength}
-                      onChange={(e) => setReadingAiLength(Number(e.target.value))}
-                      className="sm:col-span-2 px-2 py-1.5 text-xs bg-white border border-slate-200 rounded-lg"
-                    >
-                      <option value={65}>Ngắn (~65 từ)</option>
-                      <option value={110}>Vừa (~110 từ)</option>
-                      <option value={125}>1 phút (~125 từ)</option>
-                      <option value={175}>Dài (~175 từ)</option>
-                      <option value={250}>2 phút (~250 từ)</option>
-                      <option value={375}>3 phút (~375 từ)</option>
-                      <option value={625}>5 phút (~625 từ)</option>
-                      <option value={1250}>10 phút (~1250 từ)</option>
-                    </select>
-                    <button
-                      type="button"
-                      disabled={isScrapingOrGeneratingReading || !readingAiTopic.trim()}
-                      onClick={() => void handleAiGenerateReadingPassage()}
-                      className="sm:col-span-2 inline-flex items-center justify-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-violet-600 rounded-lg hover:bg-violet-700 disabled:opacity-50"
-                    >
-                      {isScrapingOrGeneratingReading ? (
-                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                      ) : (
-                        <Sparkles className="w-3.5 h-3.5" />
-                      )}
-                      <span>AI Tạo bài</span>
-                    </button>
-                  </div>
-
                   {/* External Web AI Prompt Builder & Paste Response Box */}
                   {isWebPromptOpen && (
                     <div className="p-3 rounded-xl bg-white border border-indigo-200 space-y-2.5 text-xs">
                       <div className="flex flex-wrap items-center justify-between gap-2">
-                        <div className="flex items-center gap-1.5">
+                        <div className="flex flex-wrap items-center gap-1.5">
                           <span className="font-bold text-indigo-950">Prompt cho ChatGPT / Gemini / Claude Web:</span>
+                          <button
+                            type="button"
+                            onClick={() => setReadingWebPromptMode('topic')}
+                            className={`px-2 py-0.5 text-[10px] font-semibold rounded border ${
+                              readingWebPromptMode === 'topic'
+                                ? 'bg-indigo-600 border-indigo-600 text-white'
+                                : 'bg-slate-50 border-slate-200 text-slate-600'
+                            }`}
+                          >
+                            Theo Chủ đề (Tự nghĩ / Theo gợi ý)
+                          </button>
                           <button
                             type="button"
                             onClick={() => setReadingWebPromptMode('web-url')}
@@ -3725,17 +3965,6 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
                             }`}
                           >
                             Theo URL Web
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setReadingWebPromptMode('topic')}
-                            className={`px-2 py-0.5 text-[10px] font-semibold rounded border ${
-                              readingWebPromptMode === 'topic'
-                                ? 'bg-indigo-600 border-indigo-600 text-white'
-                                : 'bg-slate-50 border-slate-200 text-slate-600'
-                            }`}
-                          >
-                            Theo Chủ đề
                           </button>
                         </div>
                         <button
@@ -3751,7 +3980,7 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
                       <textarea
                         readOnly
                         aria-label="Prompt tạo bài đọc cho Web AI"
-                        rows={4}
+                        rows={5}
                         value={readingWebAiPrompt}
                         className="w-full p-2 text-[11px] font-mono bg-slate-50 border border-slate-200 rounded-lg text-slate-700"
                       />
@@ -3777,7 +4006,7 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
                             setPastedReadingAiResponse(e.target.value);
                             setPastedReadingAiError(null);
                           }}
-                          placeholder='Dán {"title": "...", "topicBadge": "...", "text": "..."} hoặc đoạn văn tiếng Anh...'
+                          placeholder='Dán {"title": "...", "topicBadge": "...", "text": "..."} hoặc đoạn văn bản bài đọc...'
                           className="w-full p-2 text-[11px] font-mono bg-slate-50 border border-slate-200 rounded-lg"
                         />
                         {pastedReadingAiError && (
@@ -3821,7 +4050,7 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
                     <div className="grid grid-cols-2 gap-2.5">
                       <div>
                         <label htmlFor="reading-palette-select" className="block text-[11px] font-semibold text-slate-700 mb-1">
-                          Màu sách (Book Palette)
+                          Màu sách (Book Palette · {READING_BOOK_PALETTES.length} mẫu)
                         </label>
                         <select
                           id="reading-palette-select"
@@ -3860,7 +4089,7 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
                     <div className="grid grid-cols-2 gap-2.5">
                       <div>
                         <label htmlFor="reading-book-frame-select" className="block text-[11px] font-semibold text-slate-700 mb-1">
-                          Khung sách &amp; Bố cục Plain
+                          Khung sách &amp; Bố cục Plain ({READING_BOOK_FRAMES.length} mẫu)
                         </label>
                         <select
                           id="reading-book-frame-select"
@@ -3868,7 +4097,7 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
                           onChange={(e) => {
                             const nextFrame = e.target.value as ReadingBookFrameId;
                             setReadingBookFrame(nextFrame);
-                            if (nextFrame === 'plain') {
+                            if (nextFrame.startsWith('plain')) {
                               setReadingSubtitlePosition('center');
                               setReadingSubtitleSize('lg');
                             }
@@ -3884,7 +4113,7 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
                       </div>
                       <div>
                         <label htmlFor="reading-pointer-style-select" className="block text-[11px] font-semibold text-slate-700 mb-1">
-                          Kiểu con trỏ chỉ chữ (7 mẫu)
+                          Kiểu con trỏ chỉ chữ &amp; Bôi sáng ({READING_POINTER_STYLES.length} mẫu)
                         </label>
                         <select
                           id="reading-pointer-style-select"
@@ -4514,9 +4743,17 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
                           <option value="auto">Tự động ngôn ngữ</option>
                           <option value="en">English</option>
                           <option value="vi">Tiếng Việt</option>
-                          <option value="ja">日本語</option>
+                          <option value="zh">中文 (Tiếng Trung)</option>
+                          <option value="ko">한국어 (Tiếng Hàn)</option>
+                          <option value="ja">日本語 (Tiếng Nhật)</option>
+                          <option value="fr">Français (Tiếng Pháp)</option>
+                          <option value="es">Español (Tiếng TBN)</option>
                         </select>
                       </div>
+
+                      <p className="text-[10px] text-slate-500 leading-snug">
+                        Hỗ trợ đồng bộ đa ngôn ngữ (Anh, Trung, Hàn, Nhật, Việt, Pháp, Tây Ban Nha): dán sẵn nội dung vào ô bài đọc + chọn <strong>Fast Forced Align</strong> để căn nhịp chính xác nhất; nếu nạp audio chưa có chữ thì chuyển sang <strong>Whisper ONNX</strong>.
+                      </p>
 
                       {alignFile && (
                         <button

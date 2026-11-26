@@ -2237,7 +2237,7 @@ async function startServer(): Promise<void> {
         onProgress?.(45, 'Đang dò âm tiết & căn nhịp siêu tốc theo kịch bản...');
         const wavBuf = await fs.promises.readFile(wavPath);
         const { samples, sampleRate } = parseWavBufferToMonoFloat32(wavBuf);
-        const forced = alignKnownTextToPcmFloat(refText, samples, sampleRate);
+        const forced = alignKnownTextToPcmFloat(refText, samples, sampleRate, { lang: sourceLang });
         const cues = forced.segments.map((seg, idx) => ({
           id: `align-cue-${idx + 1}`,
           start: seg.start,
@@ -2837,43 +2837,64 @@ async function startServer(): Promise<void> {
       }
 
       const mode = req.body?.mode === 'adapt-url' ? 'adapt-url' : 'generate';
-      const levelRaw = typeof req.body?.level === 'string' ? req.body.level.trim().toUpperCase() : 'B1';
-      const level = ['A1', 'A2', 'B1', 'B2', 'C1'].includes(levelRaw) ? levelRaw : 'B1';
+      const rawLang =
+        typeof req.body?.learningLanguage === 'string'
+          ? req.body.learningLanguage.trim().toLowerCase()
+          : 'en';
+      const langMap: Record<string, { code: string; name: string; unit: 'words' | 'chars'; ratePerMin: number; badgePrefix: string }> = {
+        en: { code: 'en', name: 'English', unit: 'words', ratePerMin: 125, badgePrefix: 'CEFR' },
+        ja: { code: 'ja', name: 'Japanese (日本語)', unit: 'chars', ratePerMin: 185, badgePrefix: 'JLPT' },
+        zh: { code: 'zh', name: 'Mandarin Chinese (中文)', unit: 'chars', ratePerMin: 180, badgePrefix: 'HSK' },
+        ko: { code: 'ko', name: 'Korean (한국어)', unit: 'words', ratePerMin: 95, badgePrefix: 'TOPIK' },
+        fr: { code: 'fr', name: 'French (Français)', unit: 'words', ratePerMin: 120, badgePrefix: 'CEFR' },
+        es: { code: 'es', name: 'Spanish (Español)', unit: 'words', ratePerMin: 125, badgePrefix: 'CEFR' },
+      };
+      const langMeta = langMap[rawLang] || langMap.en;
+      const levelRaw = typeof req.body?.level === 'string' ? req.body.level.trim() : '';
+      const level = levelRaw || (langMeta.code === 'ja' ? 'N5' : langMeta.code === 'zh' ? 'HSK 1' : langMeta.code === 'ko' ? 'TOPIK 1' : 'B1');
       const topic = typeof req.body?.topic === 'string' ? req.body.topic.trim() : '';
       const sourceText = typeof req.body?.sourceText === 'string' ? req.body.sourceText.trim() : '';
       const sourceTitle = typeof req.body?.sourceTitle === 'string' ? req.body.sourceTitle.trim() : '';
       const durationRaw = Number(req.body?.durationMinutes);
       const hasDuration = Number.isFinite(durationRaw) && durationRaw > 0;
       const wordCountRaw = Number(
-        req.body?.wordCount ?? (hasDuration ? Math.round(durationRaw * 125) : 110),
+        req.body?.wordCount ?? (hasDuration ? Math.round(durationRaw * langMeta.ratePerMin) : langMeta.ratePerMin),
       );
+      const maxLen = langMeta.unit === 'chars' ? 6000 : 3800;
       const wordCount = Number.isFinite(wordCountRaw)
-        ? Math.max(40, Math.min(1500, Math.round(wordCountRaw)))
-        : 110;
+        ? Math.max(40, Math.min(maxLen, Math.round(wordCountRaw)))
+        : langMeta.ratePerMin;
 
       if (mode === 'adapt-url' && !sourceText) {
         res.status(400).json({ error: 'Thiếu nội dung trang web nguồn để chuyển thể.' });
         return;
       }
-      if (mode === 'generate' && !topic) {
-        res.status(400).json({ error: 'Vui lòng nhập chủ đề bài đọc tiếng Anh.' });
-        return;
-      }
 
-      const levelGuidance: Record<string, string> = {
-        A1: 'CEFR A1 Beginner: very short everyday sentences (6-10 words per sentence), high-frequency basic vocabulary, simple present/past.',
-        A2: 'CEFR A2 Elementary: clear simple sentences (8-13 words per sentence), practical daily vocabulary, easy connectors.',
-        B1: 'CEFR B1 Intermediate: natural connected English (10-16 words per sentence), everyday academic/lifestyle vocabulary.',
-        B2: 'CEFR B2 Upper-Intermediate: fluent varied structures, clear idiomatic expressions, engaging storytelling.',
-        C1: 'CEFR C1 Advanced: sophisticated natural prose, rich lexical precision, smooth rhetorical cadence.',
-      };
+      const lengthDesc =
+        langMeta.unit === 'chars'
+          ? `around ${wordCount} ${langMeta.name} characters`
+          : `around ${wordCount} ${langMeta.name} words`;
+
+      const furiganaWarning =
+        langMeta.code === 'ja'
+          ? 'Do NOT add romaji or inline furigana parentheses inside the Japanese sentences — keep natural Japanese Kanji + Kana only.'
+          : langMeta.code === 'zh'
+            ? 'Write natural Simplified Chinese (简体中文) ONLY — do NOT add inline Pinyin inside the reading text.'
+            : langMeta.code === 'ko'
+              ? 'Write natural Korean (한국어) ONLY — do NOT add romanization inside the reading text.'
+              : `Write natural ${langMeta.name} ONLY.`;
+
+      const topicInstruction = topic
+        ? `about: "${topic}"`
+        : `on an engaging, high-retention daily life, mindset, or storytelling topic chosen autonomously by you that fits level ${level}`;
 
       const prompt =
         mode === 'adapt-url'
-          ? `You are an expert ESL curriculum designer for Read-Along karaoke videos.
-Convert and adapt the scraped webpage content below into a clean, engaging English read-along passage tailored to ${levelGuidance[level]}
-CRITICAL: Strip out any worksheet scaffolding or exercise labels (such as "Practice Reading English Exercises", "English Reading Exercises for Beginner", "## Exercise 1", "Part 1", "Task 1", navigation menus, or instructions). Keep ONLY the clean story title and body sentences.
-Target total length: around ${wordCount} words.
+          ? `You are an expert ${langMeta.name} curriculum designer for Read-Along karaoke videos.
+Convert and adapt the scraped webpage content below into a clean, engaging ${langMeta.name} read-along passage tailored to proficiency level "${level}".
+${furiganaWarning}
+CRITICAL: Strip out any worksheet scaffolding or exercise labels (such as "Practice Reading English Exercises", "## Exercise 1", "Part 1", "Task 1", navigation menus, or instructions). Keep ONLY the clean story title and body sentences.
+Target total length: ${lengthDesc}${hasDuration ? ` (for a ~${durationRaw} minute video)` : ''}.
 Source title: ${sourceTitle || 'Web Article'}
 Source content:
 """
@@ -2881,22 +2902,23 @@ ${sourceText.slice(0, 9000)}
 """
 Return ONLY valid JSON with keys:
 {
-  "title": "Concise engaging English title",
-  "topicBadge": "SHORT UPPERCASE BADGE (2-3 words, e.g. CEFR ${level} · SCIENCE)",
+  "title": "Short catchy ${langMeta.name} title (5–10 words/phrases, curiosity-driven)",
+  "topicBadge": "SHORT UPPERCASE BADGE (e.g. ${level} · READING)",
   "level": "${level}",
-  "text": "Clean English sentences separated by \\n (1 sentence per line, no bullet symbols, no markdown, no HTML, no timestamps)."
+  "text": "Clean ${langMeta.name} sentences separated by \\n (1 sentence per line, no bullet symbols, no markdown, no HTML, no timestamps)."
 }`
-          : `You are an expert ESL curriculum designer for Read-Along karaoke videos.
-Write an original, engaging English read-along passage about: "${topic}"
+          : `You are an expert ${langMeta.name} curriculum designer for Read-Along karaoke videos.
+Write an original, engaging ${langMeta.name} read-along passage ${topicInstruction}.
+${furiganaWarning}
 CRITICAL: Do NOT include worksheet labels like "Practice Reading Exercises", "Exercise 1", "Part 1", or markdown headings inside the title or body text.
-Target proficiency: ${levelGuidance[level]}
-Target total length: around ${wordCount} words.
+Target proficiency level: ${level}.
+Target total length: ${lengthDesc}${hasDuration ? ` (for a ~${durationRaw} minute video)` : ''}.
 Return ONLY valid JSON with keys:
 {
-  "title": "Concise engaging English title",
-  "topicBadge": "SHORT UPPERCASE BADGE (2-3 words, e.g. CEFR ${level} · READING)",
+  "title": "Short catchy ${langMeta.name} title (curiosity-driven, e.g. '【...】...' or engaging hook)",
+  "topicBadge": "SHORT UPPERCASE BADGE (e.g. ${level} · READING)",
   "level": "${level}",
-  "text": "Clean English sentences separated by \\n (1 sentence per line, no bullet symbols, no markdown, no timestamps)."
+  "text": "Clean ${langMeta.name} sentences separated by \\n (1 sentence per line, no bullet symbols, no markdown, no timestamps)."
 }`;
 
       const { GoogleGenAI } = await import('@google/genai');
@@ -2940,8 +2962,9 @@ Return ONLY valid JSON with keys:
       res.json({
         ok: true,
         title: isScaffolding(cleanTitle) ? 'Reading Along' : cleanTitle,
-        topicBadge: (parsed.topicBadge || `CEFR ${level} · READING`).trim(),
+        topicBadge: (parsed.topicBadge || `${level} · READING`).trim(),
         level,
+        learningLanguage: langMeta.code,
         text: cleanLines.join('\n'),
       });
     } catch (err) {

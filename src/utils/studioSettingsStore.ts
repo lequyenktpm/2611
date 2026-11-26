@@ -192,6 +192,9 @@ export interface PersistedStudioSettings {
     readingIllustration?: string;
     readingBookFrame?: string;
     readingPointerStyle?: string;
+    readingLearningLang?: LearningLanguageId;
+    readingAiLevel?: string;
+    readingAiTopic?: string;
     readingDurationMinutes?: number;
     readingSubtitlePosition?: SubtitlePosition;
     readingSubtitleSize?: SubtitleSize;

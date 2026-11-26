@@ -141,21 +141,117 @@ export function detectSpeechIslands(
   return islands;
 }
 
+const RE_HAS_CJK_OR_KANA = /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff]/;
+const RE_HAS_KANA = /[\u3040-\u30ff]/;
+const RE_TRAILING_PUNCT = /^[,.!?;:、。！？「」『』（）()《》【】"']+$/;
+
+function resolveSegmenterLocale(text: string, lang?: string): string {
+  const norm = String(lang || '').trim().toLowerCase();
+  if (norm.startsWith('ja')) return 'ja';
+  if (norm.startsWith('zh')) return 'zh';
+  if (RE_HAS_KANA.test(text)) return 'ja';
+  return 'zh';
+}
+
+/**
+ * Splits text into word-level tokens with proper handling for CJK (Chinese/Japanese)
+ * where words are not separated by whitespace, while keeping space-delimited languages
+ * (English, Vietnamese, Korean, French, Spanish) intact.
+ */
+export function tokenizeTextForAlignment(text: string, lang?: string): string[] {
+  const rawTokens = text
+    .replace(/\r?\n+/g, ' ')
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+  if (rawTokens.length === 0) return [];
+
+  const result: string[] = [];
+  const SegmenterCtor =
+    typeof Intl !== 'undefined' &&
+    typeof (Intl as unknown as { Segmenter?: unknown }).Segmenter === 'function'
+      ? (Intl as unknown as {
+          Segmenter: new (
+            locales?: string | string[],
+            options?: { granularity?: 'grapheme' | 'word' | 'sentence' },
+          ) => { segment: (input: string) => Iterable<{ segment: string; isWordLike?: boolean }> };
+        }).Segmenter
+      : null;
+
+  for (const tok of rawTokens) {
+    if (!RE_HAS_CJK_OR_KANA.test(tok) || tok.length <= 2) {
+      result.push(tok);
+      continue;
+    }
+
+    if (SegmenterCtor) {
+      const locale = resolveSegmenterLocale(tok, lang);
+      try {
+        const segmenter = new SegmenterCtor(locale, { granularity: 'word' });
+        const segs = Array.from(segmenter.segment(tok));
+        for (const s of segs) {
+          const piece = s.segment.trim();
+          if (!piece) continue;
+          if (RE_TRAILING_PUNCT.test(piece) && result.length > 0) {
+            result[result.length - 1] += piece;
+          } else if (RE_HAS_CJK_OR_KANA.test(piece) && piece.length > 4) {
+            for (let i = 0; i < piece.length; i += 2) {
+              result.push(piece.slice(i, i + 2));
+            }
+          } else {
+            result.push(piece);
+          }
+        }
+        continue;
+      } catch {
+        // Fallback below if locale segmenter fails
+      }
+    }
+
+    // Regex fallback: split by CJK punctuation first, then 2-character CJK chunks
+    const clauses = tok.split(/(?<=[。、！？；：「」,.!?;:])/).filter(Boolean);
+    for (const clause of clauses) {
+      if (clause.length <= 3) {
+        result.push(clause);
+      } else {
+        for (let i = 0; i < clause.length; i += 2) {
+          const slice = clause.slice(i, i + 2);
+          if (RE_TRAILING_PUNCT.test(slice) && result.length > 0) {
+            result[result.length - 1] += slice;
+          } else {
+            result.push(slice);
+          }
+        }
+      }
+    }
+  }
+
+  return result;
+}
+
 function wordSpeechWeight(word: string): number {
   const letters = word.replace(/[^\p{L}\p{N}]/gu, '');
-  const base = Math.max(1.8, Math.pow(Math.max(1, letters.length), 0.78));
-  const pauseBonus = /[.!?。！？]$/.test(word) ? 1.8 : /[,;:]$/.test(word) ? 0.9 : 0;
+  const cjkMatches = letters.match(/[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af]/g);
+  const cjkCount = cjkMatches ? cjkMatches.length : 0;
+  const nonCjkCount = Math.max(0, letters.length - cjkCount);
+  const base =
+    cjkCount > 0
+      ? Math.max(1.8, cjkCount * 1.45 + (nonCjkCount > 0 ? Math.pow(nonCjkCount, 0.78) : 0))
+      : Math.max(1.8, Math.pow(Math.max(1, letters.length), 0.78));
+  const pauseBonus = /[.!?。！？]$/.test(word) ? 1.8 : /[,;:、，；：]$/.test(word) ? 0.9 : 0;
   return base + pauseBonus;
 }
 
 /**
  * Aligns known text lines/words onto detected speech islands from PCM Float32 audio.
  * Runs in <100ms offline with zero external model downloads or HTTP 429 risk.
+ * Supports English, Vietnamese, Korean, Chinese, Japanese, French, and Spanish.
  */
 export function alignKnownTextToPcmFloat(
   referenceText: string,
   samples: Float32Array,
   sampleRate = 16000,
+  options?: { lang?: string },
 ): {
   words: WordTiming[];
   segments: Array<{ start: number; end: number; text: string }>;
@@ -168,10 +264,7 @@ export function alignKnownTextToPcmFloat(
     .map((l) => l.trim())
     .filter(Boolean);
   const tokens = lines.flatMap((line, lineIdx) =>
-    line
-      .split(/\s+/)
-      .filter(Boolean)
-      .map((word) => ({ word, lineIdx })),
+    tokenizeTextForAlignment(line, options?.lang).map((word) => ({ word, lineIdx })),
   );
 
   if (tokens.length === 0) {
