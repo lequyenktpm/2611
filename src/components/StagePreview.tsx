@@ -1,5 +1,33 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Download, FolderOpen, Image as ImageIcon, Pause, Play, RotateCcw, Shuffle, Stamp, Square, Trash2 } from 'lucide-react';
+import {
+  Check,
+  Copy,
+  Download,
+  FileText,
+  FolderOpen,
+  Image as ImageIcon,
+  Pause,
+  Play,
+  RotateCcw,
+  Shuffle,
+  Stamp,
+  Square,
+  Trash2,
+  Upload,
+  Volume2,
+  X,
+} from 'lucide-react';
+import {
+  DEFAULT_BGM_PRESET,
+  DEFAULT_BGM_VOLUME,
+  STUDIO_BGM_PRESETS,
+  StudioBgmPresetId,
+} from '../engine/audioMixHelper';
+import { cleanOutputTitleStem } from '../engine/outputNaming';
+import {
+  VideoDescriptionOutput,
+  VideoDescriptionStyle,
+} from '../engine/videoDescriptionBuilder';
 import { BACKGROUND_PRESETS } from '../engine/backgroundPresets';
 import {
   ensureProjectAssetsLoaded,
@@ -85,6 +113,15 @@ interface StagePreviewProps {
   onMoveElement: (id: string, x: number, y: number) => void;
   onApplySubtitlePositionToAll?: (x: number, y: number) => void;
   onResetElementPosition?: (id: string) => void;
+  bgmPreset?: StudioBgmPresetId;
+  bgmVolume?: number;
+  customBgmFile?: File | null;
+  onChangeBgmPreset?: (preset: StudioBgmPresetId) => void;
+  onChangeBgmVolume?: (volume: number) => void;
+  onChangeCustomBgmFile?: (file: File | null) => void;
+  descriptionOutput?: VideoDescriptionOutput;
+  descriptionStyle?: VideoDescriptionStyle;
+  onChangeDescriptionStyle?: (style: VideoDescriptionStyle) => void;
   onExportVideo: () => void;
   onCancelExportVideo?: () => void;
   onOpenOutputFolder?: () => void;
@@ -117,6 +154,15 @@ export const StagePreview: React.FC<StagePreviewProps> = ({
   onMoveElement,
   onApplySubtitlePositionToAll,
   onResetElementPosition,
+  bgmPreset = DEFAULT_BGM_PRESET,
+  bgmVolume = DEFAULT_BGM_VOLUME,
+  customBgmFile = null,
+  onChangeBgmPreset,
+  onChangeBgmVolume,
+  onChangeCustomBgmFile,
+  descriptionOutput,
+  descriptionStyle = 'auto',
+  onChangeDescriptionStyle,
   onExportVideo,
   onCancelExportVideo,
   onOpenOutputFolder,
@@ -126,12 +172,15 @@ export const StagePreview: React.FC<StagePreviewProps> = ({
   const resolved = resolveMp4EncodingParams({ ...mp4Settings, aspectRatio: effectiveAspect });
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const bgInputRef = useRef<HTMLInputElement>(null);
+  const bgmInputRef = useRef<HTMLInputElement>(null);
   const videoBlobUrlRef = useRef<string | null>(null);
   const [assetVersion, setAssetVersion] = useState(0);
   const [dbVersion, setDbVersion] = useState(0);
   const [isProcessingBg, setIsProcessingBg] = useState(false);
   const [bgUploadError, setBgUploadError] = useState<string | null>(null);
   const [isWatermarkOpen, setIsWatermarkOpen] = useState(false);
+  const [isDescOpen, setIsDescOpen] = useState(false);
+  const [copiedDescTag, setCopiedDescTag] = useState(false);
   const dragStateRef = useRef<{
     id: string;
     offsetX: number;
@@ -868,6 +917,85 @@ export const StagePreview: React.FC<StagePreviewProps> = ({
         </div>
       )}
 
+      {/* BGM Preset + Upload + Volume (Default Soft Rain 3%) */}
+      {onChangeBgmPreset && onChangeBgmVolume && (
+        <div className="w-full pt-2">
+          <div className="rounded-lg border border-slate-200 bg-slate-50/70 px-2.5 py-2 space-y-1.5 text-[11px]">
+            <div className="flex flex-wrap items-center gap-2">
+              <Volume2 className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
+              <select
+                aria-label="Nhạc nền Studio"
+                value={customBgmFile ? 'custom' : bgmPreset}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  if (val === 'custom') return;
+                  onChangeCustomBgmFile?.(null);
+                  onChangeBgmPreset(val as StudioBgmPresetId);
+                }}
+                className="flex-1 min-w-[140px] px-2 py-1 text-[11px] bg-white border border-slate-200 rounded"
+              >
+                {customBgmFile && (
+                  <option value="custom">Nhạc tải lên: {customBgmFile.name}</option>
+                )}
+                {STUDIO_BGM_PRESETS.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.label}
+                  </option>
+                ))}
+              </select>
+
+              {onChangeCustomBgmFile && (
+                <>
+                  <input
+                    ref={bgmInputRef}
+                    type="file"
+                    accept="audio/*,.mp3,.wav,.m4a,.ogg"
+                    className="hidden"
+                    onChange={(e) => {
+                      const f = e.target.files?.[0];
+                      if (f) onChangeCustomBgmFile(f);
+                      e.currentTarget.value = '';
+                    }}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => bgmInputRef.current?.click()}
+                    className="inline-flex items-center gap-1 px-2 py-1 text-[10px] font-medium bg-white border border-slate-200 rounded hover:bg-slate-100 text-slate-700 shrink-0"
+                  >
+                    <Upload className="w-3 h-3 text-indigo-600" />
+                    <span>{customBgmFile ? 'Đổi nhạc' : 'Tải nhạc nền'}</span>
+                  </button>
+                  {customBgmFile && (
+                    <button
+                      type="button"
+                      aria-label="Xóa nhạc nền tải lên Studio"
+                      onClick={() => onChangeCustomBgmFile(null)}
+                      className="p-1 text-slate-400 hover:text-rose-600"
+                    >
+                      <X className="w-3 h-3" />
+                    </button>
+                  )}
+                </>
+              )}
+            </div>
+            <div className="flex items-center gap-2 text-[10px] text-slate-600">
+              <span className="shrink-0">Âm lượng nhạc: {Math.round(bgmVolume * 100)}%</span>
+              <input
+                type="range"
+                aria-label="Âm lượng nhạc nền Studio"
+                disabled={bgmPreset === 'none' && !customBgmFile}
+                min={0}
+                max={0.45}
+                step={0.01}
+                value={bgmVolume}
+                onChange={(e) => onChangeBgmVolume(Number(e.target.value))}
+                className="flex-1 accent-indigo-600 h-1 disabled:opacity-40"
+              />
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Live Aspect-Adaptive Preview Canvas */}
       <div className="my-3 flex flex-col items-center justify-center w-full gap-2">
         <div
@@ -1129,6 +1257,88 @@ export const StagePreview: React.FC<StagePreviewProps> = ({
             </button>
           )}
         </div>
+
+        {/* Companion .txt Description & Hashtags */}
+        {descriptionOutput && (
+          <div className="rounded-lg border border-slate-200 bg-slate-50/70 px-2.5 py-2 space-y-1.5 text-[11px]">
+            <div className="flex items-center justify-between gap-2">
+              <button
+                type="button"
+                onClick={() => setIsDescOpen((v) => !v)}
+                className="inline-flex items-center gap-1.5 font-semibold text-slate-700 hover:text-indigo-700"
+              >
+                <FileText className="w-3.5 h-3.5 text-indigo-600" />
+                <span>
+                  Mô tả &amp; Hashtag (.txt · {descriptionOutput.nativeLangCode.toUpperCase()})
+                </span>
+              </button>
+              <div className="flex items-center gap-1.5">
+                {onChangeDescriptionStyle && (
+                  <select
+                    aria-label="Kiểu mô tả video Studio"
+                    value={descriptionStyle}
+                    onChange={(e) => onChangeDescriptionStyle(e.target.value as VideoDescriptionStyle)}
+                    className="px-1.5 py-0.5 text-[10px] bg-white border border-slate-200 rounded text-slate-700"
+                  >
+                    <option value="auto">Tự động</option>
+                    <option value="hook-bullets">Hook + ✔</option>
+                    <option value="training-guide">🏋️ Mục lục</option>
+                    <option value="phrase-pack">📌 Mẫu câu</option>
+                  </select>
+                )}
+                <button
+                  type="button"
+                  onClick={() => {
+                    void navigator.clipboard.writeText(descriptionOutput.txtContent);
+                    setCopiedDescTag(true);
+                    setTimeout(() => setCopiedDescTag(false), 1600);
+                  }}
+                  className="inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-semibold bg-white border border-slate-200 rounded hover:bg-indigo-50 text-slate-700"
+                >
+                  {copiedDescTag ? <Check className="w-3 h-3 text-emerald-600" /> : <Copy className="w-3 h-3" />}
+                  <span>{copiedDescTag ? 'Đã chép' : 'Sao chép'}</span>
+                </button>
+              </div>
+            </div>
+            {isDescOpen ? (
+              <div className="space-y-1.5">
+                <textarea
+                  readOnly
+                  rows={5}
+                  value={descriptionOutput.txtContent}
+                  className="w-full p-2 text-[10px] leading-relaxed bg-white border border-slate-200 rounded text-slate-800 resize-y"
+                />
+                <div className="flex justify-end">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const stem = cleanOutputTitleStem(project.title || project.id, 'Studio Video');
+                      const blob = new Blob([descriptionOutput.txtContent], {
+                        type: 'text/plain;charset=utf-8',
+                      });
+                      const url = URL.createObjectURL(blob);
+                      const a = document.createElement('a');
+                      a.href = url;
+                      a.download = `${stem}.txt`;
+                      document.body.appendChild(a);
+                      a.click();
+                      a.remove();
+                      setTimeout(() => URL.revokeObjectURL(url), 1000);
+                    }}
+                    className="inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-semibold bg-indigo-50 border border-indigo-200 text-indigo-700 rounded hover:bg-indigo-100"
+                  >
+                    <Download className="w-3 h-3" />
+                    <span>Tải .txt</span>
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="text-[10px] text-slate-500 truncate">
+                {descriptionOutput.hashtags.slice(0, 4).join(' ')} · Xuất cùng tên video
+              </div>
+            )}
+          </div>
+        )}
 
         {lastExportSummary && !isExportingVideo && (
           <div className="px-3 py-2 rounded-lg bg-emerald-50 border border-emerald-200 flex items-center justify-between gap-2 text-[11px] text-emerald-900">

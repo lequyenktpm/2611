@@ -66,11 +66,15 @@ import {
 } from '../engine/readingPromptBuilder';
 import {
   concatAudioFilesWithGaps,
+  DEFAULT_BGM_PRESET,
+  DEFAULT_BGM_VOLUME,
   mixVoiceWithBgmPreset,
   shiftReadingWordsForIntro,
   STUDIO_BGM_PRESETS,
   StudioBgmPresetId,
 } from '../engine/audioMixHelper';
+import { buildVideoDescription } from '../engine/videoDescriptionBuilder';
+import { playExportCompleteSound } from '../utils/soundEffects';
 import { parseTranscriptAuto } from '../engine/transcriptParser';
 import {
   alignAudioWithProgressJob,
@@ -778,6 +782,14 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
     }, 450);
 
     try {
+      const mergeCleanStem = cleanOutputTitleStem(outStem, 'Edu Merged Video');
+      const mergeDescription = buildVideoDescription({
+        title: mergeCleanStem,
+        nativeLang: 'vi',
+        learningLang: 'auto',
+        style: 'phrase-pack',
+        topicHint: mergeCleanStem,
+      });
       const finishRes = await fetch(`/api/studio/job/${jobId}/merge`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -790,8 +802,9 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
           watermarkOpacity: watermarkOutro.watermarkOpacity,
           outroText,
           outroDuration: watermarkOutro.outroSeconds,
-          outputName: cleanOutputTitleStem(outStem, 'Edu Merged Video'),
+          outputName: mergeCleanStem,
           savePath: selectedSavePath.trim() || TAB_OUTPUT_SUBFOLDERS.merge,
+          descriptionTxt: mergeDescription.txtContent,
         }),
       });
       const data = await parseApiJson<{
@@ -799,6 +812,8 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
         fileName?: string;
         relativePath?: string;
         savedPath?: string;
+        txtFileName?: string;
+        txtRelativePath?: string;
         error?: string;
       }>(finishRes, 'Ghép video thất bại');
       if (!finishRes.ok) {
@@ -808,6 +823,9 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
       let copiedLocal = false;
       if (data.relativePath && data.fileName && localDirHandle) {
         copiedLocal = await saveServerFileToLocalDir(data.relativePath, data.fileName);
+        if (data.txtRelativePath && data.txtFileName) {
+          await saveServerFileToLocalDir(data.txtRelativePath, data.txtFileName).catch(() => false);
+        }
       }
       return { ...data, copiedLocal };
     } finally {
@@ -837,6 +855,7 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
           `Hoàn tất! Đã lưu ${data.fileName} (${data.savedPath})${data.copiedLocal ? ` · Đã lưu thêm vào "${localDirName}"` : ''}`,
         );
         emitOutputUpdated({ relativePath: data.relativePath, sourceTab: 'Edu Merge' });
+        playExportCompleteSound();
       } else {
         const pairs = batchMatchedPairs.matched;
         let lastRel: string | undefined;
@@ -853,6 +872,7 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
           if (res.relativePath) lastRel = res.relativePath;
         }
         emitOutputUpdated({ relativePath: lastRel, sourceTab: 'Edu Merge' });
+        playExportCompleteSound();
         setMergeStatus(
           `Hoàn tất Batch! Đã ghép ${pairs.length} cặp video+audio vào thư mục Output${localDirHandle ? ` và "${localDirName}"` : ''}.`,
         );
@@ -878,8 +898,8 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
   const [kmPreviewTimeSec, setKmPreviewTimeSec] = useState(0);
   const [kmMusicFile, setKmMusicFile] = useState<File | null>(null);
   const [kmSfxFile, setKmSfxFile] = useState<File | null>(null);
-  const [kmMusicPreset, setKmMusicPreset] = useState<'lofi-calm' | 'soft-study' | 'none'>(
-    () => initialEduSaved?.kmMusicPreset || 'lofi-calm',
+  const [kmMusicPreset, setKmMusicPreset] = useState<'soft-rain' | 'lofi-calm' | 'soft-study' | 'none'>(
+    () => initialEduSaved?.kmMusicPreset || 'soft-rain',
   );
   const [kmSfxPreset, setKmSfxPreset] = useState<'soft-rain' | 'cafe-room' | 'none'>(
     () => initialEduSaved?.kmSfxPreset || 'soft-rain',
@@ -912,10 +932,10 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
     typeof initialEduSaved?.kmOriginalVol === 'number' ? initialEduSaved.kmOriginalVol : 0.45,
   );
   const [kmMusicVol, setKmMusicVol] = useState(() =>
-    typeof initialEduSaved?.kmMusicVol === 'number' ? initialEduSaved.kmMusicVol : 0.2,
+    typeof initialEduSaved?.kmMusicVol === 'number' ? initialEduSaved.kmMusicVol : DEFAULT_BGM_VOLUME,
   );
   const [kmSfxVol, setKmSfxVol] = useState(() =>
-    typeof initialEduSaved?.kmSfxVol === 'number' ? initialEduSaved.kmSfxVol : 0.1,
+    typeof initialEduSaved?.kmSfxVol === 'number' ? initialEduSaved.kmSfxVol : DEFAULT_BGM_VOLUME,
   );
   const [kmVoiceVol, setKmVoiceVol] = useState(() =>
     typeof initialEduSaved?.kmVoiceVol === 'number' ? initialEduSaved.kmVoiceVol : 1.0,
@@ -1067,6 +1087,15 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
         }
       }, 450);
 
+      const kmDescription = buildVideoDescription({
+        title: resolvedKmName,
+        nativeLang: 'vi',
+        learningLang: 'auto',
+        style: 'phrase-pack',
+        cues: parseTranscriptAuto(kmSrtInput),
+        topicHint: resolvedKmName,
+      });
+
       const mixRes = await fetch(`/api/studio/job/${jobId}/karaoke-mix`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1092,6 +1121,7 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
           sfxPreset: kmSfxFile ? 'none' : kmSfxPreset,
           outputName: resolvedKmName,
           savePath: selectedSavePath.trim() || TAB_OUTPUT_SUBFOLDERS.karaoke,
+          descriptionTxt: kmDescription.txtContent,
         }),
       });
       const data = await parseApiJson<{
@@ -1099,6 +1129,8 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
         fileName?: string;
         relativePath?: string;
         savedPath?: string;
+        txtFileName?: string;
+        txtRelativePath?: string;
         error?: string;
       }>(mixRes, 'Lỗi render Karaoke & Mix');
       if (!mixRes.ok) {
@@ -1108,12 +1140,16 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
       let extraLocalMsg = '';
       if (data.relativePath && data.fileName && localDirHandle) {
         const copied = await saveServerFileToLocalDir(data.relativePath, data.fileName);
+        if (data.txtRelativePath && data.txtFileName) {
+          await saveServerFileToLocalDir(data.txtRelativePath, data.txtFileName).catch(() => false);
+        }
         if (copied) {
           extraLocalMsg = ` · Đã lưu thêm vào "${localDirName}"`;
         }
       }
       setKmStatus(`Hoàn tất! Đã lưu ${data.fileName} (${data.savedPath})${extraLocalMsg}`);
       emitOutputUpdated({ relativePath: data.relativePath, sourceTab: 'Edu Karaoke' });
+      playExportCompleteSound();
       await refreshOutputFolders();
     } catch (err) {
       if (controller.signal.aborted || (err instanceof Error && err.name === 'AbortError')) {
@@ -1213,11 +1249,15 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
     typeof initialEduSaved?.readingOutroSpeechEnabled === 'boolean' ? initialEduSaved.readingOutroSpeechEnabled : true,
   );
   const [readingBgmPreset, setReadingBgmPreset] = useState<StudioBgmPresetId>(
-    () => initialEduSaved?.readingBgmPreset || 'lofi-calm',
+    () => initialEduSaved?.readingBgmPreset || DEFAULT_BGM_PRESET,
   );
   const [readingBgmVolume, setReadingBgmVolume] = useState(() =>
-    typeof initialEduSaved?.readingBgmVolume === 'number' ? initialEduSaved.readingBgmVolume : 0.18,
+    typeof initialEduSaved?.readingBgmVolume === 'number'
+      ? initialEduSaved.readingBgmVolume
+      : DEFAULT_BGM_VOLUME,
   );
+  const [readingCustomBgmFile, setReadingCustomBgmFile] = useState<File | null>(null);
+  const readingBgmInputRef = useRef<HTMLInputElement>(null);
   const [isCustomAlignAudio, setIsCustomAlignAudio] = useState(false);
   const [synthesizedReadingSig, setSynthesizedReadingSig] = useState('');
   const [alignFile, setAlignFile] = useState<File | null>(null);
@@ -1341,14 +1381,14 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
       setKmSubSize('Vừa');
       setKmHighlightColor(KARAOKE_EFFECT_PRESETS[0].activeColor);
       setKmEffect('Fade cinematic');
-      setKmMusicPreset('lofi-calm');
+      setKmMusicPreset('soft-rain');
       setKmSfxPreset('soft-rain');
       setKmMuteOriginal(false);
       setKmRemoveDialogue(false);
       setKmVoicePriority(true);
       setKmOriginalVol(0.45);
-      setKmMusicVol(0.2);
-      setKmSfxVol(0.1);
+      setKmMusicVol(DEFAULT_BGM_VOLUME);
+      setKmSfxVol(DEFAULT_BGM_VOLUME);
       setKmVoiceVol(1.0);
       setReadingPaletteId('Sunny Yellow');
       setReadingIllustration('2.5D');
@@ -1367,8 +1407,9 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
       setReadingIntroEnabled(true);
       setReadingIntroSeconds(3.4);
       setReadingOutroSpeechEnabled(true);
-      setReadingBgmPreset('lofi-calm');
-      setReadingBgmVolume(0.18);
+      setReadingBgmPreset(DEFAULT_BGM_PRESET);
+      setReadingBgmVolume(DEFAULT_BGM_VOLUME);
+      setReadingCustomBgmFile(null);
       setAlignMode('fast-forced');
       setAlignLang('auto');
       setAlignModel('Xenova/whisper-small');
@@ -1598,6 +1639,8 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
         outroSeconds: watermarkOutro.outroSeconds,
         readingBgmPreset,
         readingBgmVolume: Number(readingBgmVolume.toFixed(2)),
+        readingCustomBgmName: readingCustomBgmFile?.name || '',
+        readingCustomBgmSize: readingCustomBgmFile?.size || 0,
       }),
     [
       readingTitle,
@@ -1612,6 +1655,7 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
       watermarkOutro.outroSeconds,
       readingBgmPreset,
       readingBgmVolume,
+      readingCustomBgmFile,
     ],
   );
 
@@ -2044,11 +2088,12 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
       let finalAudioFile = combined.file;
       let finalTotalDur = Math.max(combined.durationSec, metrics.effectiveTotalDuration);
 
-      if (readingBgmPreset !== 'none' && readingBgmVolume > 0) {
+      if ((readingBgmPreset !== 'none' || Boolean(readingCustomBgmFile)) && readingBgmVolume > 0) {
         const mixed = await mixVoiceWithBgmPreset({
           voiceFile: combined.file,
           bgmPreset: readingBgmPreset,
           bgmVolume: readingBgmVolume,
+          customBgmFile: readingCustomBgmFile,
           speechWindows,
           introEndSec: exactIntroEndSec,
           outroStartSec: outroStartSec ?? metrics.outroStart,
@@ -2075,6 +2120,8 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
         outroSeconds: updatedWatermark.outroSeconds,
         readingBgmPreset,
         readingBgmVolume: Number(readingBgmVolume.toFixed(2)),
+        readingCustomBgmName: readingCustomBgmFile?.name || '',
+        readingCustomBgmSize: readingCustomBgmFile?.size || 0,
       });
 
       if (introIdx >= 0) {
@@ -2237,6 +2284,16 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
         backgroundImage: readingBackground,
       };
 
+      const readingDescription = buildVideoDescription({
+        title: targetTitle,
+        nativeLang: 'vi',
+        learningLang: readingVoice.split('-')[0] || 'auto',
+        style: 'phrase-pack',
+        durationSec: targetTotalDur,
+        topicHint: readingTopic,
+        sampleLines: [targetText],
+      });
+
       const saved = await exportProjectToServerDisk(
         dummyProject,
         targetAudio,
@@ -2256,6 +2313,7 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
           signal: controller.signal,
           directoryHandle: localDirHandle || undefined,
           sourceTab: 'Reading Along',
+          companionText: readingDescription.txtContent,
           customRenderFrame: (ctx, time, width, height) => {
             renderReadingAlongFrame(ctx, {
               width,
@@ -2284,8 +2342,9 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
         },
       );
 
-      setReadingExportStatus(`Hoàn tất! Đã lưu ${saved.fileName} (${saved.savedPath}).`);
+      setReadingExportStatus(`Hoàn tất! Đã lưu ${saved.fileName} kèm ${baseStem}.txt (${saved.savedPath}).`);
       emitOutputUpdated({ relativePath: saved.relativePath, sourceTab: 'Reading Along' });
+      playExportCompleteSound();
       await refreshOutputFolders();
     } catch (err) {
       if (err instanceof ExportAbortedError || controller.signal.aborted) {
@@ -2951,11 +3010,14 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
                         disabled={Boolean(kmMusicFile)}
                         value={kmMusicPreset}
                         onChange={(e) =>
-                          setKmMusicPreset(e.target.value as 'lofi-calm' | 'soft-study' | 'none')
+                          setKmMusicPreset(
+                            e.target.value as 'soft-rain' | 'lofi-calm' | 'soft-study' | 'none',
+                          )
                         }
                         className="w-full px-2.5 py-1.5 text-xs bg-white border border-slate-200 rounded-lg disabled:opacity-50"
                       >
-                        <option value="lofi-calm">Lo-fi Chill Mặc định (Warm Pad)</option>
+                        <option value="soft-rain">Soft Rain Mặc định (Mưa êm dịu)</option>
+                        <option value="lofi-calm">Lo-fi Chill (Warm Pad)</option>
                         <option value="soft-study">Soft Study Pad (Nhẹ nhàng)</option>
                         <option value="none">Không dùng BGM mặc định</option>
                       </select>
@@ -3379,7 +3441,7 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
                         type="range"
                         min={0}
                         max={1.5}
-                        step={0.05}
+                        step={0.01}
                         value={kmMusicVol}
                         onChange={(e) => setKmMusicVol(Number(e.target.value))}
                         className="w-full accent-indigo-600"
@@ -3391,7 +3453,7 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
                         type="range"
                         min={0}
                         max={1.5}
-                        step={0.05}
+                        step={0.01}
                         value={kmSfxVol}
                         onChange={(e) => setKmSfxVol(Number(e.target.value))}
                         className="w-full accent-indigo-600"
@@ -4213,40 +4275,85 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
                         </div>
                       )}
 
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                        <div>
-                          <label htmlFor="reading-bgm-select" className="block text-[10px] font-semibold text-slate-700 mb-0.5">
-                            Nhạc nền (BGM)
-                          </label>
-                          <select
-                            id="reading-bgm-select"
-                            value={readingBgmPreset}
-                            onChange={(e) => setReadingBgmPreset(e.target.value as StudioBgmPresetId)}
-                            className="w-full px-2 py-1.5 text-xs bg-white border border-slate-200 rounded-lg"
-                          >
-                            {STUDIO_BGM_PRESETS.map((p) => (
-                              <option key={p.id} value={p.id}>
-                                {p.label}
-                              </option>
-                            ))}
-                          </select>
-                        </div>
-                        <div>
-                          <div className="flex items-center justify-between text-[10px] font-semibold text-slate-700 mb-0.5">
-                            <label htmlFor="reading-bgm-vol">Âm lượng nhạc nền</label>
-                            <span className="font-mono">{Math.round(readingBgmVolume * 100)}%</span>
+                      <div className="space-y-2">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                          <div>
+                            <label htmlFor="reading-bgm-select" className="block text-[10px] font-semibold text-slate-700 mb-0.5">
+                              Nhạc nền (BGM)
+                            </label>
+                            <select
+                              id="reading-bgm-select"
+                              value={readingCustomBgmFile ? 'custom' : readingBgmPreset}
+                              onChange={(e) => {
+                                const v = e.target.value;
+                                if (v === 'custom') return;
+                                setReadingCustomBgmFile(null);
+                                setReadingBgmPreset(v as StudioBgmPresetId);
+                              }}
+                              className="w-full px-2 py-1.5 text-xs bg-white border border-slate-200 rounded-lg"
+                            >
+                              {readingCustomBgmFile && (
+                                <option value="custom">Nhạc tải lên: {readingCustomBgmFile.name}</option>
+                              )}
+                              {STUDIO_BGM_PRESETS.map((p) => (
+                                <option key={p.id} value={p.id}>
+                                  {p.label}
+                                </option>
+                              ))}
+                            </select>
                           </div>
+                          <div>
+                            <div className="flex items-center justify-between text-[10px] font-semibold text-slate-700 mb-0.5">
+                              <label htmlFor="reading-bgm-vol">Âm lượng nhạc nền</label>
+                              <span className="font-mono">{Math.round(readingBgmVolume * 100)}%</span>
+                            </div>
+                            <input
+                              id="reading-bgm-vol"
+                              type="range"
+                              min={0}
+                              max={0.45}
+                              step={0.01}
+                              value={readingBgmVolume}
+                              disabled={readingBgmPreset === 'none' && !readingCustomBgmFile}
+                              onChange={(e) => setReadingBgmVolume(Number(e.target.value))}
+                              className="w-full accent-indigo-600 mt-1"
+                            />
+                          </div>
+                        </div>
+
+                        <div className="flex flex-wrap items-center gap-2 text-[11px]">
                           <input
-                            id="reading-bgm-vol"
-                            type="range"
-                            min={0}
-                            max={0.45}
-                            step={0.02}
-                            value={readingBgmVolume}
-                            disabled={readingBgmPreset === 'none'}
-                            onChange={(e) => setReadingBgmVolume(Number(e.target.value))}
-                            className="w-full accent-indigo-600 mt-1"
+                            ref={readingBgmInputRef}
+                            type="file"
+                            accept="audio/*,.mp3,.wav,.m4a,.ogg"
+                            className="hidden"
+                            onChange={(e) => {
+                              const f = e.target.files?.[0];
+                              if (f) setReadingCustomBgmFile(f);
+                              e.currentTarget.value = '';
+                            }}
                           />
+                          <button
+                            type="button"
+                            onClick={() => readingBgmInputRef.current?.click()}
+                            className="inline-flex items-center gap-1 px-2.5 py-1 font-medium text-slate-700 bg-white border border-slate-200 rounded-lg hover:bg-slate-100"
+                          >
+                            <Upload className="w-3 h-3 text-indigo-600" />
+                            <span>{readingCustomBgmFile ? 'Đổi file nhạc nền' : 'Tải nhạc nền'}</span>
+                          </button>
+                          {readingCustomBgmFile && (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-indigo-50 border border-indigo-200 text-indigo-800 rounded-md max-w-[200px]">
+                              <span className="truncate">{readingCustomBgmFile.name}</span>
+                              <button
+                                type="button"
+                                aria-label="Bỏ nhạc nền tải lên Reading Along"
+                                onClick={() => setReadingCustomBgmFile(null)}
+                                className="text-indigo-500 hover:text-rose-600"
+                              >
+                                ×
+                              </button>
+                            </span>
+                          )}
                         </div>
                       </div>
                     </div>

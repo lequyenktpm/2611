@@ -63,6 +63,8 @@ import {
 } from '../engine/types';
 import { resizeImageFileToStageDataUrl } from '../utils/imageResize';
 import { buildZipArchive } from '../utils/zipBuilder';
+import { buildVideoDescription } from '../engine/videoDescriptionBuilder';
+import { playExportCompleteSound } from '../utils/soundEffects';
 import { BatchPreviewPane } from './BatchPreviewPane';
 
 export type BatchItemStatus =
@@ -775,6 +777,7 @@ export const BatchQueueModal: React.FC<BatchQueueModalProps> = ({
     setIsRunning(true);
 
     const queueSnapshot = [...items];
+    let completedCount = 0;
     for (let idx = 0; idx < queueSnapshot.length; idx++) {
       const item = queueSnapshot[idx];
       if (stopFlagRef.current || controller.signal.aborted) break;
@@ -802,6 +805,14 @@ export const BatchQueueModal: React.FC<BatchQueueModalProps> = ({
         builtProject = applyStyleThemeToProject(builtProject, override?.theme);
         const fileBase = exportBaseName(item);
 
+        const batchItemDescription = buildVideoDescription({
+          title: builtProject.title || fileBase,
+          nativeLang: 'vi',
+          learningLang: 'auto',
+          project: builtProject,
+          durationSec: builtProject.duration,
+        });
+
         updateItem(item.id, {
           status: 'rendering',
           progress: 0.15,
@@ -827,6 +838,7 @@ export const BatchQueueModal: React.FC<BatchQueueModalProps> = ({
               signal: controller.signal,
               directoryHandle: outputDirHandle,
               sourceTab: 'Batch',
+              companionText: batchItemDescription.txtContent,
             },
           );
           const mb = (saved.byteLength / (1024 * 1024)).toFixed(2);
@@ -836,6 +848,7 @@ export const BatchQueueModal: React.FC<BatchQueueModalProps> = ({
             detail: `Đã lưu (${mb} MB · ${encoding.width}×${encoding.height} @ ${encoding.fps}fps)`,
             outputInfo: saved.savedPath,
           });
+          completedCount++;
           void refreshOutputFiles();
         } else {
           const exported = await exportProjectToVideo(
@@ -855,6 +868,7 @@ export const BatchQueueModal: React.FC<BatchQueueModalProps> = ({
               alsoSaveToServerOutput: true,
               savePath: resolveTabOutputSubfolder('Batch', customSavePath),
               sourceTab: 'Batch',
+              companionText: batchItemDescription.txtContent,
             },
           );
           const mb = (exported.byteLength / (1024 * 1024)).toFixed(2);
@@ -864,6 +878,7 @@ export const BatchQueueModal: React.FC<BatchQueueModalProps> = ({
             detail: `Đã tải ${exported.fileName} (${mb} MB)`,
             outputInfo: exported.savedPath,
           });
+          completedCount++;
           void refreshOutputFiles();
         }
       } catch (err) {
@@ -890,6 +905,9 @@ export const BatchQueueModal: React.FC<BatchQueueModalProps> = ({
 
     batchAbortControllerRef.current = null;
     setIsRunning(false);
+    if (!stopFlagRef.current && !controller.signal.aborted && completedCount > 0) {
+      playExportCompleteSound();
+    }
     void refreshOutputFiles();
   };
 

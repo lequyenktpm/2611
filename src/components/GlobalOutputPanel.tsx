@@ -1,9 +1,12 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
+  Check,
   ChevronDown,
   ChevronUp,
+  Copy,
   Download,
   Eye,
+  FileText,
   FolderOpen,
   Play,
   RefreshCw,
@@ -41,6 +44,8 @@ export const GlobalOutputPanel: React.FC<GlobalOutputPanelProps> = ({ activeTab 
   const [outputDir, setOutputDir] = useState('output');
   const [files, setFiles] = useState<GlobalOutputFileEntry[]>([]);
   const [previewRelPath, setPreviewRelPath] = useState<string | null>(null);
+  const [previewTextContent, setPreviewTextContent] = useState<string>('');
+  const [copiedPreviewText, setCopiedPreviewText] = useState(false);
   const [filterTab, setFilterTab] = useState<string>('all');
   const [folderMsg, setFolderMsg] = useState<string | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -128,6 +133,28 @@ export const GlobalOutputPanel: React.FC<GlobalOutputPanelProps> = ({ activeTab 
   const isPreviewAudio = Boolean(
     previewRelPath && /\.(mp3|wav|m4a|aac|ogg)$/i.test(previewRelPath),
   );
+  const isPreviewText = Boolean(
+    previewRelPath && /\.(txt|srt|vtt)$/i.test(previewRelPath),
+  );
+
+  useEffect(() => {
+    if (!previewRelPath || !isPreviewText) {
+      setPreviewTextContent('');
+      return;
+    }
+    let cancelled = false;
+    fetch(`/api/output/download?path=${encodeURIComponent(previewRelPath)}&inline=1`)
+      .then((r) => (r.ok ? r.text() : ''))
+      .then((txt) => {
+        if (!cancelled) setPreviewTextContent(txt);
+      })
+      .catch(() => {
+        if (!cancelled) setPreviewTextContent('');
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [previewRelPath, isPreviewText]);
 
   return (
     <section
@@ -238,9 +265,19 @@ export const GlobalOutputPanel: React.FC<GlobalOutputPanelProps> = ({ activeTab 
                           {f.sourceTab || 'Output'}
                         </span>
                         <div className="min-w-0 flex-1">
-                          <div className="font-semibold text-slate-900 truncate">{f.name}</div>
+                          <div className="font-semibold text-slate-900 truncate flex items-center gap-1.5">
+                            {/\.txt$/i.test(f.name) && (
+                              <span className="px-1.5 py-0.5 text-[9px] font-bold rounded bg-sky-100 text-sky-700 shrink-0">
+                                TXT
+                              </span>
+                            )}
+                            <span className="truncate">{f.name}</span>
+                          </div>
                           <div className="text-[10px] text-slate-500 font-mono truncate">
-                            {f.relativePath} · {(f.bytes / (1024 * 1024)).toFixed(2)} MB
+                            {f.relativePath} ·{' '}
+                            {f.bytes < 1024 * 100
+                              ? `${Math.max(1, Math.round(f.bytes / 1024))} KB`
+                              : `${(f.bytes / (1024 * 1024)).toFixed(2)} MB`}
                           </div>
                         </div>
                       </button>
@@ -250,9 +287,13 @@ export const GlobalOutputPanel: React.FC<GlobalOutputPanelProps> = ({ activeTab 
                           type="button"
                           onClick={() => setPreviewRelPath(f.relativePath)}
                           className="p-1.5 text-indigo-600 hover:bg-indigo-100 rounded-md"
-                          title="Phát thử"
+                          title={/\.txt$/i.test(f.name) ? 'Xem nội dung mô tả & hashtag' : 'Phát thử'}
                         >
-                          <Play className="w-3.5 h-3.5" />
+                          {/\.txt$/i.test(f.name) ? (
+                            <FileText className="w-3.5 h-3.5" />
+                          ) : (
+                            <Play className="w-3.5 h-3.5" />
+                          )}
                         </button>
                         <a
                           href={`/api/output/download?path=${encodeURIComponent(f.relativePath)}`}
@@ -286,21 +327,43 @@ export const GlobalOutputPanel: React.FC<GlobalOutputPanelProps> = ({ activeTab 
               )}
             </div>
 
-            {/* Compact Media Preview */}
+            {/* Compact Media / Text Preview */}
             <div className="lg:col-span-5">
               {previewRelPath ? (
                 <div className="p-2.5 rounded-xl bg-slate-950 border border-slate-800 space-y-1.5">
                   <div className="flex items-center justify-between gap-2 text-[11px] text-indigo-300 font-mono">
-                    <span className="truncate">Đang phát: {previewRelPath}</span>
-                    <a
-                      href={`/api/output/download?path=${encodeURIComponent(previewRelPath)}`}
-                      download
-                      className="text-emerald-300 hover:text-emerald-200 font-sans font-semibold shrink-0"
-                    >
-                      Tải về
-                    </a>
+                    <span className="truncate">
+                      {isPreviewText ? 'Đang xem' : 'Đang phát'}: {previewRelPath}
+                    </span>
+                    <div className="flex items-center gap-2 shrink-0">
+                      {isPreviewText && previewTextContent && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            void navigator.clipboard.writeText(previewTextContent);
+                            setCopiedPreviewText(true);
+                            setTimeout(() => setCopiedPreviewText(false), 1800);
+                          }}
+                          className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-indigo-600/80 hover:bg-indigo-500 text-white font-sans font-semibold text-[10px]"
+                        >
+                          {copiedPreviewText ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+                          <span>{copiedPreviewText ? 'Đã chép' : 'Sao chép'}</span>
+                        </button>
+                      )}
+                      <a
+                        href={`/api/output/download?path=${encodeURIComponent(previewRelPath)}`}
+                        download
+                        className="text-emerald-300 hover:text-emerald-200 font-sans font-semibold shrink-0"
+                      >
+                        Tải về
+                      </a>
+                    </div>
                   </div>
-                  {isPreviewAudio ? (
+                  {isPreviewText ? (
+                    <pre className="w-full max-h-[220px] overflow-y-auto rounded-lg bg-slate-900 p-2.5 text-[11px] leading-relaxed text-slate-100 whitespace-pre-wrap font-sans">
+                      {previewTextContent || 'Đang tải nội dung...'}
+                    </pre>
+                  ) : isPreviewAudio ? (
                     <audio
                       key={previewRelPath}
                       controls

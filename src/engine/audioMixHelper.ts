@@ -1,18 +1,63 @@
-import { WordTiming } from './types';
+import { SceneElement, WordTiming } from './types';
 
 export type StudioBgmPresetId = 'none' | 'lofi-calm' | 'soft-study' | 'cafe-room' | 'soft-rain';
 
+export const DEFAULT_BGM_PRESET: StudioBgmPresetId = 'soft-rain';
+export const DEFAULT_BGM_VOLUME = 0.03;
+
 export const STUDIO_BGM_PRESETS: Array<{ id: StudioBgmPresetId; label: string }> = [
+  { id: 'soft-rain', label: 'Soft Rain (Mưa êm dịu)' },
   { id: 'lofi-calm', label: 'Lofi Calm (Nhẹ nhàng)' },
   { id: 'soft-study', label: 'Soft Study (Tập trung)' },
   { id: 'cafe-room', label: 'Cafe Ambience (Quán cà phê)' },
-  { id: 'soft-rain', label: 'Soft Rain (Mưa êm dịu)' },
   { id: 'none', label: 'Không nhạc nền' },
 ];
 
 export interface SpeechWindow {
   start: number;
   end: number;
+}
+
+export interface CountdownCueWindow {
+  startSec: number;
+  endSec: number;
+  tickTimesSec: number[];
+  revealChimeSec?: number;
+}
+
+/**
+ * Extracts grouped countdown second ticks and reveal timestamps from choreographed scene elements.
+ */
+export function extractCountdownWindowsFromElements(elements: SceneElement[]): CountdownCueWindow[] {
+  const meterEls = elements
+    .filter((el) => el.id.includes('-q-countdown-meter-') && el.endTime > el.startTime)
+    .sort((a, b) => a.startTime - b.startTime);
+  if (meterEls.length === 0) return [];
+
+  const groups = new Map<string, SceneElement[]>();
+  for (const el of meterEls) {
+    // IDs look like reel-tr-q-countdown-meter-{idx}-{s} or reel-q-countdown-meter-{idx}-{s}
+    const lastDash = el.id.lastIndexOf('-');
+    const groupKey = lastDash > 0 ? el.id.slice(0, lastDash) : el.id;
+    const arr = groups.get(groupKey);
+    if (arr) arr.push(el);
+    else groups.set(groupKey, [el]);
+  }
+
+  const out: CountdownCueWindow[] = [];
+  for (const arr of groups.values()) {
+    arr.sort((a, b) => a.startTime - b.startTime);
+    const startSec = Number(arr[0].startTime.toFixed(3));
+    const endSec = Number(arr[arr.length - 1].endTime.toFixed(3));
+    const tickTimesSec = arr.map((item) => Number(item.startTime.toFixed(3)));
+    out.push({
+      startSec,
+      endSec,
+      tickTimesSec,
+      revealChimeSec: endSec,
+    });
+  }
+  return out.sort((a, b) => a.startSec - b.startSec);
 }
 
 /**
@@ -195,15 +240,66 @@ export async function concatAudioFilesWithGaps(
   }
 }
 
+function scheduleCountdownSfxOnOfflineContext(
+  offline: OfflineAudioContext,
+  windows: CountdownCueWindow[],
+  totalDur: number,
+): void {
+  for (const win of windows) {
+    const ticks = win.tickTimesSec;
+    ticks.forEach((tickTime, idx) => {
+      if (tickTime < 0 || tickTime >= totalDur - 0.05) return;
+      const isUrgent = idx >= ticks.length - 2 && ticks.length >= 3;
+      const osc = offline.createOscillator();
+      const gain = offline.createGain();
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(isUrgent ? 1046.5 : 880, tickTime);
+      osc.frequency.exponentialRampToValueAtTime(isUrgent ? 784 : 620, tickTime + 0.045);
+
+      gain.gain.setValueAtTime(0.0001, tickTime);
+      gain.gain.exponentialRampToValueAtTime(isUrgent ? 0.16 : 0.12, tickTime + 0.005);
+      gain.gain.exponentialRampToValueAtTime(0.0001, tickTime + 0.068);
+
+      osc.connect(gain);
+      gain.connect(offline.destination);
+      osc.start(tickTime);
+      osc.stop(Math.min(totalDur, tickTime + 0.075));
+    });
+
+    if (
+      typeof win.revealChimeSec === 'number' &&
+      win.revealChimeSec >= 0 &&
+      win.revealChimeSec < totalDur - 0.08
+    ) {
+      const t = win.revealChimeSec;
+      [1318.5, 1975.5].forEach((freq, fIdx) => {
+        const osc = offline.createOscillator();
+        const gain = offline.createGain();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(freq, t);
+        gain.gain.setValueAtTime(0.0001, t);
+        gain.gain.exponentialRampToValueAtTime(fIdx === 0 ? 0.11 : 0.05, t + 0.01);
+        gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.24);
+        osc.connect(gain);
+        gain.connect(offline.destination);
+        osc.start(t);
+        osc.stop(Math.min(totalDur, t + 0.26));
+      });
+    }
+  }
+}
+
 /**
- * Mixes a primary voiceover File with a looping studio background music preset
- * (fetched from /api/studio/default-audio?preset=...), gently ducking music during
- * spoken segments and letting it play cleanly through pauses & Outro.
+ * Mixes a primary voiceover File with a looping studio background music preset (or custom uploaded BGM File)
+ * and optional synthesized countdown ticks/chimes, gently ducking music during spoken segments.
  */
 export async function mixVoiceWithBgmPreset(params: {
   voiceFile: File | null;
   bgmPreset: StudioBgmPresetId;
   bgmVolume: number;
+  customBgmFile?: File | null;
+  countdownWindows?: CountdownCueWindow[];
+  enableCountdownSfx?: boolean;
   speechWindows?: SpeechWindow[];
   introEndSec?: number;
   outroStartSec?: number;
@@ -211,11 +307,17 @@ export async function mixVoiceWithBgmPreset(params: {
   outputFileName?: string;
 }): Promise<{ file: File | null; durationSec: number }> {
   const safeVol = Math.max(0, Math.min(0.65, Number(params.bgmVolume) || 0));
-  if (!params.voiceFile && (params.bgmPreset === 'none' || safeVol <= 0)) {
+  const wantsBgm = Boolean((params.customBgmFile || params.bgmPreset !== 'none') && safeVol > 0);
+  const activeCountdowns =
+    params.enableCountdownSfx !== false && Array.isArray(params.countdownWindows)
+      ? params.countdownWindows
+      : [];
+  const wantsCountdownSfx = activeCountdowns.length > 0;
+
+  if (!params.voiceFile && !wantsBgm && !wantsCountdownSfx) {
     return { file: null, durationSec: params.minTotalDurationSec ?? 0 };
   }
-  if (params.voiceFile && (params.bgmPreset === 'none' || safeVol <= 0)) {
-    // Still extend silence tail if minTotalDurationSec > voice duration? Only needed when Outro has music.
+  if (params.voiceFile && !wantsBgm && !wantsCountdownSfx) {
     const tmpCtx = new AudioContext();
     try {
       const dec = await tmpCtx.decodeAudioData(await params.voiceFile.arrayBuffer());
@@ -236,20 +338,29 @@ export async function mixVoiceWithBgmPreset(params: {
     }
 
     let bgmBuf: AudioBuffer | null = null;
-    if (params.bgmPreset !== 'none' && safeVol > 0) {
-      try {
-        const res = await fetch(
-          `/api/studio/default-audio?preset=${encodeURIComponent(params.bgmPreset)}`,
-        );
-        if (res.ok) {
-          bgmBuf = await audioCtx.decodeAudioData(await res.arrayBuffer());
+    if (wantsBgm) {
+      if (params.customBgmFile) {
+        try {
+          bgmBuf = await audioCtx.decodeAudioData(await params.customBgmFile.arrayBuffer());
+        } catch {
+          bgmBuf = null;
         }
-      } catch {
-        bgmBuf = null;
+      }
+      if (!bgmBuf && params.bgmPreset !== 'none') {
+        try {
+          const res = await fetch(
+            `/api/studio/default-audio?preset=${encodeURIComponent(params.bgmPreset)}`,
+          );
+          if (res.ok) {
+            bgmBuf = await audioCtx.decodeAudioData(await res.arrayBuffer());
+          }
+        } catch {
+          bgmBuf = null;
+        }
       }
     }
 
-    if (!bgmBuf) {
+    if (!bgmBuf && !wantsCountdownSfx) {
       return {
         file: params.voiceFile,
         durationSec: voiceBuf ? Number(voiceBuf.duration.toFixed(3)) : (params.minTotalDurationSec ?? 0),
@@ -271,47 +382,53 @@ export async function mixVoiceWithBgmPreset(params: {
       voiceSrc.start(0);
     }
 
-    const bgmSrc = offline.createBufferSource();
-    bgmSrc.buffer = bgmBuf;
-    bgmSrc.loop = true;
+    if (bgmBuf && safeVol > 0) {
+      const bgmSrc = offline.createBufferSource();
+      bgmSrc.buffer = bgmBuf;
+      bgmSrc.loop = true;
 
-    const gainNode = offline.createGain();
-    const windows =
-      params.speechWindows && params.speechWindows.length > 0
-        ? params.speechWindows
-        : voiceBuf
-          ? [{ start: 0, end: voiceBuf.duration }]
-          : [];
+      const gainNode = offline.createGain();
+      const windows =
+        params.speechWindows && params.speechWindows.length > 0
+          ? params.speechWindows
+          : voiceBuf
+            ? [{ start: 0, end: voiceBuf.duration }]
+            : [];
 
-    // Sample gain envelope at 20Hz for ultra-smooth ducking & fades
-    const step = 0.05;
-    gainNode.gain.setValueAtTime(
-      computeDuckingGainAtTime({
-        timeSec: 0,
-        speechWindows: windows,
-        baseVolume: safeVol,
-        introEndSec: params.introEndSec,
-        outroStartSec: params.outroStartSec,
-        totalDurationSec: totalDur,
-      }),
-      0,
-    );
-    for (let t = step; t <= totalDur; t += step) {
-      const g = computeDuckingGainAtTime({
-        timeSec: t,
-        speechWindows: windows,
-        baseVolume: safeVol,
-        introEndSec: params.introEndSec,
-        outroStartSec: params.outroStartSec,
-        totalDurationSec: totalDur,
-      });
-      gainNode.gain.linearRampToValueAtTime(g, Math.min(totalDur, t));
+      // Sample gain envelope at 20Hz for ultra-smooth ducking & fades
+      const step = 0.05;
+      gainNode.gain.setValueAtTime(
+        computeDuckingGainAtTime({
+          timeSec: 0,
+          speechWindows: windows,
+          baseVolume: safeVol,
+          introEndSec: params.introEndSec,
+          outroStartSec: params.outroStartSec,
+          totalDurationSec: totalDur,
+        }),
+        0,
+      );
+      for (let t = step; t <= totalDur; t += step) {
+        const g = computeDuckingGainAtTime({
+          timeSec: t,
+          speechWindows: windows,
+          baseVolume: safeVol,
+          introEndSec: params.introEndSec,
+          outroStartSec: params.outroStartSec,
+          totalDurationSec: totalDur,
+        });
+        gainNode.gain.linearRampToValueAtTime(g, Math.min(totalDur, t));
+      }
+
+      bgmSrc.connect(gainNode);
+      gainNode.connect(offline.destination);
+      bgmSrc.start(0);
+      bgmSrc.stop(totalDur);
     }
 
-    bgmSrc.connect(gainNode);
-    gainNode.connect(offline.destination);
-    bgmSrc.start(0);
-    bgmSrc.stop(totalDur);
+    if (wantsCountdownSfx) {
+      scheduleCountdownSfxOnOfflineContext(offline, activeCountdowns, totalDur);
+    }
 
     const rendered = await offline.startRendering();
     const outFile = audioBufferToWavFile(

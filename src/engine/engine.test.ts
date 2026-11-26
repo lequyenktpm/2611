@@ -128,7 +128,10 @@ import {
 } from './eduStudioEffects';
 import {
   computeDuckingGainAtTime,
+  DEFAULT_BGM_PRESET,
+  DEFAULT_BGM_VOLUME,
   encodeStereoFloatChannelsToWavArrayBuffer,
+  extractCountdownWindowsFromElements,
   shiftReadingWordsForIntro,
 } from './audioMixHelper';
 import {
@@ -137,6 +140,7 @@ import {
   resolveSyncAnchorTiming,
 } from './storyboardV19';
 import { validateStoryboardDocument } from './storyboardValidator';
+import { buildVideoDescription } from './videoDescriptionBuilder';
 import { resolveReelsModeSettings } from '../utils/studioSettingsStore';
 
 test('interpolateWordTimings distributes word timestamps across cue duration', () => {
@@ -3430,6 +3434,91 @@ test('resolveReelsModeSettings isolates aspectRatio and styling across the 3 Ree
   assert.equal(resolveReelsModeSettings(legacyOnly, 'source').reelsAspectRatio, '16:9');
   assert.equal(resolveReelsModeSettings(legacyOnly, 'creator').reelsAspectRatio, undefined);
 });
+
+test('DEFAULT_BGM_PRESET is soft-rain at 3% volume and extractCountdownWindowsFromElements captures countdown ticks and reveal chimes', () => {
+  assert.equal(DEFAULT_BGM_PRESET, 'soft-rain');
+  assert.equal(DEFAULT_BGM_VOLUME, 0.03);
+
+  const built = buildTranslationCardsFromInput({
+    learningLanguage: 'en',
+    level: 'B1',
+    targetLang: 'Tiếng Việt',
+    itemCount: 3,
+    thinkSec: 4,
+    repeatCount: 2,
+  });
+  const proj = reelCardsToLessonProject(built.cards, {
+    title: built.title,
+    theme: 'pastel-sunrise',
+    aspectRatio: '9:16',
+    targetLang: 'Tiếng Việt',
+  });
+
+  const windows = extractCountdownWindowsFromElements(proj.elements);
+  assert.ok(windows.length >= 2, `Expected multiple countdown windows, got ${windows.length}`);
+  for (const w of windows) {
+    assert.ok(w.endSec > w.startSec);
+    assert.ok(w.tickTimesSec.length >= 3, `Expected at least 3 ticks, got ${w.tickTimesSec.length}`);
+    assert.equal(w.revealChimeSec, w.endSec);
+  }
+});
+
+test('buildVideoDescription produces localized descriptions, chapters, and hashtags matching learner native language', () => {
+  // 1. Japanese learner studying English — training-guide style
+  const jaGuide = buildVideoDescription({
+    title: '【このペースで言える？】英会話のための瞬間英作文',
+    nativeLang: '日本語',
+    learningLang: 'en',
+    style: 'training-guide',
+    durationSec: 120,
+    itemCount: 12,
+    thinkSec: 5,
+    hasCountdown: true,
+    topicHint: '瞬間英作文 日常英会話',
+  });
+  assert.equal(jaGuide.nativeLangCode, 'ja');
+  assert.equal(jaGuide.learningLangCode, 'en');
+  assert.equal(jaGuide.styleUsed, 'training-guide');
+  assert.ok(jaGuide.description.includes('ご視聴ありがとうございます'));
+  assert.ok(jaGuide.description.includes('📝 おすすめの学習方法'));
+  assert.ok(jaGuide.description.includes('00:00 はじめ'));
+  assert.ok(jaGuide.hashtags.some((h) => h.includes('英語') || h.includes('瞬間英作文')));
+  assert.ok(jaGuide.txtContent.includes(jaGuide.title));
+  assert.ok(jaGuide.txtContent.includes(jaGuide.hashtagsLine));
+
+  // 2. Vietnamese learner studying Japanese — hook-bullets style + JLPT tag
+  const viHook = buildVideoDescription({
+    title: '【N1 nói vậy sao?】Phản xạ tiếng Nhật công sở',
+    nativeLang: 'Tiếng Việt',
+    learningLang: 'ja',
+    style: 'hook-bullets',
+    durationSec: 65,
+    itemCount: 6,
+    repeatCount: 2,
+    topicHint: 'N1 Keigo',
+  });
+  assert.equal(viHook.nativeLangCode, 'vi');
+  assert.equal(viHook.learningLangCode, 'ja');
+  assert.ok(viHook.description.includes('✔ Luyện tư duy phản xạ tiếng Nhật'));
+  assert.ok(viHook.hashtags.includes('#HocTiengNhat'));
+  assert.ok(viHook.hashtags.includes('#N1'));
+
+  // 3. English learner studying Chinese — phrase-pack style
+  const enPack = buildVideoDescription({
+    title: 'Essential Mandarin Phrases for Daily Life',
+    nativeLang: 'English',
+    learningLang: 'zh',
+    style: 'phrase-pack',
+    itemCount: 25,
+    topicHint: 'HSK 2 Travel',
+  });
+  assert.equal(enPack.nativeLangCode, 'en');
+  assert.equal(enPack.learningLangCode, 'zh');
+  assert.ok(enPack.description.includes('25 essential everyday Chinese phrases'));
+  assert.ok(enPack.hashtags.includes('#LearnChinese'));
+  assert.ok(enPack.hashtags.length <= 10);
+});
+
 
 
 

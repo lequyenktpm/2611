@@ -1029,6 +1029,51 @@ async function startServer(): Promise<void> {
     },
   );
 
+  app.post(
+    '/api/output/save-text',
+    express.json({ limit: '2mb' }),
+    async (req, res) => {
+      try {
+        const textContent = typeof req.body?.textContent === 'string' ? req.body.textContent : '';
+        if (!textContent.trim()) {
+          res.status(400).json({ error: 'Nội dung mô tả .txt rỗng.' });
+          return;
+        }
+        const rawName =
+          typeof req.body?.fileName === 'string' && req.body.fileName.trim()
+            ? req.body.fileName
+            : typeof req.body?.fileBase === 'string' && req.body.fileBase.trim()
+              ? req.body.fileBase
+              : typeof req.body?.title === 'string' && req.body.title.trim()
+                ? req.body.title
+                : 'KineticSub Video';
+        const stem = cleanOutputTitleStem(rawName.replace(/\.(mp4|webm|txt)$/i, ''), 'KineticSub Video');
+        const fileName = `${stem}.txt`;
+        const savePath = typeof req.body?.savePath === 'string' ? req.body.savePath : '';
+        const sourceTab = typeof req.body?.sourceTab === 'string' ? req.body.sourceTab.trim() : '';
+        const { baseDir, targetDir } = resolveSafeOutputDir(savePath, sourceTab);
+        await fs.promises.mkdir(targetDir, { recursive: true });
+        const diskPath = path.join(targetDir, fileName);
+        await fs.promises.writeFile(diskPath, textContent, 'utf8');
+        const stat = await fs.promises.stat(diskPath);
+        const relPath = path.relative(baseDir, diskPath).replace(/\\/g, '/');
+        if (sourceTab) {
+          await recordOutputMeta(relPath, sourceTab);
+        }
+        res.json({
+          ok: true,
+          fileName,
+          relativePath: relPath,
+          savedPath: diskPath,
+          bytes: stat.size,
+          sourceTab: sourceTab || undefined,
+        });
+      } catch (err) {
+        res.status(500).json({ error: err instanceof Error ? err.message : 'Lỗi lưu file mô tả .txt.' });
+      }
+    },
+  );
+
   app.get('/api/output/files', async (req, res) => {
     try {
       const subPath = typeof req.query.path === 'string' ? req.query.path : '';
@@ -1051,7 +1096,7 @@ async function startServer(): Promise<void> {
           const full = path.join(dir, entry.name);
           if (entry.isDirectory() && depth < 2) {
             await scan(full, depth + 1);
-          } else if (entry.isFile() && /\.(mp4|webm|srt|vtt|mp3|wav|zip)$/i.test(entry.name)) {
+          } else if (entry.isFile() && /\.(mp4|webm|srt|vtt|mp3|wav|zip|txt)$/i.test(entry.name)) {
             const st = await fs.promises.stat(full).catch(() => null);
             if (st) {
               const relPath = path.relative(baseDir, full).replace(/\\/g, '/');
@@ -3060,6 +3105,15 @@ Return ONLY valid JSON with keys:
         if (sourceTab) {
           await recordOutputMeta(relPath, sourceTab);
         }
+        const companionText = typeof req.body?.companionText === 'string' ? req.body.companionText : '';
+        if (companionText.trim()) {
+          const txtDiskPath = path.join(targetDir, `${safeBaseName}.txt`);
+          await fs.promises.writeFile(txtDiskPath, companionText, 'utf8');
+          const txtRelPath = path.relative(baseDir, txtDiskPath).replace(/\\/g, '/');
+          if (sourceTab) {
+            await recordOutputMeta(txtRelPath, sourceTab);
+          }
+        }
         await cleanupJob(job.id);
         res.json({
           ok: true,
@@ -3343,6 +3397,16 @@ Return ONLY valid JSON with keys:
       const stat = await fs.promises.stat(diskPath);
       const relPath = path.relative(baseDir, diskPath).replace(/\\/g, '/');
       await recordOutputMeta(relPath, 'Edu Merge');
+      let txtFileName: string | undefined;
+      let txtRelativePath: string | undefined;
+      const descriptionTxt = typeof req.body?.descriptionTxt === 'string' ? req.body.descriptionTxt : '';
+      if (descriptionTxt.trim()) {
+        txtFileName = `${stem}.txt`;
+        const txtDiskPath = path.join(targetDir, txtFileName);
+        await fs.promises.writeFile(txtDiskPath, descriptionTxt, 'utf8');
+        txtRelativePath = path.relative(baseDir, txtDiskPath).replace(/\\/g, '/');
+        await recordOutputMeta(txtRelativePath, 'Edu Merge');
+      }
       job.progress = 100;
       job.status = 'done';
       job.stageLabel = 'Ghép Video hoàn tất!';
@@ -3355,6 +3419,8 @@ Return ONLY valid JSON with keys:
         savedPath: diskPath,
         bytes: stat.size,
         sourceTab: 'Edu Merge',
+        txtFileName,
+        txtRelativePath,
       });
     } catch (err) {
       job.status = 'error';
@@ -3632,6 +3698,16 @@ Return ONLY valid JSON with keys:
       const stat = await fs.promises.stat(diskPath);
       const relPath = path.relative(baseDir, diskPath).replace(/\\/g, '/');
       await recordOutputMeta(relPath, 'Edu Karaoke');
+      let txtFileName: string | undefined;
+      let txtRelativePath: string | undefined;
+      const descriptionTxt = typeof req.body?.descriptionTxt === 'string' ? req.body.descriptionTxt : '';
+      if (descriptionTxt.trim()) {
+        txtFileName = `${stem}.txt`;
+        const txtDiskPath = path.join(targetDir, txtFileName);
+        await fs.promises.writeFile(txtDiskPath, descriptionTxt, 'utf8');
+        txtRelativePath = path.relative(baseDir, txtDiskPath).replace(/\\/g, '/');
+        await recordOutputMeta(txtRelativePath, 'Edu Karaoke');
+      }
       job.progress = 100;
       job.status = 'done';
       job.stageLabel = 'Render Karaoke & Mix hoàn tất!';
@@ -3644,6 +3720,8 @@ Return ONLY valid JSON with keys:
         savedPath: diskPath,
         bytes: stat.size,
         sourceTab: 'Edu Karaoke',
+        txtFileName,
+        txtRelativePath,
       });
     } catch (err) {
       job.status = 'error';

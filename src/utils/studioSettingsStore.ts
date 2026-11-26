@@ -61,6 +61,8 @@ export interface PersistedReelsModeSettings {
   learningScrimOpacity?: number;
   bgmPreset?: StudioBgmPresetId;
   bgmVolume?: number;
+  enableCountdownSfx?: boolean;
+  descriptionStyle?: string;
   watermarkConfig?: WatermarkOutroConfig;
   mp4Resolution?: ExportResolutionId;
   mp4Quality?: ExportQualityId;
@@ -93,6 +95,9 @@ export interface PersistedStudioSettings {
     inlineSecondaryVoice?: string;
     inlineRate?: number;
     inlineWhisperSync?: boolean;
+    bgmPreset?: StudioBgmPresetId;
+    bgmVolume?: number;
+    descriptionStyle?: string;
   };
   reels?: {
     reelCreationMode?: ReelCreationMode;
@@ -133,6 +138,8 @@ export interface PersistedStudioSettings {
     learningScrimOpacity?: number;
     bgmPreset?: StudioBgmPresetId;
     bgmVolume?: number;
+    enableCountdownSfx?: boolean;
+    descriptionStyle?: string;
     watermarkConfig?: WatermarkOutroConfig;
     mp4Resolution?: ExportResolutionId;
     mp4Quality?: ExportQualityId;
@@ -172,7 +179,7 @@ export interface PersistedStudioSettings {
     kmSubSize?: 'Nhỏ' | 'Vừa' | 'Lớn';
     kmHighlightColor?: string;
     kmEffect?: string;
-    kmMusicPreset?: 'lofi-calm' | 'soft-study' | 'none';
+    kmMusicPreset?: 'soft-rain' | 'lofi-calm' | 'soft-study' | 'none';
     kmSfxPreset?: 'soft-rain' | 'cafe-room' | 'none';
     kmMuteOriginal?: boolean;
     kmRemoveDialogue?: boolean;
@@ -264,6 +271,8 @@ export function resolveReelsModeSettings(
       learningScrimOpacity: reelsSaved.learningScrimOpacity,
       bgmPreset: reelsSaved.bgmPreset,
       bgmVolume: reelsSaved.bgmVolume,
+      enableCountdownSfx: reelsSaved.enableCountdownSfx,
+      descriptionStyle: reelsSaved.descriptionStyle,
       watermarkConfig: reelsSaved.watermarkConfig,
       mp4Resolution: reelsSaved.mp4Resolution,
       mp4Quality: reelsSaved.mp4Quality,

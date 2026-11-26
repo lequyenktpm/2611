@@ -551,6 +551,41 @@ export async function exportBlobToServerOutput(
   };
 }
 
+export async function saveCompanionTextToServerOutput(
+  fileName: string,
+  textContent: string,
+  savePath?: string,
+  sourceTab?: string,
+  signal?: AbortSignal,
+): Promise<{ savedPath: string; relativePath?: string; fileName: string; byteLength: number } | null> {
+  if (!textContent.trim()) return null;
+  const resolvedFolder = resolveTabOutputSubfolder(sourceTab, savePath);
+  const res = await fetch('/api/output/save-text', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      fileName,
+      textContent,
+      savePath: resolvedFolder,
+      sourceTab,
+    }),
+    signal,
+  });
+  if (!res.ok) return null;
+  const data = (await res.json().catch(() => ({}))) as {
+    savedPath?: string;
+    relativePath?: string;
+    fileName?: string;
+    bytes?: number;
+  };
+  return {
+    savedPath: data.savedPath || `output/${resolvedFolder}/${fileName}`,
+    relativePath: data.relativePath,
+    fileName: data.fileName || fileName,
+    byteLength: data.bytes ?? textContent.length,
+  };
+}
+
 async function exportWithServerFfmpeg(
   project: LessonProject,
   audioFile: File | null,
@@ -837,6 +872,7 @@ export async function exportProjectToVideo(
     alsoSaveToServerOutput?: boolean;
     savePath?: string;
     sourceTab?: string;
+    companionText?: string;
   },
 ): Promise<ExportVideoResult> {
   const effectiveAspect = settings.aspectRatio || project.aspectRatio || '9:16';
@@ -851,6 +887,12 @@ export async function exportProjectToVideo(
   });
 
   const finalizeArchive = async (res: ExportVideoResult): Promise<ExportVideoResult> => {
+    const txtBody = options?.companionText?.trim();
+    const txtFileName = res.fileName.replace(/\.(mp4|webm|mov)$/i, '') + '.txt';
+    if (txtBody && !options?.skipDownload && !options?.signal?.aborted) {
+      const txtBlob = new Blob([txtBody], { type: 'text/plain;charset=utf-8' });
+      setTimeout(() => triggerBlobDownload(txtBlob, txtFileName), 250);
+    }
     if (options?.alsoSaveToServerOutput && res.blob && !options?.signal?.aborted) {
       try {
         onProgress({ progress: 0.98, stageLabel: 'Đang lưu thêm bản sao vào thư mục output...' });
@@ -861,6 +903,15 @@ export async function exportProjectToVideo(
           options.signal,
           options.sourceTab,
         );
+        if (txtBody) {
+          await saveCompanionTextToServerOutput(
+            txtFileName,
+            txtBody,
+            options.savePath,
+            options.sourceTab,
+            options.signal,
+          ).catch(() => null);
+        }
         onProgress({ progress: 1, stageLabel: `Hoàn tất! Đã lưu: ${saved.savedPath}` });
         return { ...res, savedPath: saved.savedPath };
       } catch (err) {
@@ -917,6 +968,7 @@ export async function exportProjectToServerDisk(
     signal?: AbortSignal;
     directoryHandle?: any;
     sourceTab?: string;
+    companionText?: string;
     customRenderFrame?: (ctx: CanvasRenderingContext2D, time: number, width: number, height: number) => void;
     onBeforeRenderFrame?: (time: number) => Promise<void>;
   },
@@ -930,6 +982,8 @@ export async function exportProjectToServerDisk(
   const encoding = resolveMp4EncodingParams(effectiveSettings);
   const baseName = sanitizeFileBase(customBaseName || effectiveProject.title || effectiveProject.id);
   const targetFileName = `${baseName}.mp4`;
+  const targetTxtName = `${baseName}.txt`;
+  const txtBody = options?.companionText?.trim() || '';
 
   // Primary WebCodecs path: Build finished MP4 locally in browser, then save directly to picked folder or /api/output/save
   // Eliminates chunked frame uploads that triggered "HTTP 404: Render job not found"!
@@ -949,6 +1003,12 @@ export async function exportProjectToServerDisk(
         const writable = await fileHandle.createWritable();
         await writable.write(webResult.blob);
         await writable.close();
+        if (txtBody) {
+          const txtHandle = await options.directoryHandle.getFileHandle(targetTxtName, { create: true });
+          const txtWritable = await txtHandle.createWritable();
+          await txtWritable.write(new Blob([txtBody], { type: 'text/plain;charset=utf-8' }));
+          await txtWritable.close();
+        }
         onProgress({ progress: 1, stageLabel: 'Hoàn tất lưu vào thư mục máy!' });
         return {
           savedPath: `${options.directoryHandle.name}/${targetFileName}`,
@@ -966,6 +1026,15 @@ export async function exportProjectToServerDisk(
         options?.signal,
         options?.sourceTab,
       );
+      if (txtBody) {
+        await saveCompanionTextToServerOutput(
+          targetTxtName,
+          txtBody,
+          customSavePath,
+          options?.sourceTab,
+          options?.signal,
+        ).catch(() => null);
+      }
       onProgress({ progress: 1, stageLabel: 'Hoàn tất lưu vào thư mục output!' });
       return saved;
     }
@@ -1097,6 +1166,7 @@ export async function exportProjectToServerDisk(
         saveToDisk: true,
         savePath: resolvedFolder,
         sourceTab: options?.sourceTab,
+        companionText: txtBody || undefined,
       }),
       signal: options?.signal,
     });

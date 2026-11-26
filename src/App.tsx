@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Clapperboard, Database, Film, Layers, RotateCcw, Sparkles, X } from 'lucide-react';
 import { AudioSubtitleStudioModal } from './components/AudioSubtitleStudioModal';
 import { AutomationPipelinePanel, PresetId } from './components/AutomationPipelinePanel';
@@ -10,11 +10,19 @@ import { GlobalOutputPanel, emitOutputUpdated } from './components/GlobalOutputP
 import { StagePreview } from './components/StagePreview';
 import { TimelineAndInspector } from './components/TimelineAndInspector';
 import {
+  DEFAULT_BGM_PRESET,
+  DEFAULT_BGM_VOLUME,
+  mixVoiceWithBgmPreset,
+  StudioBgmPresetId,
+} from './engine/audioMixHelper';
+import {
   choreographFromTranscript,
   resyncProjectTimingToCues,
 } from './engine/autoChoreographer';
 import { syncCustomComponentsFromServer } from './engine/customComponentStore';
+import { buildVideoDescription, VideoDescriptionStyle } from './engine/videoDescriptionBuilder';
 import { hydrateClientApiKeysFromServer } from './utils/apiKeysStore';
+import { playExportCompleteSound } from './utils/soundEffects';
 import {
   hydrateUserSettingsFromServer,
   loadPersistedSettings,
@@ -151,6 +159,16 @@ export default function App() {
     showToneMeter: false,
     showSentenceCard: true,
   });
+  const [studioBgmPreset, setStudioBgmPreset] = useState<StudioBgmPresetId>(
+    () => initialSavedSettings.studio?.bgmPreset || DEFAULT_BGM_PRESET,
+  );
+  const [studioBgmVolume, setStudioBgmVolume] = useState<number>(
+    () => initialSavedSettings.studio?.bgmVolume ?? DEFAULT_BGM_VOLUME,
+  );
+  const [studioCustomBgmFile, setStudioCustomBgmFile] = useState<File | null>(null);
+  const [studioDescriptionStyle, setStudioDescriptionStyle] = useState<VideoDescriptionStyle>(
+    () => (initialSavedSettings.studio?.descriptionStyle as VideoDescriptionStyle) || 'auto',
+  );
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const rafRef = useRef<number | null>(null);
@@ -261,6 +279,11 @@ export default function App() {
               : patched;
           return nextSub ? { ...recomposed, subtitleConfig: nextSub } : recomposed;
         });
+        if (s.studio.bgmPreset) setStudioBgmPreset(s.studio.bgmPreset);
+        if (typeof s.studio.bgmVolume === 'number') setStudioBgmVolume(s.studio.bgmVolume);
+        if (s.studio.descriptionStyle) {
+          setStudioDescriptionStyle(s.studio.descriptionStyle as VideoDescriptionStyle);
+        }
       }
     };
     const onReset = () => {
@@ -269,6 +292,10 @@ export default function App() {
       setProject(PRESET_JP_EN_POLITE);
       setCurrentTime(4.8);
       setSelectedElementId(null);
+      setStudioBgmPreset(DEFAULT_BGM_PRESET);
+      setStudioBgmVolume(DEFAULT_BGM_VOLUME);
+      setStudioCustomBgmFile(null);
+      setStudioDescriptionStyle('auto');
       setIsConfirmingReset(false);
     };
     window.addEventListener(USER_SETTINGS_HYDRATED_EVENT, onHydrated);
@@ -299,6 +326,9 @@ export default function App() {
           project.backgroundImage?.kind === 'preset' ? project.backgroundImage.presetId || '' : '',
         learningScrimOpacity: project.backgroundImage?.learningScrimOpacity,
         watermark: project.watermark,
+        bgmPreset: studioBgmPreset,
+        bgmVolume: studioBgmVolume,
+        descriptionStyle: studioDescriptionStyle,
       },
     });
   }, [
@@ -312,6 +342,9 @@ export default function App() {
     project.subtitleConfig,
     project.backgroundImage,
     project.watermark,
+    studioBgmPreset,
+    studioBgmVolume,
+    studioDescriptionStyle,
   ]);
 
   useEffect(() => {
@@ -911,6 +944,19 @@ export default function App() {
     }
   }, []);
 
+  const studioDescription = useMemo(
+    () =>
+      buildVideoDescription({
+        title: project.title,
+        nativeLang: 'vi',
+        learningLang: 'auto',
+        style: studioDescriptionStyle,
+        project,
+        durationSec: project.duration,
+      }),
+    [project, studioDescriptionStyle],
+  );
+
   const handleExportVideo = useCallback(
     async (projectOverride?: LessonProject): Promise<ExportVideoResult | null> => {
       if (isExportingVideo) return null;
@@ -929,25 +975,58 @@ export default function App() {
           targetProject.title || targetProject.id,
           'Studio Video',
         );
+        const targetDescription = projectOverride
+          ? buildVideoDescription({
+              title: targetProject.title,
+              nativeLang: 'vi',
+              learningLang: 'auto',
+              style: studioDescriptionStyle,
+              project: targetProject,
+              durationSec: targetProject.duration,
+            })
+          : studioDescription;
+
+        let finalAudioForExport: File | null = audioFile;
+        const shouldMixBgm =
+          (studioBgmPreset !== 'none' || Boolean(studioCustomBgmFile)) && studioBgmVolume > 0;
+        if (shouldMixBgm) {
+          setExportStageLabel('Đang hòa âm nhạc nền + âm thanh...');
+          const speechWindows = targetProject.cues.map((c) => ({ start: c.start, end: c.end }));
+          const mixed = await mixVoiceWithBgmPreset({
+            voiceFile: audioFile,
+            bgmPreset: studioBgmPreset,
+            bgmVolume: studioBgmVolume,
+            customBgmFile: studioCustomBgmFile,
+            speechWindows,
+            minTotalDurationSec: targetProject.duration,
+            outputFileName: `${cleanFileBase}.wav`,
+          });
+          if (mixed.file) {
+            finalAudioForExport = mixed.file;
+          }
+        }
+
         const result = await exportProjectToVideo(
           targetProject,
-          audioFile,
+          finalAudioForExport,
           ({ progress, stageLabel }) => {
             setExportProgress(progress);
             setExportStageLabel(stageLabel);
           },
           mp4Settings,
-            {
+          {
             signal: controller.signal,
             customFileBase: cleanFileBase,
             alsoSaveToServerOutput: true,
             savePath: TAB_OUTPUT_SUBFOLDERS.studio,
             sourceTab: `Studio ${targetProject.aspectRatio || mp4Settings.aspectRatio || '9:16'}`,
+            companionText: targetDescription.txtContent,
           },
         );
         emitOutputUpdated({
           sourceTab: `Studio ${targetProject.aspectRatio || mp4Settings.aspectRatio || '9:16'}`,
         });
+        playExportCompleteSound();
         try {
           const outRes = await fetch('/api/output/files');
           const outData = (await outRes.json().catch(() => ({}))) as {
@@ -983,7 +1062,17 @@ export default function App() {
         setExportStageLabel('');
       }
     },
-    [isExportingVideo, project, audioFile, mp4Settings],
+    [
+      isExportingVideo,
+      project,
+      audioFile,
+      mp4Settings,
+      studioBgmPreset,
+      studioBgmVolume,
+      studioCustomBgmFile,
+      studioDescriptionStyle,
+      studioDescription,
+    ],
   );
 
   const handleApplyAndRenderVideo = useCallback(
@@ -1327,6 +1416,15 @@ export default function App() {
                 onMoveElement={handleMoveElement}
                 onApplySubtitlePositionToAll={handleApplySubtitlePositionToAll}
                 onResetElementPosition={handleResetElementPosition}
+                bgmPreset={studioBgmPreset}
+                bgmVolume={studioBgmVolume}
+                customBgmFile={studioCustomBgmFile}
+                onChangeBgmPreset={setStudioBgmPreset}
+                onChangeBgmVolume={setStudioBgmVolume}
+                onChangeCustomBgmFile={setStudioCustomBgmFile}
+                descriptionOutput={studioDescription}
+                descriptionStyle={studioDescriptionStyle}
+                onChangeDescriptionStyle={setStudioDescriptionStyle}
                 onExportVideo={() => void handleExportVideo()}
                 onCancelExportVideo={handleCancelExportVideo}
                 onOpenOutputFolder={() => void handleOpenOutputFolder()}

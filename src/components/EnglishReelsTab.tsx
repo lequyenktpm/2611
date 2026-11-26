@@ -10,6 +10,7 @@ import {
   CopyPlus,
   Download,
   ExternalLink,
+  FileText,
   Film,
   Globe,
   HelpCircle,
@@ -23,7 +24,9 @@ import {
   Stamp,
   Square,
   Trash2,
+  Upload,
   Volume2,
+  X,
 } from 'lucide-react';
 import { BACKGROUND_PRESETS } from '../engine/backgroundPresets';
 import {
@@ -95,10 +98,22 @@ import {
   synthesizeAudioWithProgressJob,
 } from '../engine/ttsSyncHelper';
 import {
+  DEFAULT_BGM_PRESET,
+  DEFAULT_BGM_VOLUME,
+  extractCountdownWindowsFromElements,
   mixVoiceWithBgmPreset,
   STUDIO_BGM_PRESETS,
   StudioBgmPresetId,
 } from '../engine/audioMixHelper';
+import {
+  buildVideoDescription,
+  VideoDescriptionStyle,
+} from '../engine/videoDescriptionBuilder';
+import {
+  playCountdownRevealChime,
+  playCountdownTickSound,
+  playExportCompleteSound,
+} from '../utils/soundEffects';
 import { cleanReadingWorksheetInput } from '../engine/readingPromptBuilder';
 import {
   BackgroundFitMode,
@@ -287,6 +302,9 @@ interface ReelsModeWorkspaceSnapshot {
   backgroundImage: BackgroundImageConfig | undefined;
   bgmPreset: StudioBgmPresetId;
   bgmVolume: number;
+  customBgmFile: File | null;
+  enableCountdownSfx: boolean;
+  descriptionStyle: VideoDescriptionStyle;
   watermarkConfig: WatermarkOutroConfig;
   mp4Resolution: ExportResolutionId;
   mp4Quality: ExportQualityId;
@@ -522,9 +540,20 @@ export const EnglishReelsTab: React.FC<EnglishReelsTabProps> = ({ onSendToStudio
   const [studioError, setStudioError] = useState<string | null>(null);
   const [previewAudioUrl, setPreviewAudioUrl] = useState<string | null>(null);
   const [bgmPreset, setBgmPreset] = useState<StudioBgmPresetId>(
-    () => initialModeSaved.bgmPreset || 'lofi-calm',
+    () => initialModeSaved.bgmPreset || DEFAULT_BGM_PRESET,
   );
-  const [bgmVolume, setBgmVolume] = useState<number>(() => initialModeSaved.bgmVolume ?? 0.18);
+  const [bgmVolume, setBgmVolume] = useState<number>(
+    () => initialModeSaved.bgmVolume ?? DEFAULT_BGM_VOLUME,
+  );
+  const [customBgmFile, setCustomBgmFile] = useState<File | null>(null);
+  const [enableCountdownSfx, setEnableCountdownSfx] = useState<boolean>(
+    () => initialModeSaved.enableCountdownSfx ?? true,
+  );
+  const [descriptionStyle, setDescriptionStyle] = useState<VideoDescriptionStyle>(
+    () => (initialModeSaved.descriptionStyle as VideoDescriptionStyle) || 'auto',
+  );
+  const [isDescriptionExpanded, setIsDescriptionExpanded] = useState(false);
+  const [copiedDescNotice, setCopiedDescNotice] = useState<'desc' | 'tags' | 'all' | null>(null);
   const [watermarkConfig, setWatermarkConfig] = useState<WatermarkOutroConfig>(() => ({
     ...DEFAULT_REELS_WATERMARK,
     ...(initialModeSaved.watermarkConfig || {}),
@@ -599,6 +628,9 @@ export const EnglishReelsTab: React.FC<EnglishReelsTabProps> = ({ onSendToStudio
         ttsRate,
         bgmPreset,
         bgmVolume,
+        customBgmName: customBgmFile?.name || '',
+        customBgmSize: customBgmFile?.size || 0,
+        enableCountdownSfx,
         outroSeconds: watermarkConfig.outroSeconds,
         outroLine1: watermarkConfig.outroLine1,
         outroLine2: watermarkConfig.outroLine2,
@@ -614,6 +646,8 @@ export const EnglishReelsTab: React.FC<EnglishReelsTabProps> = ({ onSendToStudio
       ttsRate,
       bgmPreset,
       bgmVolume,
+      customBgmFile,
+      enableCountdownSfx,
       watermarkConfig.outroSeconds,
       watermarkConfig.outroLine1,
       watermarkConfig.outroLine2,
@@ -622,10 +656,12 @@ export const EnglishReelsTab: React.FC<EnglishReelsTabProps> = ({ onSendToStudio
 
   const videoCanvasRef = useRef<HTMLCanvasElement>(null);
   const bgInputRef = useRef<HTMLInputElement>(null);
+  const bgmFileInputRef = useRef<HTMLInputElement>(null);
   const lessonAudioRef = useRef<HTMLAudioElement>(null);
   const videoRafRef = useRef<number | null>(null);
   const lastRafTsRef = useRef<number | null>(null);
   const exportAbortRef = useRef<AbortController | null>(null);
+  const lastCountdownSfxKeyRef = useRef<string>('');
 
   useEffect(() => {
     const onHydrated = (ev: Event) => {
@@ -689,8 +725,10 @@ export const EnglishReelsTab: React.FC<EnglishReelsTabProps> = ({ onSendToStudio
       } else {
         setBackgroundImage(undefined);
       }
-      setBgmPreset(m.bgmPreset || 'lofi-calm');
-      setBgmVolume(typeof m.bgmVolume === 'number' ? m.bgmVolume : 0.18);
+      setBgmPreset(m.bgmPreset || DEFAULT_BGM_PRESET);
+      setBgmVolume(typeof m.bgmVolume === 'number' ? m.bgmVolume : DEFAULT_BGM_VOLUME);
+      setEnableCountdownSfx(m.enableCountdownSfx ?? true);
+      setDescriptionStyle((m.descriptionStyle as VideoDescriptionStyle) || 'auto');
       setWatermarkConfig({ ...DEFAULT_REELS_WATERMARK, ...(m.watermarkConfig || {}) });
       setMp4Resolution(m.mp4Resolution || DEFAULT_MP4_EXPORT_SETTINGS.resolution);
       setMp4Quality(m.mp4Quality || DEFAULT_MP4_EXPORT_SETTINGS.quality);
@@ -864,6 +902,8 @@ export const EnglishReelsTab: React.FC<EnglishReelsTabProps> = ({ onSendToStudio
       learningScrimOpacity: backgroundImage?.learningScrimOpacity ?? 0.42,
       bgmPreset,
       bgmVolume,
+      enableCountdownSfx,
+      descriptionStyle,
       watermarkConfig,
       mp4Resolution,
       mp4Quality,
@@ -935,6 +975,8 @@ export const EnglishReelsTab: React.FC<EnglishReelsTabProps> = ({ onSendToStudio
     backgroundImage,
     bgmPreset,
     bgmVolume,
+    enableCountdownSfx,
+    descriptionStyle,
     watermarkConfig,
     mp4Resolution,
     mp4Quality,
@@ -1229,6 +1271,90 @@ export const EnglishReelsTab: React.FC<EnglishReelsTabProps> = ({ onSendToStudio
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isVideoPlaying, previewProject.duration, generatedAudioUrl]);
+
+  const countdownWindows = useMemo(
+    () => extractCountdownWindowsFromElements(previewProject.elements),
+    [previewProject.elements],
+  );
+
+  const detectedLearningLangForDesc = useMemo(() => {
+    if (reelCreationMode === 'creator') return creatorLearningLang;
+    if (reelCreationMode === 'translation') return translationLearningLang;
+    return inferLearningLangFromCards(cards);
+  }, [reelCreationMode, creatorLearningLang, translationLearningLang, cards]);
+
+  const videoDescription = useMemo(
+    () =>
+      buildVideoDescription({
+        title: lessonTitle,
+        nativeLang: targetLang,
+        learningLang: detectedLearningLangForDesc,
+        style: descriptionStyle,
+        project: previewProject,
+        durationSec: previewProject.duration,
+        itemCount:
+          reelCreationMode === 'translation'
+            ? translationItemCount
+            : cards.filter((c) => c.type !== 'intro' && c.type !== 'transition' && c.type !== 'outro').length || cards.length,
+        thinkSec: translationThinkSec,
+        repeatCount: translationRepeatCount,
+        hasCountdown: countdownWindows.length > 0,
+        topicHint:
+          reelCreationMode === 'translation'
+            ? translationTopicHint
+            : creatorTopicHint,
+      }),
+    [
+      lessonTitle,
+      targetLang,
+      detectedLearningLangForDesc,
+      descriptionStyle,
+      previewProject,
+      reelCreationMode,
+      translationItemCount,
+      cards,
+      translationThinkSec,
+      translationRepeatCount,
+      countdownWindows.length,
+      translationTopicHint,
+      creatorTopicHint,
+    ],
+  );
+
+  // Silent live-preview countdown tick & reveal chime (disabled once pre-mixed audio is active)
+  useEffect(() => {
+    if (!isVideoPlaying || generatedAudioUrl || !enableCountdownSfx || countdownWindows.length === 0) {
+      if (!isVideoPlaying) {
+        lastCountdownSfxKeyRef.current = '';
+      }
+      return;
+    }
+    for (const win of countdownWindows) {
+      for (let i = 0; i < win.tickTimesSec.length; i++) {
+        const tickSec = win.tickTimesSec[i];
+        if (videoTime >= tickSec && videoTime < tickSec + 0.16) {
+          const key = `tick-${win.startSec}-${i}`;
+          if (lastCountdownSfxKeyRef.current !== key) {
+            lastCountdownSfxKeyRef.current = key;
+            playCountdownTickSound(i === win.tickTimesSec.length - 1);
+          }
+          return;
+        }
+      }
+      if (
+        typeof win.revealChimeSec === 'number' &&
+        videoTime >= win.revealChimeSec &&
+        videoTime < win.revealChimeSec + 0.18
+      ) {
+        const key = `reveal-${win.startSec}`;
+        if (lastCountdownSfxKeyRef.current !== key) {
+          lastCountdownSfxKeyRef.current = key;
+          playCountdownRevealChime();
+        }
+        return;
+      }
+    }
+  }, [isVideoPlaying, videoTime, generatedAudioUrl, enableCountdownSfx, countdownWindows]);
 
   const creatorLevelOptions = useMemo(
     () => getLevelsForLearningLanguage(creatorLearningLang),
@@ -1738,6 +1864,9 @@ export const EnglishReelsTab: React.FC<EnglishReelsTabProps> = ({ onSendToStudio
       backgroundImage,
       bgmPreset,
       bgmVolume,
+      customBgmFile,
+      enableCountdownSfx,
+      descriptionStyle,
       watermarkConfig,
       mp4Resolution,
       mp4Quality,
@@ -1789,6 +1918,9 @@ export const EnglishReelsTab: React.FC<EnglishReelsTabProps> = ({ onSendToStudio
       setBackgroundImage(saved.backgroundImage);
       setBgmPreset(saved.bgmPreset);
       setBgmVolume(saved.bgmVolume);
+      setCustomBgmFile(saved.customBgmFile);
+      setEnableCountdownSfx(saved.enableCountdownSfx);
+      setDescriptionStyle(saved.descriptionStyle);
       setWatermarkConfig(saved.watermarkConfig);
       setMp4Resolution(saved.mp4Resolution);
       setMp4Quality(saved.mp4Quality);
@@ -1831,8 +1963,13 @@ export const EnglishReelsTab: React.FC<EnglishReelsTabProps> = ({ onSendToStudio
           }
         : undefined,
     );
-    setBgmPreset(persistedNext.bgmPreset || 'lofi-calm');
-    setBgmVolume(typeof persistedNext.bgmVolume === 'number' ? persistedNext.bgmVolume : 0.18);
+    setBgmPreset(persistedNext.bgmPreset || DEFAULT_BGM_PRESET);
+    setBgmVolume(
+      typeof persistedNext.bgmVolume === 'number' ? persistedNext.bgmVolume : DEFAULT_BGM_VOLUME,
+    );
+    setCustomBgmFile(null);
+    setEnableCountdownSfx(persistedNext.enableCountdownSfx ?? true);
+    setDescriptionStyle((persistedNext.descriptionStyle as VideoDescriptionStyle) || 'auto');
     setWatermarkConfig({ ...DEFAULT_REELS_WATERMARK, ...(persistedNext.watermarkConfig || {}) });
     setMp4Resolution(persistedNext.mp4Resolution || DEFAULT_MP4_EXPORT_SETTINGS.resolution);
     setMp4Quality(persistedNext.mp4Quality || DEFAULT_MP4_EXPORT_SETTINGS.quality);
@@ -2522,13 +2659,25 @@ export const EnglishReelsTab: React.FC<EnglishReelsTabProps> = ({ onSendToStudio
     setSyncedSpeedFactor(1);
 
     let finalAudioFile: File = rawAudioFile;
-    if (bgmPreset !== 'none' && bgmVolume > 0) {
-      setTtsStageLabel('Đang hòa âm nhạc nền + giọng đọc...');
+    const countdownCues = extractCountdownWindowsFromElements(syncedProj.elements);
+    const shouldMixBgm = (bgmPreset !== 'none' || Boolean(customBgmFile)) && bgmVolume > 0;
+    const shouldMixCountdown = enableCountdownSfx && countdownCues.length > 0;
+    if (shouldMixBgm || shouldMixCountdown) {
+      setTtsStageLabel(
+        shouldMixCountdown && shouldMixBgm
+          ? 'Đang hòa âm nhạc nền + hiệu ứng đếm ngược...'
+          : shouldMixCountdown
+            ? 'Đang ghép hiệu ứng âm thanh đếm ngược...'
+            : 'Đang hòa âm nhạc nền + giọng đọc...',
+      );
       const mixed = await mixVoiceWithBgmPreset({
         voiceFile: rawAudioFile,
         bgmPreset,
         bgmVolume,
+        customBgmFile,
         speechWindows,
+        countdownWindows: countdownCues,
+        enableCountdownSfx,
         outroStartSec,
         minTotalDurationSec: syncedProj.duration,
         outputFileName: cleanDownloadFileName(lessonTitle, 'wav', 'English Reels'),
@@ -2662,12 +2811,14 @@ export const EnglishReelsTab: React.FC<EnglishReelsTabProps> = ({ onSendToStudio
           alsoSaveToServerOutput: true,
           savePath: TAB_OUTPUT_SUBFOLDERS.reels,
           sourceTab: 'English Reels',
+          companionText: videoDescription.txtContent,
         },
       );
 
       emitOutputUpdated({ sourceTab: 'English Reels' });
+      playExportCompleteSound();
       setExportNotice(
-        `Đã xuất thành công ${result.fileName}${result.savedPath ? ` (lưu tại ${result.savedPath})` : ''}!`,
+        `Đã xuất thành công ${result.fileName} kèm ${cleanExportBase}.txt${result.savedPath ? ` (lưu tại ${result.savedPath})` : ''}!`,
       );
     } catch (err) {
       if (err instanceof ExportAbortedError || controller.signal.aborted) {
@@ -5045,39 +5196,98 @@ export const EnglishReelsTab: React.FC<EnglishReelsTabProps> = ({ onSendToStudio
               )}
             </div>
 
-            <div className="grid grid-cols-2 gap-2 pt-1 border-t border-slate-200/80">
-              <div>
-                <label className="block text-[11px] font-semibold text-slate-700 mb-1">
-                  Nhạc nền (Outro &amp; Bài học)
-                </label>
-                <select
-                  aria-label="Nhạc nền English Reels"
-                  value={bgmPreset}
-                  onChange={(e) => setBgmPreset(e.target.value as StudioBgmPresetId)}
-                  className="w-full px-2 py-1.5 text-xs bg-white border border-slate-200 rounded-lg"
-                >
-                  {STUDIO_BGM_PRESETS.map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {p.label}
-                    </option>
-                  ))}
-                </select>
+            <div className="space-y-2 pt-1 border-t border-slate-200/80">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-700 mb-1">
+                    Nhạc nền (Outro &amp; Bài học)
+                  </label>
+                  <select
+                    aria-label="Nhạc nền English Reels"
+                    value={customBgmFile ? 'custom' : bgmPreset}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      if (val === 'custom') return;
+                      setCustomBgmFile(null);
+                      setBgmPreset(val as StudioBgmPresetId);
+                    }}
+                    className="w-full px-2 py-1.5 text-xs bg-white border border-slate-200 rounded-lg"
+                  >
+                    {customBgmFile && (
+                      <option value="custom">Nhạc tải lên: {customBgmFile.name}</option>
+                    )}
+                    {STUDIO_BGM_PRESETS.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-700 mb-1">
+                    Âm lượng nhạc ({Math.round(bgmVolume * 100)}%)
+                  </label>
+                  <input
+                    type="range"
+                    aria-label="Âm lượng nhạc nền English Reels"
+                    disabled={bgmPreset === 'none' && !customBgmFile}
+                    min={0}
+                    max={0.45}
+                    step={0.01}
+                    value={bgmVolume}
+                    onChange={(e) => setBgmVolume(Number(e.target.value))}
+                    className="w-full accent-indigo-600 h-1.5 mt-2 disabled:opacity-40"
+                  />
+                </div>
               </div>
-              <div>
-                <label className="block text-[11px] font-semibold text-slate-700 mb-1">
-                  Âm lượng nhạc ({Math.round(bgmVolume * 100)}%)
+
+              <div className="flex flex-wrap items-center justify-between gap-2 text-[11px]">
+                <div className="flex items-center gap-1.5">
+                  <input
+                    ref={bgmFileInputRef}
+                    type="file"
+                    accept="audio/*,.mp3,.wav,.m4a,.ogg"
+                    className="hidden"
+                    onChange={(e) => {
+                      const f = e.target.files?.[0];
+                      if (f) {
+                        setCustomBgmFile(f);
+                      }
+                      e.currentTarget.value = '';
+                    }}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => bgmFileInputRef.current?.click()}
+                    className="inline-flex items-center gap-1 px-2 py-1 font-medium text-slate-700 bg-white border border-slate-200 rounded-lg hover:bg-slate-100"
+                  >
+                    <Upload className="w-3 h-3 text-indigo-600" />
+                    <span>{customBgmFile ? 'Đổi nhạc nền' : 'Tải nhạc nền'}</span>
+                  </button>
+                  {customBgmFile && (
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-indigo-50 border border-indigo-200 text-indigo-800 rounded-md max-w-[160px]">
+                      <span className="truncate">{customBgmFile.name}</span>
+                      <button
+                        type="button"
+                        aria-label="Gỡ nhạc nền tải lên"
+                        onClick={() => setCustomBgmFile(null)}
+                        className="text-indigo-500 hover:text-rose-600"
+                      >
+                        <X className="w-3 h-3" />
+                      </button>
+                    </span>
+                  )}
+                </div>
+
+                <label className="inline-flex items-center gap-1.5 text-slate-700 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={enableCountdownSfx}
+                    onChange={(e) => setEnableCountdownSfx(e.target.checked)}
+                    className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                  />
+                  <span className="font-medium">Âm thanh đếm ngược (Tick &amp; Ding)</span>
                 </label>
-                <input
-                  type="range"
-                  aria-label="Âm lượng nhạc nền English Reels"
-                  disabled={bgmPreset === 'none'}
-                  min={0}
-                  max={0.45}
-                  step={0.02}
-                  value={bgmVolume}
-                  onChange={(e) => setBgmVolume(Number(e.target.value))}
-                  className="w-full accent-indigo-600 h-1.5 mt-2 disabled:opacity-40"
-                />
               </div>
             </div>
 
@@ -5392,6 +5602,116 @@ export const EnglishReelsTab: React.FC<EnglishReelsTabProps> = ({ onSendToStudio
                 </select>
               </div>
             </div>
+          </div>
+
+          {/* Description & Hashtags (.txt companion output matching learner's native language) */}
+          <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-2.5 space-y-2">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <button
+                type="button"
+                onClick={() => setIsDescriptionExpanded((v) => !v)}
+                className="inline-flex items-center gap-1.5 text-xs font-bold text-slate-800 hover:text-indigo-700"
+              >
+                <FileText className="w-3.5 h-3.5 text-indigo-600" />
+                <span>
+                  Mô tả &amp; Hashtag xuất kèm (.txt · {videoDescription.nativeLangCode.toUpperCase()})
+                </span>
+              </button>
+              <div className="flex items-center gap-1.5">
+                <select
+                  aria-label="Kiểu mô tả video"
+                  value={descriptionStyle}
+                  onChange={(e) => setDescriptionStyle(e.target.value as VideoDescriptionStyle)}
+                  className="px-2 py-1 text-[11px] bg-white border border-slate-200 rounded-md text-slate-700"
+                >
+                  <option value="auto">Tự động theo bài</option>
+                  <option value="hook-bullets">Hook + ✔ Gạch đầu dòng</option>
+                  <option value="training-guide">🏋️ Hướng dẫn &amp; Mục lục</option>
+                  <option value="phrase-pack">📌 Tổng hợp mẫu câu</option>
+                </select>
+                <button
+                  type="button"
+                  onClick={() => {
+                    void navigator.clipboard.writeText(videoDescription.txtContent);
+                    setCopiedDescNotice('all');
+                    setTimeout(() => setCopiedDescNotice(null), 1600);
+                  }}
+                  className="inline-flex items-center gap-1 px-2 py-1 text-[11px] font-semibold bg-white border border-slate-200 rounded-md hover:bg-indigo-50 text-slate-700"
+                >
+                  {copiedDescNotice === 'all' ? (
+                    <Check className="w-3 h-3 text-emerald-600" />
+                  ) : (
+                    <Copy className="w-3 h-3" />
+                  )}
+                  <span>{copiedDescNotice === 'all' ? 'Đã chép' : 'Chép tất cả'}</span>
+                </button>
+              </div>
+            </div>
+
+            {isDescriptionExpanded ? (
+              <div className="space-y-2 pt-1">
+                <textarea
+                  readOnly
+                  aria-label="Nội dung mô tả và hashtag video"
+                  value={videoDescription.txtContent}
+                  rows={7}
+                  className="w-full p-2 text-[11px] leading-relaxed bg-white border border-slate-200 rounded-lg text-slate-800 font-sans resize-y"
+                />
+                <div className="flex flex-wrap items-center justify-between gap-2 text-[11px]">
+                  <div className="flex flex-wrap gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        void navigator.clipboard.writeText(videoDescription.description);
+                        setCopiedDescNotice('desc');
+                        setTimeout(() => setCopiedDescNotice(null), 1600);
+                      }}
+                      className="px-2 py-1 bg-white border border-slate-200 rounded-md hover:bg-slate-100 font-medium text-slate-700"
+                    >
+                      {copiedDescNotice === 'desc' ? '✓ Đã chép mô tả' : 'Chép mô tả'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        void navigator.clipboard.writeText(videoDescription.hashtagsLine);
+                        setCopiedDescNotice('tags');
+                        setTimeout(() => setCopiedDescNotice(null), 1600);
+                      }}
+                      className="px-2 py-1 bg-white border border-slate-200 rounded-md hover:bg-slate-100 font-medium text-slate-700"
+                    >
+                      {copiedDescNotice === 'tags' ? '✓ Đã chép hashtag' : 'Chép hashtag'}
+                    </button>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const stem = cleanOutputTitleStem(lessonTitle, 'English Reels');
+                      const blob = new Blob([videoDescription.txtContent], {
+                        type: 'text/plain;charset=utf-8',
+                      });
+                      const url = URL.createObjectURL(blob);
+                      const a = document.createElement('a');
+                      a.href = url;
+                      a.download = `${stem}.txt`;
+                      document.body.appendChild(a);
+                      a.click();
+                      a.remove();
+                      setTimeout(() => URL.revokeObjectURL(url), 1000);
+                    }}
+                    className="inline-flex items-center gap-1 px-2.5 py-1 font-semibold bg-indigo-50 text-indigo-700 border border-indigo-200 rounded-md hover:bg-indigo-100"
+                  >
+                    <Download className="w-3 h-3" />
+                    <span>Tải .txt</span>
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <p className="text-[11px] text-slate-600 line-clamp-2">
+                <span className="font-semibold text-indigo-700">{videoDescription.hashtags.slice(0, 4).join(' ')}</span>
+                {' · '}
+                <span>Tự xuất file .txt cùng tên &amp; thư mục khi render MP4.</span>
+              </p>
+            )}
           </div>
 
           {(isGeneratingAudio || isPreviewingVoice || isResyncingReels) && (
