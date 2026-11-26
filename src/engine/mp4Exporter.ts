@@ -3,6 +3,7 @@ import {
   ensureProjectAssetsLoaded,
   getStageDimensionsForAspect,
   renderProjectFrame,
+  seekProjectVideoAssets,
 } from './canvasRenderer';
 import {
   DEFAULT_MP4_EXPORT_SETTINGS,
@@ -222,6 +223,7 @@ async function exportWithWebCodecsMp4(
     skipDownload?: boolean;
     customFileBase?: string;
     customRenderFrame?: (ctx: CanvasRenderingContext2D, time: number, width: number, height: number) => void;
+    onBeforeRenderFrame?: (time: number) => Promise<void>;
   },
 ): Promise<ExportVideoResult | null> {
   checkAborted(options?.signal);
@@ -333,6 +335,11 @@ async function exportWithWebCodecsMp4(
       if (encoderError) throw encoderError;
 
       const t = Math.min(project.duration, i / encoding.fps);
+      if (options?.onBeforeRenderFrame) {
+        await options.onBeforeRenderFrame(t);
+      } else {
+        await seekProjectVideoAssets(project, t);
+      }
       if (options?.customRenderFrame) {
         options.customRenderFrame(ctx, t, safeWidth, safeHeight);
       } else {
@@ -626,6 +633,7 @@ async function exportWithServerFfmpeg(
     for (let i = 0; i < totalFrames; i++) {
       checkAborted(signal);
       const t = Math.min(project.duration, i / encoding.fps);
+      await seekProjectVideoAssets(project, t);
       renderScaledProjectFrame(ctx, project, t, safeWidth, safeHeight);
       const jpeg = await canvasToJpegBlob(offscreenCanvas, 0.85);
 
@@ -778,6 +786,7 @@ async function exportProjectToWebmFallback(
         throw new ExportAbortedError();
       }
       const t = Math.min(project.duration, i / encoding.fps);
+      await seekProjectVideoAssets(project, t);
       renderScaledProjectFrame(ctx, project, t, encoding.width, encoding.height);
       onProgress({
         progress: i / totalFrames,
@@ -909,6 +918,7 @@ export async function exportProjectToServerDisk(
     directoryHandle?: any;
     sourceTab?: string;
     customRenderFrame?: (ctx: CanvasRenderingContext2D, time: number, width: number, height: number) => void;
+    onBeforeRenderFrame?: (time: number) => Promise<void>;
   },
 ): Promise<{ savedPath: string; relativePath?: string; fileName: string; byteLength: number }> {
   checkAborted(options?.signal);
@@ -930,6 +940,7 @@ export async function exportProjectToServerDisk(
       skipDownload: true,
       customFileBase: baseName,
       customRenderFrame: options?.customRenderFrame,
+      onBeforeRenderFrame: options?.onBeforeRenderFrame,
     });
     if (webResult?.blob) {
       if (options?.directoryHandle) {
@@ -1038,6 +1049,11 @@ export async function exportProjectToServerDisk(
     for (let i = 0; i < totalFrames; i++) {
       checkAborted(options?.signal);
       const t = Math.min(project.duration, i / encoding.fps);
+      if (options?.onBeforeRenderFrame) {
+        await options.onBeforeRenderFrame(t);
+      } else {
+        await seekProjectVideoAssets(project, t);
+      }
       if (options?.customRenderFrame) {
         options.customRenderFrame(ctx, t, safeWidth, safeHeight);
       } else {

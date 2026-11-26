@@ -7,7 +7,8 @@ export interface ReadingWebPromptOptions {
   sourceText?: string;
   topic?: string;
   level: ReadingCefrLevel;
-  wordCount: number;
+  wordCount?: number;
+  durationMinutes?: number;
 }
 
 export interface ParsedReadingPassage {
@@ -119,7 +120,17 @@ export function cleanReadingWorksheetInput(
 
 export function buildReadingWebAiPrompt(opts: ReadingWebPromptOptions): string {
   const level = opts.level || 'B1';
-  const wordCount = Math.max(40, Math.min(260, Math.round(opts.wordCount || 110)));
+  const durationMinutes =
+    typeof opts.durationMinutes === 'number' &&
+    Number.isFinite(opts.durationMinutes) &&
+    opts.durationMinutes > 0
+      ? Math.max(0.5, Math.min(15, Number(opts.durationMinutes.toFixed(1))))
+      : undefined;
+  const fallbackWords = durationMinutes ? Math.round(durationMinutes * 125) : 110;
+  const wordCount = Math.max(40, Math.min(1500, Math.round(opts.wordCount || fallbackWords)));
+  const estimatedMinutesLabel = durationMinutes
+    ? `${durationMinutes} phút (~${Math.round(durationMinutes * 60)} giây)`
+    : `~${Math.max(0.5, Number((wordCount / 125).toFixed(1)))} phút`;
   const cleanUrl = (opts.url || '').trim();
   const cleanSource = (opts.sourceText || '').trim().slice(0, 8500);
   const cleanTopic = (opts.topic || '').trim();
@@ -147,7 +158,7 @@ ${sourceBlock}
 
 # YÊU CẦU TRÌNH ĐỘ & ĐỘ DÀI
 - Trình độ: ${LEVEL_GUIDANCE[level]}
-- Độ dài mục tiêu: khoảng **${wordCount} từ tiếng Anh**.
+- Thời lượng render mục tiêu: **${estimatedMinutesLabel}** → Độ dài mục tiêu khoảng **${wordCount} từ tiếng Anh**${durationMinutes && durationMinutes >= 2 ? ' (mở rộng câu chuyện/bài phân tích đủ sâu và phong phú kiến thức cho đúng số phút mong muốn)' : ''}.
 - TUYỆT ĐỐI KHÔNG đưa các dòng nhãn bài tập ("Practice Reading English Exercises...", "Exercise 1", "Part 1") hoặc tiêu đề markdown \`##\` vào trường \`text\`. Chỉ giữ các câu đọc tiếng Anh hoàn chỉnh.
 - Mỗi câu viết trên **1 dòng riêng** (ngăn cách bằng \\n), KHÔNG đánh số thứ tự, KHÔNG gắn timestamp, KHÔNG markdown (\`**\`, \`*\`), KHÔNG emoji, để app đọc TTS & chạy bàn tay chỉ chữ chính xác từng từ.
 

@@ -34,6 +34,14 @@ export interface LayoutCompositionMeta {
 
 export const LAYOUT_COMPOSITIONS: LayoutCompositionMeta[] = [
   {
+    id: 'plain',
+    name: 'Plain — Chỉ Chữ & Nền (Tối giản YouTube)',
+    shortLabel: 'Plain (Chỉ chữ)',
+    description: 'Không chèn thẻ hay hình minh họa — chỉ nền ảnh/video (có opacity dịu mắt) và phụ đề ở giữa/tùy chỉnh',
+    recommendedTheme: 'studio-slate',
+    signatureVariant: 'css-sticky-note',
+  },
+  {
     id: 'story-scenes',
     name: 'Cảnh đời sống (@168 Story)',
     shortLabel: 'Cảnh đời sống',
@@ -200,7 +208,7 @@ export function hasTimeContext(text?: string): boolean {
 export function getEligibleCompositionsForContext(
   transcriptText?: string,
 ): LayoutCompositionMeta[] {
-  const withoutCustom = LAYOUT_COMPOSITIONS.filter((c) => c.id !== 'custom');
+  const withoutCustom = LAYOUT_COMPOSITIONS.filter((c) => c.id !== 'custom' && c.id !== 'plain');
   const allowClock = transcriptText ? hasTimeContext(transcriptText) : true;
   if (allowClock) return withoutCustom;
   return withoutCustom.filter((c) => c.id !== 'clock-spotlight');
@@ -780,7 +788,8 @@ function buildIllustrationDataForComposition(
       };
     }
 
-    case 'custom': {
+    case 'custom':
+    case 'plain': {
       const resolved = resolveContextualVisualForCue(seg.cueText, seg.cardText, 'css-sticky-note');
       return {
         variant: resolved.variant,
@@ -803,6 +812,61 @@ export function recomposeProjectWithStyle(
   const karaokeEls = project.elements.filter((e) => e.type === 'karaoke-card');
 
   const newVisuals: SceneElement[] = [];
+
+  if (compositionId === 'plain') {
+    const nextSubConfig = project.subtitleConfig ?? {
+      position: 'center' as const,
+      size: 'lg' as const,
+      boxStyle: 'clean' as const,
+    };
+    const pos = nextSubConfig.position || 'center';
+    const targetY = pos === 'top' ? 350 : pos === 'bottom' ? 1585 : 960;
+    const baseKaraoke: SceneElement[] =
+      karaokeEls.length > 0
+        ? karaokeEls
+        : project.cues.map((cue, idx) => ({
+            id: `plain-karaoke-${idx + 1}`,
+            type: 'karaoke-card',
+            label: `Sub #${idx + 1}: ${cue.text.slice(0, 26)}`,
+            startTime: cue.start,
+            endTime: cue.end,
+            enterAnimation: 'fade-scale',
+            exitAnimation: 'fade-out',
+            layout: { x: 540, y: targetY, width: 920, scale: 1, zIndex: 35 },
+            props: {
+              kind: 'karaoke-card',
+              cueId: cue.id,
+              words: cue.words,
+              variant: 'plain-shadow',
+              activeColor: '#FACC15',
+              inactiveColor: '#E2E8F0',
+              spokenColor: '#FFFFFF',
+            },
+          }));
+    const themedPlain = baseKaraoke.map((k) =>
+      k.props.kind === 'karaoke-card'
+        ? {
+            ...k,
+            layout: { ...k.layout, y: targetY },
+            props: {
+              ...k.props,
+              variant: 'plain-shadow' as const,
+              activeColor: '#FACC15',
+              inactiveColor: '#E2E8F0',
+              spokenColor: '#FFFFFF',
+            },
+          }
+        : k,
+    );
+    return {
+      ...project,
+      theme: nextTheme,
+      compositionId: 'plain',
+      subtitleConfig: nextSubConfig,
+      subtitle: `${project.cues.length} câu thoại · Plain (Chỉ chữ & nền)`,
+      elements: resolveProjectOverlaps(themedPlain, { preserveKaraokeY: true }),
+    };
+  }
 
   if (compositionId === 'word-reveal') {
     // Unified @xun52000 Word Reveal kinetic typography choreography
@@ -1198,10 +1262,14 @@ export function recomposeProjectWithStyle(
 
   // Adapt karaoke card theme colors cleanly
   const isDarkTheme = isDarkCanvasTheme(nextTheme);
+  const subPos = project.subtitleConfig?.position;
+  const posTargetY =
+    subPos === 'top' ? 340 : subPos === 'center' ? 960 : undefined;
   const themedKaraoke: SceneElement[] = karaokeEls.map((k) => {
     if (k.props.kind !== 'karaoke-card') return k;
     return {
       ...k,
+      layout: posTargetY !== undefined ? { ...k.layout, y: posTargetY } : k.layout,
       props: {
         ...k.props,
         variant: isDarkTheme ? 'dark-bar' : 'white-card',
@@ -1212,7 +1280,9 @@ export function recomposeProjectWithStyle(
     };
   });
 
-  const resolved = resolveProjectOverlaps([...newVisuals, ...themedKaraoke]);
+  const resolved = resolveProjectOverlaps([...newVisuals, ...themedKaraoke], {
+    preserveKaraokeY: Boolean(posTargetY !== undefined),
+  });
 
   return {
     ...project,

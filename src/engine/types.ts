@@ -10,11 +10,35 @@ export type CanvasThemeId =
 
 export type BackgroundFitMode = 'cover' | 'contain';
 
+export type BackgroundMediaKind = 'image' | 'video' | 'preset';
+
+export type BackgroundPresetId =
+  | 'cozy-rain-cafe'
+  | 'night-study-desk'
+  | 'misty-forest-dusk'
+  | 'midnight-city-lofi'
+  | 'warm-sunset-paper'
+  | 'zen-botanical-room';
+
 export interface BackgroundImageConfig {
-  dataUrl: string;
+  kind?: BackgroundMediaKind; // defaults to 'image' when dataUrl is present
+  dataUrl?: string;
+  videoUrl?: string;
+  presetId?: BackgroundPresetId;
   fileName?: string;
   fit?: BackgroundFitMode;
-  scrimOpacity?: number; // 0..0.85 overlay to keep text crisp over photos
+  scrimOpacity?: number; // 0..0.9 base overlay opacity
+  learningScrimOpacity?: number; // 0..0.92 extra focus scrim when learning text/subtitles appear
+}
+
+export type SubtitlePosition = 'top' | 'center' | 'bottom';
+export type SubtitleSize = 'sm' | 'md' | 'lg' | 'xl';
+export type SubtitleBoxStyle = 'card' | 'clean' | 'pill';
+
+export interface SubtitleDisplayConfig {
+  position?: SubtitlePosition;
+  size?: SubtitleSize;
+  boxStyle?: SubtitleBoxStyle;
 }
 
 export interface WordTiming {
@@ -276,6 +300,7 @@ export interface IllustrationPropProps {
 }
 
 export type LayoutCompositionId =
+  | 'plain'
   | 'story-scenes'
   | 'flow-steps'
   | 'gauge-tone'
@@ -360,7 +385,8 @@ export interface KaraokeCardProps {
   activeColor: string;
   inactiveColor: string;
   spokenColor: string;
-  variant?: 'white-card' | 'dark-bar';
+  variant?: 'white-card' | 'dark-bar' | 'plain-shadow';
+  helperText?: string;
 }
 
 export type SceneElementProps =
@@ -405,6 +431,7 @@ export interface LessonProject {
   theme: CanvasThemeId;
   compositionId?: LayoutCompositionId;
   backgroundImage?: BackgroundImageConfig;
+  subtitleConfig?: SubtitleDisplayConfig;
   watermark?: WatermarkOutroConfig;
   duration: number;
   fps: 30 | 60;

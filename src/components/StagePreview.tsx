@@ -1,10 +1,12 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Download, FolderOpen, Image as ImageIcon, Pause, Play, RotateCcw, Shuffle, Stamp, Square, Trash2 } from 'lucide-react';
+import { BACKGROUND_PRESETS } from '../engine/backgroundPresets';
 import {
   ensureProjectAssetsLoaded,
   getStageDimensionsForAspect,
   hitTestElementLayout,
   renderProjectFrame,
+  seekBackgroundVideoTo,
   subscribeBgImageLoaded,
 } from '../engine/canvasRenderer';
 import { subscribeCustomComponents } from '../engine/customComponentStore';
@@ -22,6 +24,7 @@ import {
 import {
   BackgroundFitMode,
   BackgroundImageConfig,
+  BackgroundPresetId,
   CANVAS_THEMES,
   CanvasThemeId,
   CustomComponentPresetConfig,
@@ -29,6 +32,10 @@ import {
   IllustrationVariant,
   LayoutCompositionId,
   LessonProject,
+  SubtitleBoxStyle,
+  SubtitleDisplayConfig,
+  SubtitlePosition,
+  SubtitleSize,
   WatermarkCorner,
   WatermarkOutroConfig,
 } from '../engine/types';
@@ -71,6 +78,7 @@ interface StagePreviewProps {
   onSeek: (time: number) => void;
   onChangeTheme: (theme: CanvasThemeId) => void;
   onChangeBackgroundImage: (bg?: BackgroundImageConfig) => void;
+  onChangeSubtitleConfig?: (next: SubtitleDisplayConfig) => void;
   onChangeWatermark?: (wm: WatermarkOutroConfig) => void;
   onSelectElement: (id: string | null) => void;
   onMoveElement: (id: string, x: number, y: number) => void;
@@ -100,6 +108,7 @@ export const StagePreview: React.FC<StagePreviewProps> = ({
   onSeek,
   onChangeTheme,
   onChangeBackgroundImage,
+  onChangeSubtitleConfig,
   onChangeWatermark,
   onSelectElement,
   onMoveElement,
@@ -112,6 +121,7 @@ export const StagePreview: React.FC<StagePreviewProps> = ({
   const resolved = resolveMp4EncodingParams({ ...mp4Settings, aspectRatio: effectiveAspect });
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const bgInputRef = useRef<HTMLInputElement>(null);
+  const videoBlobUrlRef = useRef<string | null>(null);
   const [assetVersion, setAssetVersion] = useState(0);
   const [dbVersion, setDbVersion] = useState(0);
   const [isProcessingBg, setIsProcessingBg] = useState(false);
@@ -131,14 +141,28 @@ export const StagePreview: React.FC<StagePreviewProps> = ({
     return subscribeBgImageLoaded(() => setAssetVersion((v) => v + 1));
   }, []);
 
+  useEffect(() => {
+    return () => {
+      if (videoBlobUrlRef.current) {
+        URL.revokeObjectURL(videoBlobUrlRef.current);
+        videoBlobUrlRef.current = null;
+      }
+    };
+  }, []);
+
   void dbVersion;
   const vectorCatalog = getEffectiveVectorCatalog();
 
   const wmConfig = project.watermark ?? DEFAULT_WATERMARK_CONFIG;
+  const activeSubtitleConfig: SubtitleDisplayConfig = project.subtitleConfig ?? {
+    position: project.compositionId === 'plain' ? 'center' : 'bottom',
+    size: project.compositionId === 'plain' ? 'lg' : 'md',
+    boxStyle: project.compositionId === 'plain' ? 'clean' : 'card',
+  };
 
   useEffect(() => {
     let active = true;
-    if (project.backgroundImage?.dataUrl) {
+    if (project.backgroundImage?.dataUrl || project.backgroundImage?.videoUrl) {
       void ensureProjectAssetsLoaded(project).then(() => {
         if (active) setAssetVersion((v) => v + 1);
       });
@@ -146,7 +170,23 @@ export const StagePreview: React.FC<StagePreviewProps> = ({
     return () => {
       active = false;
     };
-  }, [project.backgroundImage?.dataUrl]);
+  }, [
+    project.backgroundImage?.dataUrl,
+    project.backgroundImage?.videoUrl,
+    project.backgroundImage?.kind,
+  ]);
+
+  useEffect(() => {
+    let active = true;
+    if (project.backgroundImage?.kind === 'video' && project.backgroundImage.videoUrl && !isPlaying && !isExportingVideo) {
+      void seekBackgroundVideoTo(project.backgroundImage.videoUrl, currentTime).then(() => {
+        if (active) setAssetVersion((v) => v + 1);
+      });
+    }
+    return () => {
+      active = false;
+    };
+  }, [project.backgroundImage?.kind, project.backgroundImage?.videoUrl, currentTime, isPlaying, isExportingVideo]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -168,17 +208,39 @@ export const StagePreview: React.FC<StagePreviewProps> = ({
     setBgUploadError(null);
     setIsProcessingBg(true);
     try {
-      const config = await resizeImageFileToStageDataUrl(file, {
-        fit: project.backgroundImage?.fit ?? 'cover',
-        scrimOpacity: project.backgroundImage?.scrimOpacity ?? 0.22,
-        aspectRatio: effectiveAspect,
-      });
-      onChangeBackgroundImage(config);
+      const isVideoFile =
+        file.type.startsWith('video/') || /\.(mp4|webm|mov|m4v)$/i.test(file.name);
+      if (isVideoFile) {
+        if (videoBlobUrlRef.current) {
+          URL.revokeObjectURL(videoBlobUrlRef.current);
+        }
+        const videoUrl = URL.createObjectURL(file);
+        videoBlobUrlRef.current = videoUrl;
+        onChangeBackgroundImage({
+          kind: 'video',
+          videoUrl,
+          fileName: file.name,
+          fit: project.backgroundImage?.fit ?? 'cover',
+          scrimOpacity: project.backgroundImage?.scrimOpacity ?? 0.2,
+          learningScrimOpacity: project.backgroundImage?.learningScrimOpacity ?? 0.45,
+        });
+      } else {
+        const config = await resizeImageFileToStageDataUrl(file, {
+          fit: project.backgroundImage?.fit ?? 'cover',
+          scrimOpacity: project.backgroundImage?.scrimOpacity ?? 0.22,
+          aspectRatio: effectiveAspect,
+        });
+        onChangeBackgroundImage({
+          ...config,
+          kind: 'image',
+          learningScrimOpacity: project.backgroundImage?.learningScrimOpacity ?? 0.45,
+        });
+      }
     } catch (err) {
       setBgUploadError(
         err instanceof Error
           ? err.message
-          : 'Không thể đọc file ảnh nền. Hãy thử file PNG, JPG hoặc WebP.',
+          : 'Không thể đọc file ảnh/video nền. Hãy thử file PNG, JPG, WebP hoặc MP4/WebM.',
       );
     } finally {
       inputEl.value = '';
@@ -407,73 +469,236 @@ export const StagePreview: React.FC<StagePreviewProps> = ({
         </div>
       )}
 
-      {/* Background Image Upload (Auto-Resize 9:16) */}
-      <div className="w-full pt-2 flex flex-wrap items-center justify-between gap-2">
-        <input
-          ref={bgInputRef}
-          type="file"
-          accept="image/*"
-          className="hidden"
-          onChange={(e) => void handleUploadBgImage(e)}
-        />
-        <button
-          type="button"
-          disabled={isExportingVideo || isProcessingBg}
-          onClick={() => bgInputRef.current?.click()}
-          className="inline-flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-medium text-slate-700 bg-slate-50 border border-slate-200 rounded-lg hover:bg-slate-100 disabled:opacity-50"
-        >
-          <ImageIcon className="w-3.5 h-3.5 text-indigo-600" />
-          <span>
-            {isProcessingBg
-              ? `Đang resize ${effectiveAspect}...`
-              : project.backgroundImage
-                ? `Ảnh nền: ${project.backgroundImage.fileName || 'Đã nạp'}`
-                : `Upload ảnh nền (Tự resize ${effectiveAspect})`}
-          </span>
-        </button>
+      {/* Background Presets, Video/Image Upload & Learning Opacity + Subtitle Display */}
+      <div className="w-full pt-2 space-y-2">
+        <div className="rounded-lg border border-slate-200 bg-slate-50/80 p-2 space-y-2">
+          <div className="flex flex-wrap items-center justify-between gap-1.5">
+            <span className="text-[11px] font-semibold text-slate-700">
+              Nền không khí / Video &amp; Ảnh nền
+            </span>
+            <div className="flex items-center gap-1.5">
+              <input
+                ref={bgInputRef}
+                type="file"
+                accept="image/*,video/mp4,video/webm,video/quicktime"
+                className="hidden"
+                onChange={(e) => void handleUploadBgImage(e)}
+              />
+              <button
+                type="button"
+                disabled={isExportingVideo || isProcessingBg}
+                onClick={() => bgInputRef.current?.click()}
+                className="inline-flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-medium text-slate-700 bg-white border border-slate-200 rounded-md hover:bg-slate-100 disabled:opacity-50"
+              >
+                <ImageIcon className="w-3.5 h-3.5 text-indigo-600" />
+                <span>
+                  {isProcessingBg
+                    ? `Đang xử lý ${effectiveAspect}...`
+                    : project.backgroundImage && project.backgroundImage.kind !== 'preset'
+                      ? `${project.backgroundImage.kind === 'video' ? 'Video' : 'Ảnh'}: ${project.backgroundImage.fileName || 'Đã nạp'}`
+                      : `Tải ảnh / video`}
+                </span>
+              </button>
+              {project.backgroundImage && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setBgUploadError(null);
+                    onChangeBackgroundImage(undefined);
+                  }}
+                  aria-label="Xóa ảnh hoặc video nền"
+                  className="p-1 text-slate-400 hover:text-red-600 rounded bg-white border border-slate-200"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
+          </div>
 
-        {project.backgroundImage && (
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-1">
             <button
               type="button"
-              onClick={() =>
-                onChangeBackgroundImage({
-                  ...project.backgroundImage!,
-                  fit: (project.backgroundImage!.fit === 'contain' ? 'cover' : 'contain') as BackgroundFitMode,
-                })
-              }
-              className="px-2 py-1 text-[10px] font-semibold bg-white border border-slate-200 rounded text-slate-700 hover:bg-slate-50"
-              title={`Đổi chế độ phủ khung ${effectiveAspect}`}
+              onClick={() => onChangeBackgroundImage(undefined)}
+              className={`px-2 py-0.5 text-[10px] font-medium rounded border transition-colors ${
+                !project.backgroundImage
+                  ? 'bg-indigo-600 border-indigo-600 text-white'
+                  : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-100'
+              }`}
             >
-              {project.backgroundImage.fit === 'contain' ? 'Vừa khung' : 'Phủ đầy'}
+              Mặc định
             </button>
-            <input
-              type="range"
-              aria-label="Độ tối lớp phủ ảnh nền"
-              min={0}
-              max={0.7}
-              step={0.05}
-              value={project.backgroundImage.scrimOpacity ?? 0.22}
-              onChange={(e) =>
-                onChangeBackgroundImage({
-                  ...project.backgroundImage!,
-                  scrimOpacity: Number(e.target.value),
-                })
-              }
-              title="Làm dịu ảnh nền để chữ nổi rõ hơn"
-              className="w-16 accent-indigo-600 h-1"
-            />
-            <button
-              type="button"
-              onClick={() => {
-                setBgUploadError(null);
-                onChangeBackgroundImage(undefined);
-              }}
-              aria-label="Xóa ảnh nền"
-              className="p-1 text-slate-400 hover:text-red-600 rounded"
-            >
-              <Trash2 className="w-3.5 h-3.5" />
-            </button>
+            {BACKGROUND_PRESETS.map((preset) => {
+              const isActive =
+                project.backgroundImage?.kind === 'preset' &&
+                project.backgroundImage.presetId === preset.id;
+              return (
+                <button
+                  key={preset.id}
+                  type="button"
+                  onClick={() =>
+                    onChangeBackgroundImage({
+                      kind: 'preset',
+                      presetId: preset.id as BackgroundPresetId,
+                      fileName: preset.name,
+                      fit: 'cover',
+                      scrimOpacity: project.backgroundImage?.scrimOpacity ?? 0.2,
+                      learningScrimOpacity: project.backgroundImage?.learningScrimOpacity ?? 0.45,
+                    })
+                  }
+                  title={preset.shortDesc}
+                  className={`inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-medium rounded border transition-colors ${
+                    isActive
+                      ? 'bg-indigo-600 border-indigo-600 text-white'
+                      : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-100'
+                  }`}
+                >
+                  <span
+                    className="w-2.5 h-2.5 rounded-full shrink-0 border border-white/40"
+                    style={{ background: preset.previewGradient }}
+                  />
+                  <span>{preset.name}</span>
+                </button>
+              );
+            })}
+          </div>
+
+          {project.backgroundImage && (
+            <div className="flex flex-wrap items-center gap-2.5 pt-1 border-t border-slate-200/70 text-[10px]">
+              {project.backgroundImage.kind !== 'preset' && (
+                <button
+                  type="button"
+                  onClick={() =>
+                    onChangeBackgroundImage({
+                      ...project.backgroundImage!,
+                      fit: (project.backgroundImage!.fit === 'contain' ? 'cover' : 'contain') as BackgroundFitMode,
+                    })
+                  }
+                  className="px-2 py-0.5 font-semibold bg-white border border-slate-200 rounded text-slate-700 hover:bg-slate-50"
+                >
+                  {project.backgroundImage.fit === 'contain' ? 'Vừa khung' : 'Phủ đầy'}
+                </button>
+              )}
+              <label className="flex items-center gap-1.5 text-slate-600">
+                <span>Độ tối chung:</span>
+                <input
+                  type="range"
+                  aria-label="Độ tối lớp phủ ảnh nền"
+                  min={0}
+                  max={0.7}
+                  step={0.05}
+                  value={project.backgroundImage.scrimOpacity ?? 0.2}
+                  onChange={(e) =>
+                    onChangeBackgroundImage({
+                      ...project.backgroundImage!,
+                      scrimOpacity: Number(e.target.value),
+                    })
+                  }
+                  className="w-14 accent-indigo-600 h-1"
+                />
+              </label>
+              <label
+                className="flex items-center gap-1.5 text-slate-700 font-medium"
+                title="Tự động tăng độ tối nền khi hiện chữ học để tập trung vào nội dung"
+              >
+                <span>Opacity tập trung học:</span>
+                <input
+                  type="range"
+                  aria-label="Độ tối nền khi vào phần học"
+                  min={0}
+                  max={0.85}
+                  step={0.05}
+                  value={project.backgroundImage.learningScrimOpacity ?? 0.45}
+                  onChange={(e) =>
+                    onChangeBackgroundImage({
+                      ...project.backgroundImage!,
+                      learningScrimOpacity: Number(e.target.value),
+                    })
+                  }
+                  className="w-16 accent-indigo-600 h-1"
+                />
+                <span className="font-mono tabular-nums">
+                  {Math.round((project.backgroundImage.learningScrimOpacity ?? 0.45) * 100)}%
+                </span>
+              </label>
+            </div>
+          )}
+        </div>
+
+        {onChangeSubtitleConfig && (
+          <div className="rounded-lg border border-slate-200 bg-slate-50/70 px-2.5 py-2 grid grid-cols-3 gap-2 text-[10px]">
+            <div>
+              <label
+                htmlFor="studio-sub-position"
+                className="block font-semibold text-slate-600 mb-0.5"
+              >
+                Vị trí Sub
+              </label>
+              <select
+                id="studio-sub-position"
+                aria-label="Vị trí hiển thị phụ đề"
+                value={activeSubtitleConfig.position}
+                onChange={(e) =>
+                  onChangeSubtitleConfig({
+                    ...activeSubtitleConfig,
+                    position: e.target.value as SubtitlePosition,
+                  })
+                }
+                className="w-full px-1.5 py-1 text-[11px] bg-white border border-slate-200 rounded"
+              >
+                <option value="top">Trên</option>
+                <option value="center">Giữa</option>
+                <option value="bottom">Dưới</option>
+              </select>
+            </div>
+            <div>
+              <label
+                htmlFor="studio-sub-size"
+                className="block font-semibold text-slate-600 mb-0.5"
+              >
+                Cỡ chữ Sub
+              </label>
+              <select
+                id="studio-sub-size"
+                aria-label="Độ to nhỏ phụ đề"
+                value={activeSubtitleConfig.size}
+                onChange={(e) =>
+                  onChangeSubtitleConfig({
+                    ...activeSubtitleConfig,
+                    size: e.target.value as SubtitleSize,
+                  })
+                }
+                className="w-full px-1.5 py-1 text-[11px] bg-white border border-slate-200 rounded"
+              >
+                <option value="sm">Nhỏ</option>
+                <option value="md">Vừa</option>
+                <option value="lg">Lớn</option>
+                <option value="xl">Rất lớn</option>
+              </select>
+            </div>
+            <div>
+              <label
+                htmlFor="studio-sub-box"
+                className="block font-semibold text-slate-600 mb-0.5"
+              >
+                Kiểu khung chữ
+              </label>
+              <select
+                id="studio-sub-box"
+                aria-label="Kiểu nền khung chữ phụ đề"
+                value={activeSubtitleConfig.boxStyle || 'card'}
+                onChange={(e) =>
+                  onChangeSubtitleConfig({
+                    ...activeSubtitleConfig,
+                    boxStyle: e.target.value as SubtitleBoxStyle,
+                  })
+                }
+                className="w-full px-1.5 py-1 text-[11px] bg-white border border-slate-200 rounded"
+              >
+                <option value="clean">Chữ nổi (Plain)</option>
+                <option value="card">Thẻ bo góc</option>
+                <option value="pill">Thanh gọn</option>
+              </select>
+            </div>
           </div>
         )}
       </div>

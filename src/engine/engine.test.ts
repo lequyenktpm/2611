@@ -607,6 +607,9 @@ test('all @englishpracticing168 compositions and presets produce 0 overlap viola
         (e) => e.props.kind === 'illustration-prop' && e.props.variant === comp.signatureVariant,
       ) ||
         comp.id === 'story-scenes' ||
+        (comp.id === 'plain' &&
+          recomposed.elements.length > 0 &&
+          recomposed.elements.every((e) => e.type === 'karaoke-card')) ||
         (comp.id === 'word-reveal' && recomposed.elements.some((e) => e.type === 'sentence-card')) ||
         (comp.id === '3d-shapes' && recomposed.elements.some((e) => e.type === 'shape-3d')),
       `Expected signature variant for composition ${comp.id}`,
@@ -1490,8 +1493,9 @@ test('readingPromptBuilder generates web-url & topic prompts and parses fenced J
   assert.ok(plain!.text.includes('barista clearly'));
 });
 
-test('eduStudioEffects provides 5 book frames, 7 pointer styles, non-overlapping outro metrics, and multi-page pagination', () => {
-  assert.equal(READING_BOOK_FRAMES.length, 5);
+test('eduStudioEffects provides 6 book frames (including plain), 7 pointer styles, non-overlapping outro metrics, and multi-page pagination', () => {
+  assert.equal(READING_BOOK_FRAMES.length, 6);
+  assert.ok(READING_BOOK_FRAMES.some((f) => f.id === 'plain'));
   assert.equal(READING_POINTER_STYLES.length, 7);
 
   const words = [
@@ -3118,6 +3122,176 @@ test('Phản Xạ Dịch Câu: prompt, curated/custom card builder, AI JSON pars
   assert.ok(layoutPhase3.get(ansProp.id)!.x < 960, '16:9 Phase 3 nuance prop must land on left column');
   assert.ok(layoutPhase3.get(ansCard.id)!.x > 960, '16:9 Phase 3 answer card must land on right column');
 });
+
+test('plain KineticSub composition & subtitle position/size controls work across 9:16 and 16:9', () => {
+  const plainProj = recomposeProjectWithStyle(PRESET_JP_EN_POLITE, 'plain');
+  assert.equal(plainProj.compositionId, 'plain');
+  assert.ok(plainProj.elements.length > 0);
+  assert.ok(
+    plainProj.elements.every((e) => e.type === 'karaoke-card'),
+    'Plain layout must contain only karaoke subtitle elements',
+  );
+
+  const firstKaraoke = plainProj.elements[0];
+  const tMid = (firstKaraoke.startTime + firstKaraoke.endTime) / 2;
+
+  const center916 = resolveElementLayoutForAspect(
+    plainProj.elements,
+    tMid,
+    '9:16',
+    { position: 'center', size: 'lg', boxStyle: 'clean' },
+    'plain',
+  );
+  const top916 = resolveElementLayoutForAspect(
+    plainProj.elements,
+    tMid,
+    '9:16',
+    { position: 'top', size: 'md', boxStyle: 'card' },
+    'plain',
+  );
+  const bottom169 = resolveElementLayoutForAspect(
+    plainProj.elements,
+    tMid,
+    '16:9',
+    { position: 'bottom', size: 'xl', boxStyle: 'clean' },
+    'plain',
+  );
+  const center169 = resolveElementLayoutForAspect(
+    plainProj.elements,
+    tMid,
+    '16:9',
+    { position: 'center', size: 'lg', boxStyle: 'clean' },
+    'plain',
+  );
+
+  assert.equal(center916.get(firstKaraoke.id)!.y, 960);
+  assert.ok(top916.get(firstKaraoke.id)!.y < 400);
+  assert.equal(center169.get(firstKaraoke.id)!.y, 540);
+  assert.ok(bottom169.get(firstKaraoke.id)!.y > 850);
+
+  // Reels choreography in plain mode with custom subtitleConfig
+  const { cards } = buildTranslationCardsFromInput({
+    learningLanguage: 'ja',
+    level: 'N5',
+    itemCount: 3,
+    targetLang: 'vi',
+  });
+  const plainReels = reelCardsToLessonProject(cards, {
+    title: 'Plain JA Drill',
+    theme: 'studio-slate',
+    compositionId: 'plain',
+    subtitleConfig: { position: 'center', size: 'xl', boxStyle: 'clean' },
+  });
+  assert.equal(plainReels.compositionId, 'plain');
+  assert.ok(plainReels.elements.every((el) => el.type === 'karaoke-card'));
+});
+
+test('translation challenge uses target-language instructions and vocabNotes instead of full-sentence Hiragana/phonetic', () => {
+  const jaPrompt = buildTranslationChallengePrompt({
+    learningLanguage: 'ja',
+    level: 'N4',
+    durationMinutes: 5,
+    targetLang: 'vi',
+    thinkSec: 4,
+    repeatCount: 2,
+  });
+  assert.ok(jaPrompt.includes('5 phút'), 'Prompt should include target duration');
+  assert.ok(jaPrompt.includes('vocabNotes'), 'Prompt should instruct AI to include vocabNotes');
+  assert.ok(
+    jaPrompt.includes('NEVER** put full-sentence Hiragana'),
+    'Japanese translation prompt should forbid full-sentence Hiragana/Romaji',
+  );
+
+  const builtJa = buildTranslationCardsFromInput({
+    learningLanguage: 'ja',
+    level: 'N5',
+    itemCount: 3,
+    targetLang: 'vi',
+    thinkSec: 3,
+    repeatCount: 2,
+  });
+  const firstJaTr = builtJa.cards.find((c) => c.type === 'translation')!;
+  assert.ok(!firstJaTr.phonetic, 'Translation challenge cards must omit full-sentence phonetic/Hiragana');
+
+  const jaProj = reelCardsToLessonProject(builtJa.cards, {
+    title: builtJa.title,
+    theme: 'studio-slate',
+    targetLang: 'vi',
+    aspectRatio: '9:16',
+  });
+  const askCard = jaProj.elements.find((el) => el.id.includes('reel-tr-prompt-card-'))!;
+  assert.ok(askCard.props.kind === 'sentence-card');
+  // Must show Japanese instruction pill/subtitle instead of Vietnamese instruction chrome
+  assert.ok(
+    /日本語|訳|声に出|あと/.test(`${askCard.props.subtext}`),
+    `Expected Japanese instruction text in subtext, got: ${askCard.props.subtext}`,
+  );
+  const ansCard = jaProj.elements.find((el) => el.id.includes('reel-tr-ans-card-'))!;
+  assert.ok(ansCard.props.kind === 'sentence-card');
+  assert.ok(
+    ansCard.props.subtext && !/かな|ひらがな/.test(ansCard.props.subtext),
+    'Answer sentence-card subtext should carry vocabNotes/grammar instead of full Hiragana reading',
+  );
+});
+
+test('splitMixedLanguageTtsSpans cleanly isolates foreign words embedded in native sentences', () => {
+  const spansViEn = splitMixedLanguageTtsSpans(
+    'Trong tiếng Anh, cụm từ watch out for nghĩa là coi chừng ai đó.',
+    { primaryLang: 'vi', secondaryLang: 'en' },
+  );
+  const enPiece = spansViEn.find((s) => s.lang === 'en');
+  const viPiece = spansViEn.find((s) => s.lang === 'vi');
+  assert.ok(enPiece && /watch out for/i.test(enPiece.text), 'Embedded English phrase must stay English');
+  assert.ok(viPiece && /Trong tiếng Anh/.test(viPiece.text), 'Vietnamese frame must stay Vietnamese');
+
+  const spansEnVi = splitMixedLanguageTtsSpans(
+    'Please say xin chào clearly to your friend.',
+    { primaryLang: 'en', secondaryLang: 'vi' },
+  );
+  assert.ok(
+    spansEnVi.some((s) => s.lang === 'vi' && /xin chào/i.test(s.text)),
+    'Embedded Vietnamese phrase inside English sentence must use Vietnamese voice',
+  );
+  assert.ok(
+    spansEnVi.some((s) => s.lang === 'en' && /Please say/.test(s.text)),
+    'Surrounding English sentence must stay English',
+  );
+
+  const spansJaEn = splitMixedLanguageTtsSpans(
+    '日本語で checkout という表現はとても便利です。',
+    { primaryLang: 'ja', secondaryLang: 'en' },
+  );
+  assert.ok(
+    spansJaEn.some((s) => s.lang === 'en' && /checkout/i.test(s.text)),
+    'Embedded English term in Japanese must split cleanly into English span',
+  );
+});
+
+test('all prompt builders accept target duration minutes and scale guidance', () => {
+  const studioPrompt = buildSceneGenerationPrompt(PRESET_JP_EN_POLITE.cues, {
+    title: 'Test Studio',
+    targetDurationMinutes: 5,
+  });
+  assert.ok(studioPrompt.includes('5 phút'), 'Studio prompt must include targetDurationMinutes');
+
+  const readingPrompt = buildReadingWebAiPrompt({
+    mode: 'topic',
+    topic: 'Deep work habits',
+    level: 'B2',
+    durationMinutes: 5,
+  });
+  assert.ok(readingPrompt.includes('5 phút'), 'Reading prompt must include durationMinutes');
+
+  const reelsSourcePrompt = buildEnglishReelsWebAiPrompt({
+    sourceText: 'Take a rain check means politely decline an offer for now.',
+    title: 'Idioms',
+    mode: 'vocab',
+    targetLang: 'vi',
+    durationMinutes: 3,
+  });
+  assert.ok(/3\s*phút/i.test(reelsSourcePrompt), 'Reels source prompt must include durationMinutes');
+});
+
 
 
 

@@ -302,20 +302,30 @@ function horizontalOverlap(a: ElementBounds, b: ElementBounds): boolean {
  * so cards, illustrations, diagrams, and tone meters never overlap each other
  * or encroach into the bottom karaoke subtitle safe zone.
  */
-export function resolveProjectOverlaps(elements: SceneElement[]): SceneElement[] {
+export function resolveProjectOverlaps(
+  elements: SceneElement[],
+  options?: { preserveKaraokeY?: boolean },
+): SceneElement[] {
   const karaokeEls: SceneElement[] = [];
   const visualEls: SceneElement[] = [];
+  const onlyKaraoke =
+    elements.length > 0 && elements.every((el) => el.type === 'karaoke-card');
+  const keepKaraokeY = Boolean(options?.preserveKaraokeY || onlyKaraoke);
 
   for (const el of elements) {
     if (el.type === 'karaoke-card') {
       const safeW = Math.min(1040, Math.max(320, el.layout.width || 920));
+      const targetY =
+        keepKaraokeY || el.layout.manualPosition
+          ? Math.max(140, Math.min(1760, el.layout.y || KARAOKE_SAFE_Y))
+          : Math.max(KARAOKE_SAFE_Y - 75, Math.min(1680, el.layout.y || KARAOKE_SAFE_Y));
       const cloned: SceneElement = {
         ...el,
         layout: {
           ...el.layout,
           x: 540,
           width: safeW,
-          y: Math.max(KARAOKE_SAFE_Y - 75, Math.min(1680, el.layout.y || KARAOKE_SAFE_Y)),
+          y: targetY,
         },
       };
       karaokeEls.push(cloned);
@@ -343,7 +353,7 @@ export function resolveProjectOverlaps(elements: SceneElement[]): SceneElement[]
     return a.startTime - b.startTime;
   });
 
-  // Pass 1: Place top-down respecting min gap against all overlapping predecessors
+  // Pass 1: Place top-down respecting min gap against all overlapping predecessors (and top/center karaoke bands)
   const placed: SceneElement[] = [];
   for (const current of visualEls) {
     const curBounds = estimateElementBounds(current);
@@ -359,7 +369,33 @@ export function resolveProjectOverlaps(elements: SceneElement[]): SceneElement[]
       );
     }
 
-    const desiredY = Math.max(current.layout.y, minCenterY);
+    let desiredY = Math.max(current.layout.y, minCenterY);
+
+    if (keepKaraokeY) {
+      for (const k of karaokeEls) {
+        if (!intervalsOverlap(current, k)) continue;
+        const kBounds = estimateElementBounds(k);
+        if (!horizontalOverlap(curBounds, kBounds)) continue;
+        // Top-anchored karaoke: push visual elements below it
+        if (kBounds.bottom < 700) {
+          desiredY = Math.max(
+            desiredY,
+            kBounds.bottom + DEFAULT_MIN_VERTICAL_GAP + curBounds.halfH,
+          );
+        } else if (kBounds.top < STAGE_SAFE_BOTTOM) {
+          // Center/mid-anchored karaoke: avoid overlapping [kBounds.top - 16, kBounds.bottom + 16]
+          const curTop = desiredY - curBounds.halfH;
+          const curBottom = desiredY + curBounds.halfH;
+          if (curBottom > kBounds.top - 16 && curTop < kBounds.bottom + 16) {
+            desiredY = Math.max(
+              desiredY,
+              kBounds.bottom + DEFAULT_MIN_VERTICAL_GAP + curBounds.halfH,
+            );
+          }
+        }
+      }
+    }
+
     placed.push({
       ...current,
       layout: {

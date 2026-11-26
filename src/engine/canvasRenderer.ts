@@ -8,6 +8,7 @@ import {
 } from './animationMath';
 import { getCustomComponentByVariant } from './customComponentStore';
 import { VectorPrimitive } from './customComponentTypes';
+import { drawPresetBackground } from './backgroundPresets';
 import type { ExportAspectRatioId } from './mp4Config';
 import {
   BackgroundFitMode,
@@ -18,10 +19,12 @@ import {
   IllustrationPropProps,
   IllustrationSceneIcon,
   KaraokeCardProps,
+  LayoutCompositionId,
   LessonProject,
   SceneElement,
   SentenceCardProps,
   Shape3DProps,
+  SubtitleDisplayConfig,
   ThemePalette,
   ToneMeterProps,
   TopicPillProps,
@@ -47,26 +50,63 @@ export function getStageDimensionsForAspect(
   }
 }
 
+function resolveKaraokeTargetY(
+  pos: 'top' | 'center' | 'bottom',
+  aspectRatio: ExportAspectRatioId,
+  stageH: number,
+): number {
+  if (pos === 'top') {
+    return aspectRatio === '16:9' ? 175 : Math.round(stageH * 0.18);
+  }
+  if (pos === 'center') {
+    return Math.round(stageH * 0.5);
+  }
+  return aspectRatio === '16:9' ? 948 : aspectRatio === '1:1' ? 920 : aspectRatio === '4:5' ? 1160 : 1585;
+}
+
 export function resolveElementLayoutForAspect(
   elements: SceneElement[],
   time: number,
   aspectRatio: ExportAspectRatioId = '9:16',
+  subtitleConfig?: SubtitleDisplayConfig,
+  compositionId?: LayoutCompositionId,
 ): Map<string, ElementLayout> {
   const out = new Map<string, ElementLayout>();
+  const explicitPos = subtitleConfig?.position ?? (compositionId === 'plain' ? 'center' : undefined);
+  const stage = getStageDimensionsForAspect(aspectRatio);
+
   if (aspectRatio === '9:16') {
     for (const el of elements) {
-      out.set(el.id, el.layout);
+      if (el.type === 'karaoke-card' && explicitPos && !el.layout.manualPosition) {
+        out.set(el.id, {
+          ...el.layout,
+          x: stage.width / 2,
+          y: resolveKaraokeTargetY(explicitPos, aspectRatio, stage.height),
+          width: compositionId === 'plain' ? 960 : el.layout.width,
+        });
+      } else {
+        out.set(el.id, el.layout);
+      }
     }
     return out;
   }
 
-  const stage = getStageDimensionsForAspect(aspectRatio);
   if (aspectRatio === '1:1' || aspectRatio === '4:5') {
     const yScale = stage.height / STAGE_HEIGHT;
     const xOffset = (stage.width - STAGE_WIDTH) / 2;
     for (const el of elements) {
       if (el.layout.manualPosition) {
         out.set(el.id, el.layout);
+        continue;
+      }
+      if (el.type === 'karaoke-card' && explicitPos) {
+        out.set(el.id, {
+          ...el.layout,
+          x: stage.width / 2,
+          y: resolveKaraokeTargetY(explicitPos, aspectRatio, stage.height),
+          width: Math.min(stage.width - 64, Math.max(880, el.layout.width)),
+          scale: 1,
+        });
         continue;
       }
       const scaledHeight = el.layout.height ? Math.round(el.layout.height * Math.max(0.75, yScale)) : undefined;
@@ -147,12 +187,15 @@ export function resolveElementLayoutForAspect(
     }
 
     if (el.type === 'karaoke-card') {
+      const targetY = explicitPos
+        ? resolveKaraokeTargetY(explicitPos, '16:9', stage.height)
+        : 948;
       out.set(el.id, {
         ...el.layout,
         x: 960,
-        y: 948,
-        width: Math.min(1640, Math.max(1340, Math.round(el.layout.width * 1.45))),
-        scale: 0.92,
+        y: targetY,
+        width: Math.min(1680, Math.max(1380, Math.round(el.layout.width * 1.65))),
+        scale: explicitPos === 'center' ? 1 : 0.94,
       });
       continue;
     }
@@ -497,6 +540,8 @@ function drawCharacterAvatar(
 
 const bgImageCache = new Map<string, HTMLImageElement>();
 const bgImageLoading = new Map<string, Promise<HTMLImageElement | null>>();
+const bgVideoCache = new Map<string, HTMLVideoElement>();
+const bgVideoLoading = new Map<string, Promise<HTMLVideoElement | null>>();
 
 export function computeBackgroundImageDrawRect(
   imgW: number,
@@ -537,8 +582,106 @@ function notifyBgImageLoaded() {
   });
 }
 
+export async function ensureBgVideoLoaded(videoUrl: string): Promise<HTMLVideoElement | null> {
+  if (!videoUrl || typeof document === 'undefined') return null;
+  const cached = bgVideoCache.get(videoUrl);
+  if (cached && cached.readyState >= 2) return cached;
+
+  const pending = bgVideoLoading.get(videoUrl);
+  if (pending) return pending;
+
+  const p = new Promise<HTMLVideoElement | null>((resolve) => {
+    const vid = document.createElement('video');
+    vid.muted = true;
+    vid.loop = true;
+    vid.playsInline = true;
+    vid.preload = 'auto';
+    vid.crossOrigin = 'anonymous';
+    const done = (ok: boolean) => {
+      vid.removeEventListener('loadeddata', onReady);
+      vid.removeEventListener('canplay', onReady);
+      vid.removeEventListener('error', onErr);
+      bgVideoLoading.delete(videoUrl);
+      if (ok && vid.videoWidth > 0) {
+        bgVideoCache.set(videoUrl, vid);
+        notifyBgImageLoaded();
+        resolve(vid);
+      } else {
+        resolve(null);
+      }
+    };
+    const onReady = () => done(true);
+    const onErr = () => done(false);
+    vid.addEventListener('loadeddata', onReady);
+    vid.addEventListener('canplay', onReady);
+    vid.addEventListener('error', onErr);
+    vid.src = videoUrl;
+    vid.load();
+  });
+  bgVideoLoading.set(videoUrl, p);
+  return p;
+}
+
+export function getCachedBgVideo(videoUrl: string): HTMLVideoElement | null {
+  if (!videoUrl) return null;
+  const cached = bgVideoCache.get(videoUrl);
+  if (cached && cached.readyState >= 2) return cached;
+  if (!bgVideoLoading.has(videoUrl)) {
+    void ensureBgVideoLoaded(videoUrl);
+  }
+  return cached && cached.readyState >= 2 ? cached : null;
+}
+
+export async function seekBackgroundVideoTo(videoUrl: string | undefined, timeSec: number): Promise<void> {
+  if (!videoUrl) return;
+  const vid = (await ensureBgVideoLoaded(videoUrl)) || getCachedBgVideo(videoUrl);
+  if (!vid || !Number.isFinite(vid.duration) || vid.duration <= 0.05) return;
+  const wrapped = ((Math.max(0, timeSec) % vid.duration) + vid.duration) % vid.duration;
+  if (Math.abs(vid.currentTime - wrapped) < 0.025 && vid.readyState >= 2) return;
+  await new Promise<void>((resolve) => {
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      vid.removeEventListener('seeked', finish);
+      resolve();
+    };
+    vid.addEventListener('seeked', finish, { once: true });
+    try {
+      vid.currentTime = wrapped;
+    } catch {
+      finish();
+    }
+    setTimeout(finish, 180);
+  });
+}
+
+export async function seekProjectVideoAssets(project: LessonProject, timeSec: number): Promise<void> {
+  const bg = project.backgroundImage;
+  if (!bg || bg.kind !== 'video' || !bg.videoUrl) return;
+  await seekBackgroundVideoTo(bg.videoUrl, timeSec);
+}
+
+export function drawLoadedImageCover(
+  ctx: CanvasRenderingContext2D,
+  media: HTMLImageElement | HTMLVideoElement,
+  mediaW: number,
+  mediaH: number,
+  stageW: number,
+  stageH: number,
+  fit: BackgroundFitMode = 'cover',
+) {
+  const rect = computeBackgroundImageDrawRect(mediaW || stageW, mediaH || stageH, stageW, stageH, fit);
+  ctx.drawImage(media, rect.dx, rect.dy, rect.dw, rect.dh);
+}
+
 export async function ensureProjectAssetsLoaded(project: LessonProject): Promise<void> {
-  const dataUrl = project.backgroundImage?.dataUrl;
+  const bg = project.backgroundImage;
+  if (bg?.kind === 'video' && bg.videoUrl) {
+    await ensureBgVideoLoaded(bg.videoUrl);
+    return;
+  }
+  const dataUrl = bg?.dataUrl;
   if (!dataUrl || typeof Image === 'undefined') return;
   const cached = bgImageCache.get(dataUrl);
   if (cached && cached.complete && cached.naturalWidth > 0) return;
@@ -567,7 +710,7 @@ export async function ensureProjectAssetsLoaded(project: LessonProject): Promise
   await p;
 }
 
-function getCachedBgImage(dataUrl: string): HTMLImageElement | null {
+export function getCachedBgImage(dataUrl: string): HTMLImageElement | null {
   const cached = bgImageCache.get(dataUrl);
   if (cached && cached.complete && cached.naturalWidth > 0) return cached;
   if (!bgImageLoading.has(dataUrl) && typeof Image !== 'undefined') {
@@ -4965,14 +5108,41 @@ function drawKaraokeCard(
   props: KaraokeCardProps,
   width: number,
   time: number,
+  renderOpts?: {
+    subtitleConfig?: SubtitleDisplayConfig;
+    stageW?: number;
+    stageH?: number;
+    compositionId?: LayoutCompositionId;
+    hasDarkStage?: boolean;
+  },
 ) {
   const words = props.words;
   if (words.length === 0) return;
 
-  const isDarkBar = props.variant === 'dark-bar';
-  const safeWidth = Math.min(STAGE_WIDTH - 48, Math.max(320, width));
-  const maxLineW = Math.max(180, safeWidth - 112);
-  let fontSize = 44;
+  const stageW = renderOpts?.stageW ?? STAGE_WIDTH;
+  const stageH = renderOpts?.stageH ?? STAGE_HEIGHT;
+  const subCfg = renderOpts?.subtitleConfig;
+  const isPlain = renderOpts?.compositionId === 'plain' || props.variant === 'plain-shadow';
+  const boxStyle = subCfg?.boxStyle ?? (isPlain ? 'clean' : 'card');
+  const isCleanBox = boxStyle === 'clean';
+  const isDarkBar = props.variant === 'dark-bar' || isPlain;
+
+  const minDim = Math.min(stageW, stageH);
+  const defaultSize = isPlain ? 'lg' : 'md';
+  const sizeKey = subCfg?.size ?? defaultSize;
+  const sizeMul =
+    sizeKey === 'sm' ? 0.78 : sizeKey === 'lg' ? 1.24 : sizeKey === 'xl' ? 1.48 : 1.0;
+
+  const maxAllowedW = Math.max(320, Math.round(stageW * (isCleanBox ? 0.88 : 0.92)));
+  const safeWidth = Math.min(maxAllowedW, Math.max(width, isCleanBox ? Math.round(stageW * 0.82) : width));
+  const maxLineW = Math.max(220, isCleanBox ? safeWidth - 36 : safeWidth - 104);
+
+  const baseFont =
+    stageW >= 1600
+      ? Math.round(minDim * 0.048) // ~52px in 1920x1080
+      : Math.round(minDim * 0.043); // ~46px in 1080x1920
+  let fontSize = Math.max(26, Math.min(92, Math.round(baseFont * sizeMul)));
+
   while (fontSize > 24) {
     ctx.font = `700 ${fontSize}px ${FONT_DISPLAY}`;
     const hasWideWord = words.some((tok) => ctx.measureText(tok.word).width > maxLineW);
@@ -4980,7 +5150,7 @@ function drawKaraokeCard(
     fontSize -= 2;
   }
   ctx.font = `700 ${fontSize}px ${FONT_DISPLAY}`;
-  const asciiSpaceW = Math.max(12, ctx.measureText(' ').width * 1.45);
+  const asciiSpaceW = Math.max(12, ctx.measureText(' ').width * 1.42);
   const isCjkOnly = (s: string) => /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff]/.test(s) && !/[A-Za-z0-9]/.test(s);
   const gapBetween = (a: string, b: string) => (isCjkOnly(a) && isCjkOnly(b) ? 3 : asciiSpaceW);
 
@@ -5007,10 +5177,11 @@ function drawKaraokeCard(
     allLines.push({ tokens: currentLine, lineWidth: currentW });
   }
 
-  // Group into pages of at most 2 lines so long narration never overflows vertically
+  // Group into pages (up to 3 lines when centered/clean so multi-clause sentences breathe naturally)
+  const linesPerPage = isPlain && (subCfg?.position ?? 'center') === 'center' ? 3 : 2;
   const pages: { tokens: typeof words; lineWidth: number }[][] = [];
-  for (let i = 0; i < allLines.length; i += 2) {
-    pages.push(allLines.slice(i, i + 2));
+  for (let i = 0; i < allLines.length; i += linesPerPage) {
+    pages.push(allLines.slice(i, i + linesPerPage));
   }
 
   let activePageIdx = 0;
@@ -5024,35 +5195,99 @@ function drawKaraokeCard(
     activePageIdx = foundIdx === -1 ? pages.length - 1 : foundIdx;
   }
 
-  const lines = pages[activePageIdx] ?? allLines.slice(0, 2);
+  const lines = pages[activePageIdx] ?? allLines.slice(0, linesPerPage);
   const activeMaxLineW = Math.max(160, ...lines.map((l) => l.lineWidth));
   const pillW = Math.min(safeWidth, Math.max(300, Math.round(activeMaxLineW + 104)));
-  const lineH = Math.round(fontSize * 1.42);
-  const cardH = Math.max(112, lines.length * lineH + 64);
-  const cardRadius = isDarkBar ? 28 : lines.length === 1 ? Math.round(cardH / 2) : 34;
+  const lineH = Math.round(fontSize * 1.38);
+
+  // Optional helper text below the karaoke line (vocab meanings, grammar note, or source prompt in Plain mode)
+  const helperLines: string[] = [];
+  const helperFontSize = Math.max(20, Math.round(fontSize * 0.54));
+  const helperLineH = Math.round(helperFontSize * 1.38);
+  const helperGap = Math.max(28, Math.round(fontSize * 0.5));
+  if (props.helperText?.trim()) {
+    ctx.font = `600 ${helperFontSize}px ${FONT_SANS}`;
+    const rawParas = props.helperText.trim().split(/\r?\n/);
+    const maxHelperW = Math.max(240, maxLineW);
+    for (const para of rawParas) {
+      const pWords = para.trim().split(/\s+/).filter(Boolean);
+      let lineBuf = '';
+      for (const pw of pWords) {
+        const candidate = lineBuf ? `${lineBuf} ${pw}` : pw;
+        if (ctx.measureText(candidate).width <= maxHelperW) {
+          lineBuf = candidate;
+        } else {
+          if (lineBuf) helperLines.push(lineBuf);
+          lineBuf = pw;
+        }
+      }
+      if (lineBuf) helperLines.push(lineBuf);
+      if (helperLines.length >= 4) break;
+    }
+  }
+  const helperBlockH =
+    helperLines.length > 0 ? helperGap + helperLines.slice(0, 4).length * helperLineH : 0;
+
+  const mainTextH = lines.length * lineH;
+  const totalContentH = mainTextH + helperBlockH;
+  const cardH = Math.max(112, totalContentH + (isCleanBox ? 32 : 60));
+  const cardRadius =
+    boxStyle === 'pill' && lines.length === 1 && helperLines.length === 0
+      ? Math.round(cardH / 2)
+      : isDarkBar
+        ? 28
+        : lines.length === 1 && helperLines.length === 0
+          ? Math.round(cardH / 2)
+          : 34;
   const x = -pillW / 2;
   const y = -cardH / 2;
 
-  fillCardWithShadow(
-    ctx,
-    x,
-    y,
-    pillW,
-    cardH,
-    cardRadius,
-    isDarkBar ? 'rgba(15, 23, 42, 0.84)' : '#FFFFFF',
-    isDarkBar ? 0.28 : 0.11,
-  );
-  ctx.save();
-  ctx.strokeStyle = isDarkBar ? 'rgba(148, 163, 184, 0.28)' : '#E2E8F0';
-  ctx.lineWidth = 2;
-  drawRoundedRectPath(ctx, x, y, pillW, cardH, cardRadius);
-  ctx.stroke();
-  ctx.restore();
+  if (!isCleanBox) {
+    fillCardWithShadow(
+      ctx,
+      x,
+      y,
+      pillW,
+      cardH,
+      cardRadius,
+      isDarkBar ? 'rgba(15, 23, 42, 0.84)' : '#FFFFFF',
+      isDarkBar ? 0.28 : 0.11,
+    );
+    ctx.save();
+    ctx.strokeStyle = isDarkBar ? 'rgba(148, 163, 184, 0.28)' : '#E2E8F0';
+    ctx.lineWidth = 2;
+    drawRoundedRectPath(ctx, x, y, pillW, cardH, cardRadius);
+    ctx.stroke();
+    ctx.restore();
+  }
 
+  ctx.font = `700 ${fontSize}px ${FONT_DISPLAY}`;
   ctx.textAlign = 'left';
   ctx.textBaseline = 'middle';
-  const startY = y + cardH / 2 - ((lines.length - 1) * lineH) / 2;
+  const startY = -totalContentH / 2 + lineH / 2;
+
+  const useDarkBackdropInk = renderOpts?.hasDarkStage ?? true;
+  const isLightClean = isCleanBox && !useDarkBackdropInk;
+
+  const activeWordColor = isCleanBox
+    ? isLightClean
+      ? props.activeColor === '#FACC15' || props.activeColor === '#93C5FD'
+        ? '#4F46E5'
+        : props.activeColor
+      : props.activeColor === '#2563EB' || props.activeColor === '#16A34A'
+        ? '#FACC15'
+        : props.activeColor
+    : props.activeColor;
+  const spokenWordColor = isCleanBox
+    ? isLightClean
+      ? '#0F172A'
+      : '#FFFFFF'
+    : props.spokenColor;
+  const inactiveWordColor = isCleanBox
+    ? isLightClean
+      ? 'rgba(51, 65, 85, 0.58)'
+      : 'rgba(241, 245, 249, 0.82)'
+    : props.inactiveColor;
 
   lines.forEach((line, lineIdx) => {
     let cursorX = -line.lineWidth / 2;
@@ -5063,16 +5298,42 @@ function drawKaraokeCard(
       const isSpoken = time > token.end;
       const tokenW = ctx.measureText(token.word).width;
 
-      if (isActive) {
+      if (isCleanBox) {
         ctx.save();
-        ctx.fillStyle = token.highlightColor || props.activeColor;
+        if (isLightClean) {
+          ctx.shadowColor = 'rgba(255, 255, 255, 0.65)';
+          ctx.shadowBlur = 8;
+          ctx.shadowOffsetY = 1;
+        } else {
+          ctx.shadowColor = 'rgba(2, 6, 23, 0.85)';
+          ctx.shadowBlur = 12;
+          ctx.shadowOffsetY = 3;
+          ctx.lineWidth = Math.max(2, Math.round(fontSize * 0.065));
+          ctx.strokeStyle = 'rgba(2, 6, 23, 0.62)';
+        }
+        if (isActive) {
+          ctx.translate(cursorX + tokenW / 2, lineY);
+          ctx.scale(1.06, 1.06);
+          ctx.textAlign = 'center';
+          if (!isLightClean) ctx.strokeText(token.word, 0, 0);
+          ctx.fillStyle = token.highlightColor || activeWordColor;
+          ctx.fillText(token.word, 0, 0);
+        } else {
+          if (!isLightClean) ctx.strokeText(token.word, cursorX, lineY);
+          ctx.fillStyle = isSpoken ? spokenWordColor : inactiveWordColor;
+          ctx.fillText(token.word, cursorX, lineY);
+        }
+        ctx.restore();
+      } else if (isActive) {
+        ctx.save();
+        ctx.fillStyle = token.highlightColor || activeWordColor;
         ctx.translate(cursorX + tokenW / 2, lineY);
         ctx.scale(1.04, 1.04);
         ctx.textAlign = 'center';
         ctx.fillText(token.word, 0, 0);
         ctx.restore();
       } else {
-        ctx.fillStyle = isSpoken ? props.spokenColor : props.inactiveColor;
+        ctx.fillStyle = isSpoken ? spokenWordColor : inactiveWordColor;
         ctx.fillText(token.word, cursorX, lineY);
       }
 
@@ -5080,6 +5341,32 @@ function drawKaraokeCard(
       cursorX += tokenW + (nextTok ? gapBetween(token.word, nextTok.word) : 0);
     });
   });
+
+  if (helperLines.length > 0) {
+    ctx.save();
+    ctx.font = `600 ${helperFontSize}px ${FONT_SANS}`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    const helperStartY =
+      startY + (lines.length - 1) * lineH + lineH * 0.5 + helperGap + helperLineH / 2;
+    helperLines.slice(0, 4).forEach((hl, hIdx) => {
+      const hy = helperStartY + hIdx * helperLineH;
+      if (isCleanBox) {
+        if (isLightClean) {
+          ctx.fillStyle = '#475569';
+        } else {
+          ctx.shadowColor = 'rgba(2, 6, 23, 0.88)';
+          ctx.shadowBlur = 8;
+          ctx.shadowOffsetY = 2;
+          ctx.fillStyle = 'rgba(226, 232, 240, 0.94)';
+        }
+      } else {
+        ctx.fillStyle = isDarkBar ? 'rgba(226, 232, 240, 0.88)' : '#475569';
+      }
+      ctx.fillText(hl, 0, hy, maxLineW);
+    });
+    ctx.restore();
+  }
 }
 
 export function renderIllustrationVariantThumbnail(
@@ -5142,31 +5429,88 @@ export function renderProjectFrame(
   ctx.fillStyle = glow2;
   ctx.fillRect(0, 0, stageW, stageH);
 
-  // Optional uploaded background image (auto-resized/cropped cleanly to stage dimensions)
-  if (project.backgroundImage?.dataUrl) {
-    const img = getCachedBgImage(project.backgroundImage.dataUrl);
-    if (img) {
-      const rect = computeBackgroundImageDrawRect(
-        img.naturalWidth || stageW,
-        img.naturalHeight || stageH,
-        stageW,
-        stageH,
-        project.backgroundImage.fit || 'cover',
-      );
-      ctx.save();
-      ctx.drawImage(img, rect.dx, rect.dy, rect.dw, rect.dh);
-      const scrim = clamp01(project.backgroundImage.scrimOpacity ?? 0.22);
-      if (scrim > 0.01) {
-        ctx.fillStyle = `rgba(15, 23, 42, ${scrim})`;
-        ctx.fillRect(0, 0, stageW, stageH);
+  // Determine whether learning content is currently on screen so background dims softly for readability
+  const isLearningMomentActive = project.elements.some((el) => {
+    if (time < el.startTime || time > el.endTime) return false;
+    if (el.type === 'karaoke-card' || el.type === 'sentence-card') return true;
+    return false;
+  });
+
+  // Optional preset / uploaded video / uploaded image background
+  const bg = project.backgroundImage;
+  if (bg) {
+    let drewCustomBg = false;
+    if ((bg.kind === 'preset' || (!bg.kind && bg.presetId && !bg.dataUrl && !bg.videoUrl)) && bg.presetId) {
+      drawPresetBackground(ctx, bg.presetId, stageW, stageH, time);
+      drewCustomBg = true;
+    } else if (bg.kind === 'video' && bg.videoUrl) {
+      const vid = getCachedBgVideo(bg.videoUrl);
+      if (vid && vid.videoWidth > 0) {
+        if (vid.readyState >= 2 && Number.isFinite(vid.duration) && vid.duration > 0.05) {
+          const wrapped = ((Math.max(0, time) % vid.duration) + vid.duration) % vid.duration;
+          if (Math.abs(vid.currentTime - wrapped) > 0.08 && !vid.seeking) {
+            try {
+              vid.currentTime = wrapped;
+            } catch {
+              // ignore seek throttle
+            }
+          }
+        }
+        ctx.save();
+        drawLoadedImageCover(
+          ctx,
+          vid,
+          vid.videoWidth,
+          vid.videoHeight,
+          stageW,
+          stageH,
+          bg.fit || 'cover',
+        );
+        ctx.restore();
+        drewCustomBg = true;
       }
-      ctx.restore();
+    } else if (bg.dataUrl) {
+      const img = getCachedBgImage(bg.dataUrl);
+      if (img) {
+        ctx.save();
+        drawLoadedImageCover(
+          ctx,
+          img,
+          img.naturalWidth || stageW,
+          img.naturalHeight || stageH,
+          stageW,
+          stageH,
+          bg.fit || 'cover',
+        );
+        ctx.restore();
+        drewCustomBg = true;
+      }
+    }
+
+    if (drewCustomBg) {
+      const baseScrim = bg.scrimOpacity ?? (bg.kind === 'preset' ? 0.16 : 0.22);
+      const focusScrim =
+        bg.learningScrimOpacity ??
+        Math.min(0.85, Math.max(baseScrim, baseScrim + 0.2));
+      const effectiveScrim = clamp01(isLearningMomentActive ? focusScrim : baseScrim);
+      if (effectiveScrim > 0.01) {
+        ctx.save();
+        ctx.fillStyle = `rgba(10, 15, 28, ${effectiveScrim})`;
+        ctx.fillRect(0, 0, stageW, stageH);
+        ctx.restore();
+      }
     }
   }
 
   // 2. Sort elements by zIndex & resolve aspect layout
   const sorted = [...project.elements].sort((a, b) => a.layout.zIndex - b.layout.zIndex);
-  const layoutMap = resolveElementLayoutForAspect(sorted, time, project.aspectRatio);
+  const layoutMap = resolveElementLayoutForAspect(
+    sorted,
+    time,
+    project.aspectRatio,
+    project.subtitleConfig,
+    project.compositionId,
+  );
 
   for (const el of sorted) {
     const frame = computeElementFrameState(el, time);
@@ -5231,7 +5575,15 @@ export function renderProjectFrame(
         drawShape3D(ctx, el.props, clampedWidth, activeLayout.height ?? 200, Math.max(0, time - el.startTime));
         break;
       case 'karaoke-card':
-        drawKaraokeCard(ctx, el.props, clampedWidth, time);
+        drawKaraokeCard(ctx, el.props, clampedWidth, time, {
+          subtitleConfig: project.subtitleConfig,
+          stageW,
+          stageH,
+          compositionId: project.compositionId,
+          hasDarkStage:
+            Boolean(project.backgroundImage) ||
+            Boolean(CANVAS_THEMES[project.theme]?.isDark),
+        });
         break;
     }
 

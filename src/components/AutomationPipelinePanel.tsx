@@ -179,6 +179,11 @@ export const AutomationPipelinePanel: React.FC<AutomationPipelinePanelProps> = (
   const [promptStyle, setPromptStyle] = useState<PromptVideoStyle>(
     () => initialSaved?.step2PromptStyle || 'tiktok-cards',
   );
+  const [targetDurationMinutes, setTargetDurationMinutes] = useState<number>(() =>
+    typeof initialSaved?.targetDurationMinutes === 'number'
+      ? initialSaved.targetDurationMinutes
+      : 1,
+  );
   const [compositionMode, setCompositionMode] = useState<'manual' | 'ai-decide' | 'random' | 'custom'>(
     () => initialSaved?.step2CompositionMode || 'ai-decide',
   );
@@ -264,6 +269,9 @@ export const AutomationPipelinePanel: React.FC<AutomationPipelinePanelProps> = (
       const s = (ev as CustomEvent<PersistedStudioSettings>).detail?.studio;
       if (!s) return;
       if (s.step2PromptStyle) setPromptStyle(s.step2PromptStyle);
+      if (typeof s.targetDurationMinutes === 'number') {
+        setTargetDurationMinutes(s.targetDurationMinutes);
+      }
       if (s.step2CompositionMode) setCompositionMode(s.step2CompositionMode);
       if (s.inlineProvider) setInlineProvider(s.inlineProvider);
       if (s.inlineVoice) setInlineVoice(s.inlineVoice);
@@ -273,6 +281,7 @@ export const AutomationPipelinePanel: React.FC<AutomationPipelinePanelProps> = (
     };
     const onReset = () => {
       setPromptStyle('tiktok-cards');
+      setTargetDurationMinutes(1);
       setCompositionMode('ai-decide');
       setInlineProvider('auto');
       setInlineVoice('en-US-JennyNeural');
@@ -297,6 +306,7 @@ export const AutomationPipelinePanel: React.FC<AutomationPipelinePanelProps> = (
     updatePersistedSettings({
       studio: {
         step2PromptStyle: promptStyle,
+        targetDurationMinutes,
         step2CompositionMode: compositionMode,
         inlineProvider,
         inlineVoice,
@@ -307,6 +317,7 @@ export const AutomationPipelinePanel: React.FC<AutomationPipelinePanelProps> = (
     });
   }, [
     promptStyle,
+    targetDurationMinutes,
     compositionMode,
     inlineProvider,
     inlineVoice,
@@ -384,8 +395,9 @@ export const AutomationPipelinePanel: React.FC<AutomationPipelinePanelProps> = (
         theme: isDarkCanvasTheme(project.theme) ? project.theme : undefined,
         customConfig: compositionMode === 'custom' ? activeCustomConfig : undefined,
         audioDurationSec,
+        targetDurationMinutes,
       }),
-    [activeCues, customTitle, project.title, project.theme, effectiveCompositionId, promptStyle, dbVersion, compositionMode, activeCustomConfig, audioDurationSec],
+    [activeCues, customTitle, project.title, project.theme, effectiveCompositionId, promptStyle, dbVersion, compositionMode, activeCustomConfig, audioDurationSec, targetDurationMinutes],
   );
 
   const parsedPreviewPlan = useMemo(() => parseScenePlanJson(rawSceneJson), [rawSceneJson]);
@@ -1306,6 +1318,22 @@ export const AutomationPipelinePanel: React.FC<AutomationPipelinePanelProps> = (
                   >
                     Ưu tiên Word Reveal (@xun52000)
                   </button>
+                  <label className="inline-flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-medium bg-slate-50 border border-slate-200 rounded-lg text-slate-700">
+                    <span>Thời lượng (phút):</span>
+                    <select
+                      aria-label="Thời lượng render mục tiêu (phút)"
+                      value={String(targetDurationMinutes)}
+                      onChange={(e) => setTargetDurationMinutes(Number(e.target.value) || 1)}
+                      className="bg-transparent font-semibold text-indigo-700 focus:outline-none"
+                    >
+                      <option value="0.5">0.5p</option>
+                      <option value="1">1p</option>
+                      <option value="2">2p</option>
+                      <option value="3">3p</option>
+                      <option value="5">5p</option>
+                      <option value="10">10p</option>
+                    </select>
+                  </label>
                 </div>
               </div>
 

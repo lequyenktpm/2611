@@ -11,6 +11,7 @@ import {
   FolderOpen,
   FolderPlus,
   Globe,
+  Image as ImageIcon,
   Layers,
   Link2,
   Loader2,
@@ -19,6 +20,7 @@ import {
   Play,
   Sparkles,
   Square,
+  Trash2,
   Upload,
   Volume2,
   Wand2,
@@ -77,8 +79,24 @@ import {
   synthesizeAudioWithProgressJob,
   TtsProviderItem,
 } from '../engine/ttsSyncHelper';
-import { LessonProject, TranscriptCue, WordTiming } from '../engine/types';
+import { BACKGROUND_PRESETS } from '../engine/backgroundPresets';
+import {
+  ensureProjectAssetsLoaded,
+  seekBackgroundVideoTo,
+  subscribeBgImageLoaded,
+} from '../engine/canvasRenderer';
+import {
+  BackgroundFitMode,
+  BackgroundImageConfig,
+  BackgroundPresetId,
+  LessonProject,
+  SubtitlePosition,
+  SubtitleSize,
+  TranscriptCue,
+  WordTiming,
+} from '../engine/types';
 import { buildApiKeyHeaders, useClientApiKeys } from '../utils/apiKeysStore';
+import { resizeImageFileToStageDataUrl } from '../utils/imageResize';
 import {
   loadPersistedSettings,
   PersistedStudioSettings,
@@ -1133,6 +1151,51 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
     useState<ReadingPointerStyleId>(
       () => (initialEduSaved?.readingPointerStyle as ReadingPointerStyleId) || 'hand-classic',
     );
+  const [readingDurationMinutes, setReadingDurationMinutes] = useState<number>(() =>
+    typeof initialEduSaved?.readingDurationMinutes === 'number' &&
+    initialEduSaved.readingDurationMinutes > 0
+      ? initialEduSaved.readingDurationMinutes
+      : 1,
+  );
+  const [readingSubtitlePosition, setReadingSubtitlePosition] = useState<SubtitlePosition>(
+    () => initialEduSaved?.readingSubtitlePosition || 'center',
+  );
+  const [readingSubtitleSize, setReadingSubtitleSize] = useState<SubtitleSize>(
+    () => initialEduSaved?.readingSubtitleSize || 'lg',
+  );
+  const [readingBackground, setReadingBackground] = useState<BackgroundImageConfig | undefined>(() => {
+    const presetId = initialEduSaved?.readingBackgroundPresetId;
+    if (!presetId) return undefined;
+    return {
+      kind: 'preset',
+      presetId,
+      fileName: BACKGROUND_PRESETS.find((p) => p.id === presetId)?.name || presetId,
+      fit: 'cover',
+      scrimOpacity: 0.22,
+      learningScrimOpacity:
+        typeof initialEduSaved?.readingLearningScrimOpacity === 'number'
+          ? initialEduSaved.readingLearningScrimOpacity
+          : 0.45,
+    };
+  });
+  const [readingBgAssetVersion, setReadingBgAssetVersion] = useState(0);
+  const [isProcessingReadingBg, setIsProcessingReadingBg] = useState(false);
+  const [readingBgError, setReadingBgError] = useState<string | null>(null);
+  const readingBgInputRef = useRef<HTMLInputElement>(null);
+  const readingVideoBlobUrlRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    return subscribeBgImageLoaded(() => setReadingBgAssetVersion((v) => v + 1));
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (readingVideoBlobUrlRef.current) {
+        URL.revokeObjectURL(readingVideoBlobUrlRef.current);
+        readingVideoBlobUrlRef.current = null;
+      }
+    };
+  }, []);
   const [readingText, setReadingText] = useState(
     `Tom wakes up early every morning.\nHe opens the window and makes his bed.\nThen he drinks a glass of water and eats breakfast.\nHe checks the time, takes his bag, and leaves home.\nA good morning helps him start the day with energy.`,
   );
@@ -1220,6 +1283,31 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
       if (s.readingIllustration) setReadingIllustration(s.readingIllustration as ReadingIllustrationStyle);
       if (s.readingBookFrame) setReadingBookFrame(s.readingBookFrame as ReadingBookFrameId);
       if (s.readingPointerStyle) setReadingPointerStyle(s.readingPointerStyle as ReadingPointerStyleId);
+      if (typeof s.readingDurationMinutes === 'number' && s.readingDurationMinutes > 0) {
+        setReadingDurationMinutes(s.readingDurationMinutes);
+        setReadingAiLength(Math.max(50, Math.min(1500, Math.round(s.readingDurationMinutes * 125))));
+      }
+      if (s.readingSubtitlePosition) setReadingSubtitlePosition(s.readingSubtitlePosition);
+      if (s.readingSubtitleSize) setReadingSubtitleSize(s.readingSubtitleSize);
+      if (s.readingBackgroundPresetId !== undefined) {
+        if (!s.readingBackgroundPresetId) {
+          setReadingBackground((prev) => (prev?.kind === 'preset' ? undefined : prev));
+        } else {
+          setReadingBackground({
+            kind: 'preset',
+            presetId: s.readingBackgroundPresetId,
+            fileName:
+              BACKGROUND_PRESETS.find((p) => p.id === s.readingBackgroundPresetId)?.name ||
+              s.readingBackgroundPresetId,
+            fit: 'cover',
+            scrimOpacity: 0.22,
+            learningScrimOpacity:
+              typeof s.readingLearningScrimOpacity === 'number'
+                ? s.readingLearningScrimOpacity
+                : 0.45,
+          });
+        }
+      }
       if (typeof s.readingIntroEnabled === 'boolean') setReadingIntroEnabled(s.readingIntroEnabled);
       if (typeof s.readingIntroSeconds === 'number') setReadingIntroSeconds(s.readingIntroSeconds);
       if (typeof s.readingOutroSpeechEnabled === 'boolean') setReadingOutroSpeechEnabled(s.readingOutroSpeechEnabled);
@@ -1266,6 +1354,16 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
       setReadingIllustration('2.5D');
       setReadingBookFrame('classic-page');
       setReadingPointerStyle('hand-classic');
+      setReadingDurationMinutes(1);
+      setReadingAiLength(110);
+      setReadingSubtitlePosition('center');
+      setReadingSubtitleSize('lg');
+      if (readingVideoBlobUrlRef.current) {
+        URL.revokeObjectURL(readingVideoBlobUrlRef.current);
+        readingVideoBlobUrlRef.current = null;
+      }
+      setReadingBackground(undefined);
+      setReadingBgError(null);
       setReadingIntroEnabled(true);
       setReadingIntroSeconds(3.4);
       setReadingOutroSpeechEnabled(true);
@@ -1319,6 +1417,12 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
         readingIllustration,
         readingBookFrame,
         readingPointerStyle,
+        readingDurationMinutes,
+        readingSubtitlePosition,
+        readingSubtitleSize,
+        readingBackgroundPresetId:
+          readingBackground?.kind === 'preset' ? readingBackground.presetId || '' : '',
+        readingLearningScrimOpacity: readingBackground?.learningScrimOpacity ?? 0.45,
         readingIntroEnabled,
         readingIntroSeconds,
         readingOutroSpeechEnabled,
@@ -1358,6 +1462,10 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
     readingIllustration,
     readingBookFrame,
     readingPointerStyle,
+    readingDurationMinutes,
+    readingSubtitlePosition,
+    readingSubtitleSize,
+    readingBackground,
     readingIntroEnabled,
     readingIntroSeconds,
     readingOutroSpeechEnabled,
@@ -1388,7 +1496,12 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
   const [pastedReadingAiError, setPastedReadingAiError] = useState<string | null>(null);
   const [readingAiTopic, setReadingAiTopic] = useState('Morning habits for better focus');
   const [readingAiLevel, setReadingAiLevel] = useState<'A1' | 'A2' | 'B1' | 'B2' | 'C1'>('B1');
-  const [readingAiLength, setReadingAiLength] = useState<number>(110);
+  const [readingAiLength, setReadingAiLength] = useState<number>(() =>
+    typeof initialEduSaved?.readingDurationMinutes === 'number' &&
+    initialEduSaved.readingDurationMinutes > 0
+      ? Math.max(50, Math.min(1500, Math.round(initialEduSaved.readingDurationMinutes * 125)))
+      : 110,
+  );
   const [isScrapingOrGeneratingReading, setIsScrapingOrGeneratingReading] = useState(false);
   const [readingAiProgress, setReadingAiProgress] = useState(0);
   const [readingAiStageLabel, setReadingAiStageLabel] = useState('');
@@ -1560,6 +1673,7 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
         topic: readingAiTopic,
         level: readingAiLevel,
         wordCount: readingAiLength,
+        durationMinutes: readingDurationMinutes,
       }),
     [
       readingWebPromptMode,
@@ -1568,6 +1682,7 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
       readingAiTopic,
       readingAiLevel,
       readingAiLength,
+      readingDurationMinutes,
     ],
   );
 
@@ -1596,32 +1711,75 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
     }
   }, [readingAspect]);
 
-  // Draw live Book + Pointer Hand + Intro/Outro Canvas Preview
+  const mappedReadingSubPos: EduKaraokePosition =
+    readingSubtitlePosition === 'top'
+      ? 'Trên'
+      : readingSubtitlePosition === 'bottom'
+        ? 'Dưới'
+        : 'Giữa';
+  const mappedReadingSubSize: EduKaraokeSize =
+    readingSubtitleSize === 'sm' ? 'Nhỏ' : readingSubtitleSize === 'md' ? 'Vừa' : 'Lớn';
+
+  // Draw live Book + Pointer Hand + Intro/Outro + Custom Background Canvas Preview
   useEffect(() => {
     const canvas = readingCanvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
-    renderReadingAlongFrame(ctx, {
-      width: canvas.width,
-      height: canvas.height,
-      title: readingTitle,
-      topicBadge: readingTopic,
-      text: readingText,
-      words: effectiveReadingWords,
-      currentTime: alignCurrentSec,
-      contentDuration: readingTimeline.contentEnd,
-      totalDuration: readingTimeline.effectiveTotalDuration,
-      introEnabled: readingIntroEnabled && readingIntroText.trim().length > 0,
-      introSeconds: activeIntroSec,
-      introTitle: 'HÔM NAY HỌC GÌ? · TODAY GOAL',
-      introSubtitle: readingIntroText.trim() || readingTitle,
-      paletteId: readingPaletteId,
-      illustrationStyle: readingIllustration,
-      bookFrame: readingBookFrame,
-      pointerStyle: readingPointerStyle,
-      watermarkOutro,
-    });
+
+    let cancelled = false;
+    const renderCurrent = () => {
+      if (cancelled) return;
+      renderReadingAlongFrame(ctx, {
+        width: canvas.width,
+        height: canvas.height,
+        title: readingTitle,
+        topicBadge: readingTopic,
+        text: readingText,
+        words: effectiveReadingWords,
+        currentTime: alignCurrentSec,
+        contentDuration: readingTimeline.contentEnd,
+        totalDuration: readingTimeline.effectiveTotalDuration,
+        introEnabled: readingIntroEnabled && readingIntroText.trim().length > 0,
+        introSeconds: activeIntroSec,
+        introTitle: 'HÔM NAY HỌC GÌ? · TODAY GOAL',
+        introSubtitle: readingIntroText.trim() || readingTitle,
+        paletteId: readingPaletteId,
+        illustrationStyle: readingIllustration,
+        bookFrame: readingBookFrame,
+        pointerStyle: readingPointerStyle,
+        background: readingBackground,
+        subtitlePosition: mappedReadingSubPos,
+        subtitleSize: mappedReadingSubSize,
+        watermarkOutro,
+      });
+    };
+
+    renderCurrent();
+
+    if (readingBackground && (readingBackground.kind === 'video' || readingBackground.dataUrl)) {
+      void (async () => {
+        await ensureProjectAssetsLoaded({
+          id: 'reading-bg-loader',
+          title: readingTitle,
+          subtitle: readingTopic,
+          theme: 'pastel-sunrise',
+          duration: readingTimeline.effectiveTotalDuration,
+          fps: 30,
+          cues: [],
+          elements: [],
+          backgroundImage: readingBackground,
+        });
+        if (!cancelled && readingBackground.kind === 'video' && readingBackground.videoUrl && !isPlayingReadingPreview) {
+          await seekBackgroundVideoTo(readingBackground.videoUrl, alignCurrentSec);
+        }
+        renderCurrent();
+      })();
+    }
+
+    return () => {
+      cancelled = true;
+    };
   }, [
     readingTitle,
     readingTopic,
@@ -1637,6 +1795,11 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
     readingIllustration,
     readingBookFrame,
     readingPointerStyle,
+    readingBackground,
+    readingBgAssetVersion,
+    mappedReadingSubPos,
+    mappedReadingSubSize,
+    isPlayingReadingPreview,
     watermarkOutro,
     previewCanvasDims.w,
     previewCanvasDims.h,
@@ -2071,6 +2234,7 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
         fps: readingFps === 60 ? 60 : 30,
         cues: [],
         elements: [],
+        backgroundImage: readingBackground,
       };
 
       const saved = await exportProjectToServerDisk(
@@ -2111,6 +2275,9 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
               illustrationStyle: readingIllustration,
               bookFrame: readingBookFrame,
               pointerStyle: readingPointerStyle,
+              background: readingBackground,
+              subtitlePosition: mappedReadingSubPos,
+              subtitleSize: mappedReadingSubSize,
               watermarkOutro: targetWatermark,
             });
           },
@@ -2183,6 +2350,7 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
             mode: 'adapt-url',
             level: readingAiLevel,
             wordCount: readingAiLength,
+            durationMinutes: readingDurationMinutes,
             sourceTitle: scraped.title || '',
             sourceText: extractedText,
           }),
@@ -2245,6 +2413,7 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
           topic: readingAiTopic.trim(),
           level: readingAiLevel,
           wordCount: readingAiLength,
+          durationMinutes: readingDurationMinutes,
         }),
       });
       const data = await parseApiJson<{
@@ -3407,7 +3576,7 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
                     </div>
                   )}
 
-                  {/* AI Generate Topic + Level + Length */}
+                  {/* AI Generate Topic + Level + Duration + Length */}
                   <div className="grid grid-cols-1 sm:grid-cols-12 gap-2 pt-2 border-t border-indigo-100">
                     <input
                       type="text"
@@ -3415,7 +3584,7 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
                       value={readingAiTopic}
                       onChange={(e) => setReadingAiTopic(e.target.value)}
                       placeholder="Chủ đề bài đọc (vd: A rainy day in London, Space travel...)"
-                      className="sm:col-span-5 px-2.5 py-1.5 text-xs bg-white border border-slate-200 rounded-lg"
+                      className="sm:col-span-4 px-2.5 py-1.5 text-xs bg-white border border-slate-200 rounded-lg"
                     />
                     <select
                       aria-label="Trình độ CEFR"
@@ -3432,6 +3601,23 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
                       <option value="C1">C1 · Nâng cao</option>
                     </select>
                     <select
+                      aria-label="Thời lượng render (phút)"
+                      value={readingDurationMinutes}
+                      onChange={(e) => {
+                        const mins = Number(e.target.value);
+                        setReadingDurationMinutes(mins);
+                        setReadingAiLength(Math.max(50, Math.min(1500, Math.round(mins * 125))));
+                      }}
+                      className="sm:col-span-2 px-2 py-1.5 text-xs bg-white border border-slate-200 rounded-lg font-semibold"
+                    >
+                      <option value={0.5}>~30 giây</option>
+                      <option value={1}>~1 phút</option>
+                      <option value={2}>~2 phút</option>
+                      <option value={3}>~3 phút</option>
+                      <option value={5}>~5 phút</option>
+                      <option value={10}>~10 phút</option>
+                    </select>
+                    <select
                       aria-label="Độ dài bài đọc"
                       value={readingAiLength}
                       onChange={(e) => setReadingAiLength(Number(e.target.value))}
@@ -3439,20 +3625,25 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
                     >
                       <option value={65}>Ngắn (~65 từ)</option>
                       <option value={110}>Vừa (~110 từ)</option>
+                      <option value={125}>1 phút (~125 từ)</option>
                       <option value={175}>Dài (~175 từ)</option>
+                      <option value={250}>2 phút (~250 từ)</option>
+                      <option value={375}>3 phút (~375 từ)</option>
+                      <option value={625}>5 phút (~625 từ)</option>
+                      <option value={1250}>10 phút (~1250 từ)</option>
                     </select>
                     <button
                       type="button"
                       disabled={isScrapingOrGeneratingReading || !readingAiTopic.trim()}
                       onClick={() => void handleAiGenerateReadingPassage()}
-                      className="sm:col-span-3 inline-flex items-center justify-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-violet-600 rounded-lg hover:bg-violet-700 disabled:opacity-50"
+                      className="sm:col-span-2 inline-flex items-center justify-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-violet-600 rounded-lg hover:bg-violet-700 disabled:opacity-50"
                     >
                       {isScrapingOrGeneratingReading ? (
                         <Loader2 className="w-3.5 h-3.5 animate-spin" />
                       ) : (
                         <Sparkles className="w-3.5 h-3.5" />
                       )}
-                      <span>AI Tự tạo bài đọc</span>
+                      <span>AI Tạo bài</span>
                     </button>
                   </div>
 
@@ -3607,12 +3798,19 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
                     <div className="grid grid-cols-2 gap-2.5">
                       <div>
                         <label htmlFor="reading-book-frame-select" className="block text-[11px] font-semibold text-slate-700 mb-1">
-                          Khung sách (5 mẫu)
+                          Khung sách &amp; Bố cục Plain
                         </label>
                         <select
                           id="reading-book-frame-select"
                           value={readingBookFrame}
-                          onChange={(e) => setReadingBookFrame(e.target.value as ReadingBookFrameId)}
+                          onChange={(e) => {
+                            const nextFrame = e.target.value as ReadingBookFrameId;
+                            setReadingBookFrame(nextFrame);
+                            if (nextFrame === 'plain') {
+                              setReadingSubtitlePosition('center');
+                              setReadingSubtitleSize('lg');
+                            }
+                          }}
                           className="w-full px-2.5 py-1.5 text-xs bg-white border border-slate-200 rounded-lg"
                         >
                           {READING_BOOK_FRAMES.map((bf) => (
@@ -3640,6 +3838,231 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
                             </option>
                           ))}
                         </select>
+                      </div>
+                    </div>
+
+                    {/* Subtitle Position/Size & Ambient Photo/Video Background */}
+                    <div className="p-2.5 rounded-xl bg-slate-50 border border-slate-200 space-y-2.5">
+                      <div className="grid grid-cols-2 gap-2">
+                        <div>
+                          <label htmlFor="reading-sub-pos-select" className="block text-[10px] font-semibold text-slate-600 mb-1">
+                            Vị trí chữ / phụ đề
+                          </label>
+                          <select
+                            id="reading-sub-pos-select"
+                            value={readingSubtitlePosition}
+                            onChange={(e) => setReadingSubtitlePosition(e.target.value as SubtitlePosition)}
+                            className="w-full px-2 py-1 text-[11px] bg-white border border-slate-200 rounded-lg font-medium"
+                          >
+                            <option value="top">Trên (Top)</option>
+                            <option value="center">Giữa màn hình (Center)</option>
+                            <option value="bottom">Đáy (Bottom)</option>
+                          </select>
+                        </div>
+                        <div>
+                          <label htmlFor="reading-sub-size-select" className="block text-[10px] font-semibold text-slate-600 mb-1">
+                            Độ to chữ
+                          </label>
+                          <select
+                            id="reading-sub-size-select"
+                            value={readingSubtitleSize}
+                            onChange={(e) => setReadingSubtitleSize(e.target.value as SubtitleSize)}
+                            className="w-full px-2 py-1 text-[11px] bg-white border border-slate-200 rounded-lg font-medium"
+                          >
+                            <option value="sm">Nhỏ (SM)</option>
+                            <option value="md">Vừa (MD)</option>
+                            <option value="lg">To (LG)</option>
+                            <option value="xl">Rất to (XL)</option>
+                          </select>
+                        </div>
+                      </div>
+
+                      <div className="space-y-1.5 pt-1 border-t border-slate-200/80">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-[11px] font-semibold text-slate-700 inline-flex items-center gap-1.5">
+                            <ImageIcon className="w-3.5 h-3.5 text-indigo-600" />
+                            <span>Hình / Video nền &amp; Opacity tập trung chữ</span>
+                          </span>
+                          <div className="flex items-center gap-1.5">
+                            <input
+                              ref={readingBgInputRef}
+                              type="file"
+                              accept="image/*,video/mp4,video/webm,video/quicktime"
+                              className="hidden"
+                              onChange={async (e) => {
+                                const file = e.target.files?.[0];
+                                e.target.value = '';
+                                if (!file) return;
+                                setReadingBgError(null);
+                                setIsProcessingReadingBg(true);
+                                try {
+                                  const isVideo =
+                                    file.type.startsWith('video/') ||
+                                    /\.(mp4|webm|mov|m4v)$/i.test(file.name);
+                                  if (readingVideoBlobUrlRef.current) {
+                                    URL.revokeObjectURL(readingVideoBlobUrlRef.current);
+                                    readingVideoBlobUrlRef.current = null;
+                                  }
+                                  if (isVideo) {
+                                    const url = URL.createObjectURL(file);
+                                    readingVideoBlobUrlRef.current = url;
+                                    setReadingBackground({
+                                      kind: 'video',
+                                      videoUrl: url,
+                                      fileName: file.name,
+                                      fit: 'cover',
+                                      scrimOpacity: 0.2,
+                                      learningScrimOpacity: 0.5,
+                                    });
+                                  } else {
+                                    const imgBg = await resizeImageFileToStageDataUrl(file, {
+                                      fit: 'cover',
+                                      scrimOpacity: 0.22,
+                                      aspectRatio: readingAspect,
+                                    });
+                                    setReadingBackground({
+                                      ...imgBg,
+                                      kind: 'image',
+                                      learningScrimOpacity: 0.48,
+                                    });
+                                  }
+                                } catch (err) {
+                                  setReadingBgError(
+                                    err instanceof Error ? err.message : 'Không nạp được file nền.',
+                                  );
+                                } finally {
+                                  setIsProcessingReadingBg(false);
+                                }
+                              }}
+                            />
+                            <button
+                              type="button"
+                              disabled={isProcessingReadingBg}
+                              onClick={() => readingBgInputRef.current?.click()}
+                              className="inline-flex items-center gap-1 px-2 py-1 text-[10px] font-semibold text-indigo-700 bg-white border border-indigo-200 rounded-md hover:bg-indigo-50"
+                            >
+                              <Upload className="w-3 h-3" />
+                              <span>{isProcessingReadingBg ? 'Đang xử lý...' : 'Tải Ảnh / Video'}</span>
+                            </button>
+                            {readingBackground && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  if (readingVideoBlobUrlRef.current) {
+                                    URL.revokeObjectURL(readingVideoBlobUrlRef.current);
+                                    readingVideoBlobUrlRef.current = null;
+                                  }
+                                  setReadingBackground(undefined);
+                                }}
+                                title="Xóa nền tùy chỉnh"
+                                className="inline-flex items-center gap-1 px-1.5 py-1 text-[10px] font-semibold text-rose-600 bg-white border border-rose-200 rounded-md hover:bg-rose-50"
+                              >
+                                <Trash2 className="w-3 h-3" />
+                              </button>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="grid grid-cols-3 gap-1.5">
+                          {BACKGROUND_PRESETS.map((preset) => {
+                            const active =
+                              readingBackground?.kind === 'preset' &&
+                              readingBackground.presetId === preset.id;
+                            return (
+                              <button
+                                key={preset.id}
+                                type="button"
+                                onClick={() => {
+                                  if (readingVideoBlobUrlRef.current) {
+                                    URL.revokeObjectURL(readingVideoBlobUrlRef.current);
+                                    readingVideoBlobUrlRef.current = null;
+                                  }
+                                  setReadingBackground({
+                                    kind: 'preset',
+                                    presetId: preset.id as BackgroundPresetId,
+                                    fileName: preset.name,
+                                    fit: 'cover',
+                                    scrimOpacity: 0.22,
+                                    learningScrimOpacity: 0.48,
+                                  });
+                                }}
+                                className={`flex items-center gap-1.5 px-2 py-1 rounded-md border text-left transition ${
+                                  active
+                                    ? 'border-indigo-500 bg-indigo-50 text-indigo-900 shadow-xs'
+                                    : 'border-slate-200 bg-white text-slate-700 hover:border-slate-300'
+                                }`}
+                                title={preset.shortDesc}
+                              >
+                                <span
+                                  className="w-3.5 h-3.5 rounded shrink-0 border border-white/40"
+                                  style={{ background: preset.previewGradient }}
+                                />
+                                <span className="text-[10px] font-semibold truncate">
+                                  {preset.name}
+                                </span>
+                              </button>
+                            );
+                          })}
+                        </div>
+
+                        {readingBackground && (
+                          <div className="grid grid-cols-2 gap-2 pt-1">
+                            <div>
+                              <div className="flex justify-between text-[10px] text-slate-600 mb-0.5">
+                                <span>Độ mờ khi học chữ</span>
+                                <span className="font-mono font-bold tabular-nums">
+                                  {Math.round(
+                                    (readingBackground.learningScrimOpacity ?? 0.48) * 100,
+                                  )}
+                                  %
+                                </span>
+                              </div>
+                              <input
+                                type="range"
+                                min={0}
+                                max={90}
+                                step={5}
+                                value={Math.round(
+                                  (readingBackground.learningScrimOpacity ?? 0.48) * 100,
+                                )}
+                                onChange={(e) =>
+                                  setReadingBackground((prev) =>
+                                    prev
+                                      ? {
+                                          ...prev,
+                                          learningScrimOpacity: Number(e.target.value) / 100,
+                                        }
+                                      : prev,
+                                  )
+                                }
+                                className="w-full accent-indigo-600"
+                              />
+                            </div>
+                            <div className="flex items-end justify-end gap-1">
+                              {(['cover', 'contain'] as BackgroundFitMode[]).map((fitMode) => (
+                                <button
+                                  key={fitMode}
+                                  type="button"
+                                  onClick={() =>
+                                    setReadingBackground((prev) =>
+                                      prev ? { ...prev, fit: fitMode } : prev,
+                                    )
+                                  }
+                                  className={`px-2 py-1 text-[10px] font-semibold rounded border ${
+                                    (readingBackground.fit || 'cover') === fitMode
+                                      ? 'bg-indigo-600 border-indigo-600 text-white'
+                                      : 'bg-white border-slate-200 text-slate-600'
+                                  }`}
+                                >
+                                  {fitMode === 'cover' ? 'Tràn khung' : 'Vừa khung'}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                        {readingBgError && (
+                          <p className="text-[10px] text-rose-600">{readingBgError}</p>
+                        )}
                       </div>
                     </div>
 

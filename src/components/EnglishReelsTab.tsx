@@ -25,12 +25,14 @@ import {
   Trash2,
   Volume2,
 } from 'lucide-react';
+import { BACKGROUND_PRESETS } from '../engine/backgroundPresets';
 import {
   ensureProjectAssetsLoaded,
   getStageDimensionsForAspect,
   hitTestElementLayout,
   renderProjectFrame,
   resolveElementLayoutForAspect,
+  seekBackgroundVideoTo,
   subscribeBgImageLoaded,
 } from '../engine/canvasRenderer';
 import {
@@ -38,6 +40,7 @@ import {
   normalizeTtsLangCode,
   pickExplanationDefaultVoice,
   pickLearningDefaultVoice,
+  splitMixedLanguageTtsSpans,
 } from '../engine/bilingualTtsHelper';
 import { resyncProjectTimingToCues } from '../engine/autoChoreographer';
 import {
@@ -100,12 +103,16 @@ import { cleanReadingWorksheetInput } from '../engine/readingPromptBuilder';
 import {
   BackgroundFitMode,
   BackgroundImageConfig,
+  BackgroundPresetId,
   CANVAS_THEMES,
   CanvasThemeId,
   IllustrationSceneIcon,
   IllustrationVariant,
   LayoutCompositionId,
   LessonProject,
+  SubtitleBoxStyle,
+  SubtitlePosition,
+  SubtitleSize,
   TranscriptCue,
   WatermarkCorner,
   WatermarkOutroConfig,
@@ -233,6 +240,36 @@ interface ElementLayoutOverride {
   scale?: number;
 }
 
+interface ReelsModeWorkspaceSnapshot {
+  cards: ReelCard[];
+  lessonTitle: string;
+  manualTitleEdited: boolean;
+  hasCustomCards: boolean;
+  mode: ReelMode;
+  rawText: string;
+  urlInput: string;
+  scrapeResult: ReelScrapeResult | null;
+  pastedAiJson: string;
+  aiJsonError: string | null;
+  aiJsonNotice: string | null;
+  sceneJsonOverride: FlexibleSceneDocument | null;
+  generatedAudioFile: File | null;
+  generatedAudioUrl: string | null;
+  generatedDurations: number[] | undefined;
+  generatedTimings: ReelCardTimingMeta[] | undefined;
+  customSyncedCues: TranscriptCue[] | null;
+  syncedTimingOffsetMs: number;
+  syncedSpeedFactor: number;
+  synthesizedAudioSig: string;
+  activeCardIdx: number;
+  videoTime: number;
+  previewViewMode: 'video' | 'cards';
+  layoutOverridesByAspect: Partial<
+    Record<ExportAspectRatioId, Record<string, ElementLayoutOverride>>
+  >;
+  selectedPreviewElementId: string | null;
+}
+
 export const EnglishReelsTab: React.FC<EnglishReelsTabProps> = ({ onSendToStudio }) => {
   const [initialReelsSaved] = useState(() => loadPersistedSettings().reels);
   const skipNextPersistRef = useRef(false);
@@ -247,10 +284,16 @@ export const EnglishReelsTab: React.FC<EnglishReelsTabProps> = ({ onSendToStudio
         !initialReelsSaved.lessonTitle.startsWith(STARTER_SAMPLE_TITLE_PREFIX),
     ),
   );
+  const modeWorkspacesRef = useRef<Partial<Record<ReelCreationMode, ReelsModeWorkspaceSnapshot>>>({});
+  const videoBgBlobUrlRef = useRef<string | null>(null);
+  const createdAudioUrlsRef = useRef<Set<string>>(new Set());
 
   // ── 1. Creation Mode, URL Scraper & Content ───────────────────────────────
   const [reelCreationMode, setReelCreationMode] = useState<ReelCreationMode>(
     () => initialReelsSaved?.reelCreationMode || 'source',
+  );
+  const [sourceDurationMinutes, setSourceDurationMinutes] = useState<number>(
+    () => initialReelsSaved?.sourceDurationMinutes ?? 2,
   );
   const [creatorTopicHint, setCreatorTopicHint] = useState(
     () => initialReelsSaved?.creatorTopicHint || '',
@@ -411,7 +454,31 @@ export const EnglishReelsTab: React.FC<EnglishReelsTabProps> = ({ onSendToStudio
   const [selectedComposition, setSelectedComposition] = useState<LayoutCompositionId>(
     () => initialReelsSaved?.selectedComposition || 'story-scenes',
   );
-  const [backgroundImage, setBackgroundImage] = useState<BackgroundImageConfig | undefined>(undefined);
+  const [subtitlePosition, setSubtitlePosition] = useState<SubtitlePosition>(
+    () =>
+      initialReelsSaved?.subtitlePosition ??
+      (initialReelsSaved?.selectedComposition === 'plain' ? 'center' : 'bottom'),
+  );
+  const [subtitleSize, setSubtitleSize] = useState<SubtitleSize>(
+    () =>
+      initialReelsSaved?.subtitleSize ??
+      (initialReelsSaved?.selectedComposition === 'plain' ? 'lg' : 'md'),
+  );
+  const [subtitleBoxStyle, setSubtitleBoxStyle] = useState<SubtitleBoxStyle>(
+    () =>
+      initialReelsSaved?.subtitleBoxStyle ??
+      (initialReelsSaved?.selectedComposition === 'plain' ? 'clean' : 'card'),
+  );
+  const [backgroundImage, setBackgroundImage] = useState<BackgroundImageConfig | undefined>(() => {
+    const pid = initialReelsSaved?.backgroundPresetId;
+    if (!pid) return undefined;
+    return {
+      kind: 'preset',
+      presetId: pid,
+      scrimOpacity: 0.16,
+      learningScrimOpacity: initialReelsSaved?.learningScrimOpacity ?? 0.42,
+    };
+  });
   const [isProcessingBg, setIsProcessingBg] = useState(false);
   const [bgUploadError, setBgUploadError] = useState<string | null>(null);
   const [bgAssetVersion, setBgAssetVersion] = useState(0);
@@ -540,6 +607,9 @@ export const EnglishReelsTab: React.FC<EnglishReelsTabProps> = ({ onSendToStudio
       if (r.creatorFormat) setCreatorFormat(r.creatorFormat);
       if (r.creatorLearningLang) setCreatorLearningLang(r.creatorLearningLang);
       if (r.creatorLevel) setCreatorLevel(r.creatorLevel);
+      if (typeof r.sourceDurationMinutes === 'number') {
+        setSourceDurationMinutes(r.sourceDurationMinutes);
+      }
       if (typeof r.creatorDurationMinutes === 'number') {
         setCreatorDurationMinutes(r.creatorDurationMinutes);
       }
@@ -566,6 +636,18 @@ export const EnglishReelsTab: React.FC<EnglishReelsTabProps> = ({ onSendToStudio
       if (r.reelsAspectRatio) setReelsAspectRatio(r.reelsAspectRatio);
       if (r.selectedTheme) setSelectedTheme(r.selectedTheme);
       if (r.selectedComposition) setSelectedComposition(r.selectedComposition);
+      if (r.subtitlePosition) setSubtitlePosition(r.subtitlePosition);
+      if (r.subtitleSize) setSubtitleSize(r.subtitleSize);
+      if (r.subtitleBoxStyle) setSubtitleBoxStyle(r.subtitleBoxStyle);
+      if (r.backgroundPresetId) {
+        setBackgroundImage({
+          kind: 'preset',
+          presetId: r.backgroundPresetId,
+          scrimOpacity: 0.16,
+          learningScrimOpacity:
+            typeof r.learningScrimOpacity === 'number' ? r.learningScrimOpacity : 0.42,
+        });
+      }
       if (r.bgmPreset) setBgmPreset(r.bgmPreset);
       if (typeof r.bgmVolume === 'number') setBgmVolume(r.bgmVolume);
       if (r.watermarkConfig) setWatermarkConfig({ ...DEFAULT_REELS_WATERMARK, ...r.watermarkConfig });
@@ -630,7 +712,13 @@ export const EnglishReelsTab: React.FC<EnglishReelsTabProps> = ({ onSendToStudio
       skipNextPersistRef.current = true;
       hasCustomCardsRef.current = false;
       manualTitleEditedRef.current = false;
+      modeWorkspacesRef.current = {};
+      if (videoBgBlobUrlRef.current) {
+        URL.revokeObjectURL(videoBgBlobUrlRef.current);
+        videoBgBlobUrlRef.current = null;
+      }
       setReelCreationMode('source');
+      setSourceDurationMinutes(2);
       setCreatorTopicHint('');
       setCreatorFormat('auto');
       setCreatorLearningLang('en');
@@ -658,6 +746,10 @@ export const EnglishReelsTab: React.FC<EnglishReelsTabProps> = ({ onSendToStudio
       setReelsAspectRatio('9:16');
       setSelectedTheme('pastel-sunrise');
       setSelectedComposition('story-scenes');
+      setSubtitlePosition('bottom');
+      setSubtitleSize('md');
+      setSubtitleBoxStyle('card');
+      setBackgroundImage(undefined);
       setBgmPreset('lofi-calm');
       setBgmVolume(0.18);
       setWatermarkConfig(DEFAULT_REELS_WATERMARK);
@@ -667,6 +759,12 @@ export const EnglishReelsTab: React.FC<EnglishReelsTabProps> = ({ onSendToStudio
       setPreviewViewMode('video');
       setLayoutOverridesByAspect({});
       setSelectedPreviewElementId(null);
+      setGeneratedAudioFile(null);
+      setGeneratedAudioUrl(null);
+      setGeneratedDurations(undefined);
+      setGeneratedTimings(undefined);
+      setCustomSyncedCues(null);
+      setSynthesizedAudioSig('');
       setLessonTitle('Hotel Check-in & Polite Requests');
       setRawText(SAMPLE_ARTICLE_TEXT);
       setPastedAiJson('');
@@ -686,6 +784,12 @@ export const EnglishReelsTab: React.FC<EnglishReelsTabProps> = ({ onSendToStudio
     return () => {
       window.removeEventListener(USER_SETTINGS_HYDRATED_EVENT, onHydrated);
       window.removeEventListener(USER_SETTINGS_RESET_EVENT, onReset);
+      if (videoBgBlobUrlRef.current) {
+        URL.revokeObjectURL(videoBgBlobUrlRef.current);
+        videoBgBlobUrlRef.current = null;
+      }
+      createdAudioUrlsRef.current.forEach((u) => URL.revokeObjectURL(u));
+      createdAudioUrlsRef.current.clear();
     };
   }, []);
 
@@ -701,6 +805,7 @@ export const EnglishReelsTab: React.FC<EnglishReelsTabProps> = ({ onSendToStudio
     updatePersistedSettings({
       reels: {
         reelCreationMode,
+        sourceDurationMinutes,
         creatorTopicHint,
         creatorFormat,
         creatorLearningLang,
@@ -730,6 +835,12 @@ export const EnglishReelsTab: React.FC<EnglishReelsTabProps> = ({ onSendToStudio
         reelsAspectRatio,
         selectedTheme,
         selectedComposition,
+        subtitlePosition,
+        subtitleSize,
+        subtitleBoxStyle,
+        backgroundPresetId:
+          backgroundImage?.kind === 'preset' ? backgroundImage.presetId || '' : '',
+        learningScrimOpacity: backgroundImage?.learningScrimOpacity ?? 0.42,
         bgmPreset,
         bgmVolume,
         watermarkConfig,
@@ -742,6 +853,7 @@ export const EnglishReelsTab: React.FC<EnglishReelsTabProps> = ({ onSendToStudio
     });
   }, [
     reelCreationMode,
+    sourceDurationMinutes,
     creatorTopicHint,
     creatorFormat,
     creatorLearningLang,
@@ -771,6 +883,10 @@ export const EnglishReelsTab: React.FC<EnglishReelsTabProps> = ({ onSendToStudio
     reelsAspectRatio,
     selectedTheme,
     selectedComposition,
+    subtitlePosition,
+    subtitleSize,
+    subtitleBoxStyle,
+    backgroundImage,
     bgmPreset,
     bgmVolume,
     watermarkConfig,
@@ -792,17 +908,39 @@ export const EnglishReelsTab: React.FC<EnglishReelsTabProps> = ({ onSendToStudio
     setBgUploadError(null);
     setIsProcessingBg(true);
     try {
-      const config = await resizeImageFileToStageDataUrl(file, {
-        fit: backgroundImage?.fit ?? 'cover',
-        scrimOpacity: backgroundImage?.scrimOpacity ?? 0.22,
-        aspectRatio: reelsAspectRatio,
-      });
-      setBackgroundImage(config);
+      const isVideo =
+        file.type.startsWith('video/') || /\.(mp4|webm|mov|m4v)$/i.test(file.name);
+      if (isVideo) {
+        if (videoBgBlobUrlRef.current) {
+          URL.revokeObjectURL(videoBgBlobUrlRef.current);
+        }
+        const blobUrl = URL.createObjectURL(file);
+        videoBgBlobUrlRef.current = blobUrl;
+        setBackgroundImage((prev) => ({
+          kind: 'video',
+          videoUrl: blobUrl,
+          fileName: file.name,
+          fit: prev?.fit ?? 'cover',
+          scrimOpacity: prev?.scrimOpacity ?? 0.18,
+          learningScrimOpacity: prev?.learningScrimOpacity ?? 0.42,
+        }));
+      } else {
+        const config = await resizeImageFileToStageDataUrl(file, {
+          fit: backgroundImage?.fit ?? 'cover',
+          scrimOpacity: backgroundImage?.scrimOpacity ?? 0.22,
+          aspectRatio: reelsAspectRatio,
+        });
+        setBackgroundImage((prev) => ({
+          ...config,
+          kind: 'image',
+          learningScrimOpacity: prev?.learningScrimOpacity ?? 0.42,
+        }));
+      }
     } catch (err) {
       setBgUploadError(
         err instanceof Error
           ? err.message
-          : 'Không thể đọc file ảnh nền. Hãy thử file PNG, JPG hoặc WebP.',
+          : 'Không thể đọc file nền. Hãy thử file PNG, JPG, WebP hoặc MP4/WebM.',
       );
     } finally {
       inputEl.value = '';
@@ -834,12 +972,6 @@ export const EnglishReelsTab: React.FC<EnglishReelsTabProps> = ({ onSendToStudio
       if (previewAudioUrl) URL.revokeObjectURL(previewAudioUrl);
     };
   }, [previewAudioUrl]);
-
-  useEffect(() => {
-    return () => {
-      if (generatedAudioUrl) URL.revokeObjectURL(generatedAudioUrl);
-    };
-  }, [generatedAudioUrl]);
 
   const effectiveHasGeminiKey = hasGeminiKey || Boolean(clientKeys.geminiApiKey);
   const effectiveHasElevenLabsKey = hasElevenLabsKey || Boolean(clientKeys.elevenlabsApiKey);
@@ -903,6 +1035,11 @@ export const EnglishReelsTab: React.FC<EnglishReelsTabProps> = ({ onSendToStudio
       aspectRatio: reelsAspectRatio,
       targetLang,
       backgroundImage,
+      subtitleConfig: {
+        position: subtitlePosition,
+        size: subtitleSize,
+        boxStyle: subtitleBoxStyle,
+      },
       compositionId: sceneJsonOverride ? undefined : selectedComposition,
       cardDurationsSec:
         generatedDurations && generatedDurations.length === cards.length
@@ -943,6 +1080,9 @@ export const EnglishReelsTab: React.FC<EnglishReelsTabProps> = ({ onSendToStudio
     targetLang,
     backgroundImage,
     selectedComposition,
+    subtitlePosition,
+    subtitleSize,
+    subtitleBoxStyle,
     generatedDurations,
     generatedTimings,
     generatedAudioFile?.name,
@@ -965,7 +1105,16 @@ export const EnglishReelsTab: React.FC<EnglishReelsTabProps> = ({ onSendToStudio
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
     let cancelled = false;
-    void ensureProjectAssetsLoaded(previewProject).then(() => {
+    void (async () => {
+      await ensureProjectAssetsLoaded(previewProject);
+      if (
+        previewProject.backgroundImage?.kind === 'video' &&
+        previewProject.backgroundImage.videoUrl &&
+        !isVideoPlaying &&
+        !isExportingVideo
+      ) {
+        await seekBackgroundVideoTo(previewProject.backgroundImage.videoUrl, videoTime);
+      }
       if (!cancelled) {
         renderProjectFrame(
           ctx,
@@ -974,7 +1123,7 @@ export const EnglishReelsTab: React.FC<EnglishReelsTabProps> = ({ onSendToStudio
           isVideoPlaying || isExportingVideo ? null : selectedPreviewElementId,
         );
       }
-    });
+    })();
     return () => {
       cancelled = true;
     };
@@ -1082,11 +1231,13 @@ export const EnglishReelsTab: React.FC<EnglishReelsTabProps> = ({ onSendToStudio
               title: lessonTitle,
               mode,
               targetLang,
+              durationMinutes: sourceDurationMinutes,
               compositionId: selectedComposition,
               includeQuiz: includeQuizInPrompt,
             }),
     [
       reelCreationMode,
+      sourceDurationMinutes,
       translationTopicHint,
       translationCustomLines,
       translationLearningLang,
@@ -1487,6 +1638,137 @@ export const EnglishReelsTab: React.FC<EnglishReelsTabProps> = ({ onSendToStudio
     setAiJsonNotice(`Đã tạo bộ Phản Xạ Dịch ${built.cards.filter((c) => c.type === 'translation').length} câu!`);
   };
 
+  const switchReelCreationMode = (nextMode: ReelCreationMode) => {
+    if (nextMode === reelCreationMode) return;
+    setIsVideoPlaying(false);
+    setPreviewAudioUrl((prev) => {
+      if (prev) URL.revokeObjectURL(prev);
+      return null;
+    });
+    setStudioError(null);
+    setExportNotice(null);
+
+    // Snapshot current workspace so each of the 3 sub-tabs keeps its own isolated state & preview
+    modeWorkspacesRef.current[reelCreationMode] = {
+      cards,
+      lessonTitle,
+      manualTitleEdited: manualTitleEditedRef.current,
+      hasCustomCards: hasCustomCardsRef.current,
+      mode,
+      rawText,
+      urlInput,
+      scrapeResult,
+      pastedAiJson,
+      aiJsonError,
+      aiJsonNotice,
+      sceneJsonOverride,
+      generatedAudioFile,
+      generatedAudioUrl,
+      generatedDurations,
+      generatedTimings,
+      customSyncedCues,
+      syncedTimingOffsetMs,
+      syncedSpeedFactor,
+      synthesizedAudioSig,
+      activeCardIdx,
+      videoTime,
+      previewViewMode,
+      layoutOverridesByAspect,
+      selectedPreviewElementId,
+    };
+
+    setReelCreationMode(nextMode);
+    const saved = modeWorkspacesRef.current[nextMode];
+    if (saved) {
+      hasCustomCardsRef.current = saved.hasCustomCards;
+      manualTitleEditedRef.current = saved.manualTitleEdited;
+      setCards(saved.cards);
+      setLessonTitle(saved.lessonTitle);
+      setMode(saved.mode);
+      setRawText(saved.rawText);
+      setUrlInput(saved.urlInput);
+      setScrapeResult(saved.scrapeResult);
+      setPastedAiJson(saved.pastedAiJson);
+      setAiJsonError(saved.aiJsonError);
+      setAiJsonNotice(saved.aiJsonNotice);
+      setSceneJsonOverride(saved.sceneJsonOverride);
+      setGeneratedAudioFile(saved.generatedAudioFile);
+      setGeneratedAudioUrl(saved.generatedAudioUrl);
+      setGeneratedDurations(saved.generatedDurations);
+      setGeneratedTimings(saved.generatedTimings);
+      setCustomSyncedCues(saved.customSyncedCues);
+      setSyncedTimingOffsetMs(saved.syncedTimingOffsetMs);
+      setSyncedSpeedFactor(saved.syncedSpeedFactor);
+      setSynthesizedAudioSig(saved.synthesizedAudioSig);
+      setActiveCardIdx(saved.activeCardIdx);
+      setVideoTime(saved.videoTime);
+      setPreviewViewMode(saved.previewViewMode);
+      setLayoutOverridesByAspect(saved.layoutOverridesByAspect);
+      setSelectedPreviewElementId(saved.selectedPreviewElementId);
+      return;
+    }
+
+    // First time entering nextMode in this session: initialize clean defaults
+    setPastedAiJson('');
+    setAiJsonError(null);
+    setAiJsonNotice(null);
+    setSceneJsonOverride(null);
+    setGeneratedAudioFile(null);
+    setGeneratedAudioUrl(null);
+    setGeneratedDurations(undefined);
+    setGeneratedTimings(undefined);
+    setCustomSyncedCues(null);
+    setSyncedTimingOffsetMs(0);
+    setSyncedSpeedFactor(1);
+    setSynthesizedAudioSig('');
+    setActiveCardIdx(0);
+    setVideoTime(0.5);
+    setPreviewViewMode('video');
+    setLayoutOverridesByAspect({});
+    setSelectedPreviewElementId(null);
+
+    if (nextMode === 'source') {
+      hasCustomCardsRef.current = false;
+      manualTitleEditedRef.current = false;
+      setUrlInput('');
+      setScrapeResult(null);
+      setRawText(SAMPLE_ARTICLE_TEXT);
+      setLessonTitle('Hotel Check-in & Polite Requests');
+      setMode('auto');
+      setCards(
+        buildReelCardsRuleBased(SAMPLE_ARTICLE_TEXT, {
+          title: 'Hotel Check-in & Polite Requests',
+          mode: 'auto',
+          targetLang,
+          includeQuiz: includeQuizInPrompt !== 'none',
+        }).cards,
+      );
+    } else if (nextMode === 'creator') {
+      applyStarterLesson(creatorLearningLang, targetLang, creatorLevel);
+      setTtsVoice(pickVoiceIdForProviderAndLang(ttsProvider, creatorLearningLang, availableVoices));
+    } else {
+      applyTranslationStarterOrCustom();
+      setTtsVoice(
+        pickVoiceIdForProviderAndLang(ttsProvider, translationLearningLang, availableVoices),
+      );
+    }
+  };
+
+  const shouldAutoSplitForTts = (
+    text: string,
+    primaryLang: string,
+    secondaryLang?: string,
+  ): boolean => {
+    if (!text.trim()) return false;
+    const spans = splitMixedLanguageTtsSpans(text, {
+      primaryLang,
+      secondaryLang,
+      autoSplit: true,
+    });
+    const normPrimary = normalizeTtsLangCode(primaryLang);
+    return spans.length > 1 || spans.some((s) => normalizeTtsLangCode(s.lang) !== normPrimary);
+  };
+
   const updateCardVisual = (index: number, patch: Partial<ReelCardVisualConfig>) => {
     setCards((prev) =>
       prev.map((c, idx) =>
@@ -1536,7 +1818,7 @@ export const EnglishReelsTab: React.FC<EnglishReelsTabProps> = ({ onSendToStudio
             pauseAfterSec: cardThink,
             voice: explanationTtsVoice,
             lang: explVoiceLang,
-            autoSplit: false,
+            autoSplit: shouldAutoSplitForTts(promptSpeech, explVoiceLang, cardTarget.lang),
           });
         }
         for (let r = 0; r < cardReps; r++) {
@@ -1546,7 +1828,7 @@ export const EnglishReelsTab: React.FC<EnglishReelsTabProps> = ({ onSendToStudio
             pauseAfterSec: r < cardReps - 1 ? 0.55 : nuanceTip ? 0.25 : 0.35,
             voice: cardTarget.voice,
             lang: cardTarget.lang,
-            autoSplit: roleSeparated ? false : undefined,
+            autoSplit: shouldAutoSplitForTts(answerSpeech, cardTarget.lang, explVoiceLang),
           });
         }
         if (nuanceTip) {
@@ -1556,29 +1838,35 @@ export const EnglishReelsTab: React.FC<EnglishReelsTabProps> = ({ onSendToStudio
             pauseAfterSec: 0.3,
             voice: explanationTtsVoice,
             lang: explVoiceLang,
-            autoSplit: false,
+            autoSplit: shouldAutoSplitForTts(nuanceTip, explVoiceLang, cardTarget.lang),
           });
         }
       } else if (activeCard.type === 'quiz' && activeCard.options?.length) {
         const { questionSpeech, answerSpeech, thinkSec } = getQuizCardSpeechParts(activeCard);
         if (questionSpeech) {
+          const cleanQ = stripParenthesizedPinyinIfCjk(questionSpeech, cardTarget.lang);
           segments.push({
             id: `${activeCard.id}-q`,
-            text: stripParenthesizedPinyinIfCjk(questionSpeech, cardTarget.lang),
+            text: cleanQ,
             pauseAfterSec: thinkSec,
             voice: cardTarget.voice,
             lang: cardTarget.lang,
-            autoSplit: roleSeparated ? false : undefined,
+            autoSplit: roleSeparated
+              ? shouldAutoSplitForTts(cleanQ, cardTarget.lang, explVoiceLang)
+              : undefined,
           });
         }
         if (answerSpeech) {
+          const cleanA = stripParenthesizedPinyinIfCjk(answerSpeech, cardTarget.lang);
           segments.push({
             id: `${activeCard.id}-a`,
-            text: stripParenthesizedPinyinIfCjk(answerSpeech, cardTarget.lang),
+            text: cleanA,
             pauseAfterSec: 0,
             voice: cardTarget.voice,
             lang: cardTarget.lang,
-            autoSplit: roleSeparated ? false : undefined,
+            autoSplit: roleSeparated
+              ? shouldAutoSplitForTts(cleanA, cardTarget.lang, explVoiceLang)
+              : undefined,
           });
         }
         const explSpeech = resolveCardExplanationSpeech(activeCard);
@@ -1589,7 +1877,7 @@ export const EnglishReelsTab: React.FC<EnglishReelsTabProps> = ({ onSendToStudio
             pauseAfterSec: 0,
             voice: explanationTtsVoice,
             lang: explVoiceLang,
-            autoSplit: false,
+            autoSplit: shouldAutoSplitForTts(explSpeech, explVoiceLang, cardTarget.lang),
           });
         }
       } else if (roleSeparated && (activeCard.type === 'intro' || activeCard.type === 'outro')) {
@@ -1602,7 +1890,7 @@ export const EnglishReelsTab: React.FC<EnglishReelsTabProps> = ({ onSendToStudio
             text: explOnly,
             voice: explanationTtsVoice,
             lang: explVoiceLang,
-            autoSplit: false,
+            autoSplit: shouldAutoSplitForTts(explOnly, explVoiceLang, cardTarget.lang),
           });
         } else {
           const cleanSpeech = stripParenthesizedPinyinIfCjk(
@@ -1615,7 +1903,7 @@ export const EnglishReelsTab: React.FC<EnglishReelsTabProps> = ({ onSendToStudio
             text: cleanSpeech,
             voice: cardTarget.voice,
             lang: cardTarget.lang,
-            autoSplit: false,
+            autoSplit: shouldAutoSplitForTts(cleanSpeech, cardTarget.lang, explVoiceLang),
           });
         }
       } else {
@@ -1629,7 +1917,9 @@ export const EnglishReelsTab: React.FC<EnglishReelsTabProps> = ({ onSendToStudio
           text: cleanSpeech,
           voice: cardTarget.voice,
           lang: cardTarget.lang,
-          autoSplit: roleSeparated ? false : undefined,
+          autoSplit: roleSeparated
+            ? shouldAutoSplitForTts(cleanSpeech, cardTarget.lang, explVoiceLang)
+            : undefined,
         });
         const explSpeech = resolveCardExplanationSpeech(activeCard);
         if (explSpeech && explSpeech.toLowerCase() !== cleanSpeech.toLowerCase()) {
@@ -1638,7 +1928,7 @@ export const EnglishReelsTab: React.FC<EnglishReelsTabProps> = ({ onSendToStudio
             text: explSpeech,
             voice: explanationTtsVoice,
             lang: explVoiceLang,
-            autoSplit: false,
+            autoSplit: shouldAutoSplitForTts(explSpeech, explVoiceLang, cardTarget.lang),
           });
         }
       }
@@ -1649,7 +1939,9 @@ export const EnglishReelsTab: React.FC<EnglishReelsTabProps> = ({ onSendToStudio
           lang: cardTarget.lang,
           secondaryVoice: enableDualTts && targetLang !== 'none' ? explanationTtsVoice : undefined,
           secondaryLang: enableDualTts && targetLang !== 'none' ? explVoiceLang : undefined,
-          autoSplitLanguages: !roleSeparated,
+          autoSplitLanguages:
+            segments.some((s) => s.autoSplit === true || s.autoSplit === undefined) ||
+            !roleSeparated,
           rate: ttsRate,
           segments,
         },
@@ -1751,7 +2043,7 @@ export const EnglishReelsTab: React.FC<EnglishReelsTabProps> = ({ onSendToStudio
           pauseAfterSec: cardThink,
           voice: explanationTtsVoice,
           lang: explVoiceLang,
-          autoSplit: false,
+          autoSplit: shouldAutoSplitForTts(promptSpeech, explVoiceLang, cardTarget.lang),
         });
 
         const repeatIndices: number[] = [];
@@ -1763,7 +2055,7 @@ export const EnglishReelsTab: React.FC<EnglishReelsTabProps> = ({ onSendToStudio
             pauseAfterSec: r < cardReps - 1 ? 0.55 : nuanceTip ? 0.25 : 0.35,
             voice: cardTarget.voice,
             lang: cardTarget.lang,
-            autoSplit: roleSeparated ? false : undefined,
+            autoSplit: shouldAutoSplitForTts(answerSpeech, cardTarget.lang, explVoiceLang),
           });
         }
 
@@ -1776,7 +2068,7 @@ export const EnglishReelsTab: React.FC<EnglishReelsTabProps> = ({ onSendToStudio
             pauseAfterSec: 0.3,
             voice: explanationTtsVoice,
             lang: explVoiceLang,
-            autoSplit: false,
+            autoSplit: shouldAutoSplitForTts(nuanceTip, explVoiceLang, cardTarget.lang),
           });
         }
         cardMapping.push({
@@ -1792,25 +2084,31 @@ export const EnglishReelsTab: React.FC<EnglishReelsTabProps> = ({ onSendToStudio
         quizOrd += 1;
         const pos = quizPositionByCard?.get(i) ?? quizOrd;
         const { questionSpeech, answerSpeech, thinkSec } = getQuizCardSpeechParts(c, pos);
+        const cleanQ = stripParenthesizedPinyinIfCjk(questionSpeech || 'Quiz question.', cardTarget.lang);
         const qIdx = segments.length;
         segments.push({
           id: `${c.id}-q`,
-          text: stripParenthesizedPinyinIfCjk(questionSpeech || 'Quiz question.', cardTarget.lang),
+          text: cleanQ,
           pauseAfterSec: thinkSec,
           voice: cardTarget.voice,
           lang: cardTarget.lang,
-          autoSplit: roleSeparated ? false : undefined,
+          autoSplit: roleSeparated
+            ? shouldAutoSplitForTts(cleanQ, cardTarget.lang, explVoiceLang)
+            : undefined,
         });
         let aIdx: number | null = null;
         if (answerSpeech) {
+          const cleanA = stripParenthesizedPinyinIfCjk(answerSpeech, cardTarget.lang);
           aIdx = segments.length;
           segments.push({
             id: `${c.id}-a`,
-            text: stripParenthesizedPinyinIfCjk(answerSpeech, cardTarget.lang),
+            text: cleanA,
             pauseAfterSec: 0,
             voice: cardTarget.voice,
             lang: cardTarget.lang,
-            autoSplit: roleSeparated ? false : undefined,
+            autoSplit: roleSeparated
+              ? shouldAutoSplitForTts(cleanA, cardTarget.lang, explVoiceLang)
+              : undefined,
           });
         }
         let explIdx: number | null = null;
@@ -1822,7 +2120,7 @@ export const EnglishReelsTab: React.FC<EnglishReelsTabProps> = ({ onSendToStudio
             pauseAfterSec: 0,
             voice: explanationTtsVoice,
             lang: explVoiceLang,
-            autoSplit: false,
+            autoSplit: shouldAutoSplitForTts(explSpeech, explVoiceLang, cardTarget.lang),
           });
         }
         cardMapping.push({ qIdx, explIdx, aIdx, thinkSec, isOutro: false });
@@ -1841,7 +2139,7 @@ export const EnglishReelsTab: React.FC<EnglishReelsTabProps> = ({ onSendToStudio
           pauseAfterSec: 0,
           voice: explanationTtsVoice,
           lang: explVoiceLang,
-          autoSplit: false,
+          autoSplit: shouldAutoSplitForTts(explOnly, explVoiceLang, cardTarget.lang),
         });
         cardMapping.push({ qIdx: null, explIdx, aIdx: null, thinkSec: 0, isOutro: c.type === 'outro' });
       } else {
@@ -1856,7 +2154,9 @@ export const EnglishReelsTab: React.FC<EnglishReelsTabProps> = ({ onSendToStudio
           pauseAfterSec: 0,
           voice: cardTarget.voice,
           lang: cardTarget.lang,
-          autoSplit: roleSeparated ? false : undefined,
+          autoSplit: roleSeparated
+            ? shouldAutoSplitForTts(cleanSpeech, cardTarget.lang, explVoiceLang)
+            : undefined,
         });
         let explIdx: number | null = null;
         if (explSpeech && explSpeech.toLowerCase() !== cleanSpeech.toLowerCase()) {
@@ -1867,7 +2167,7 @@ export const EnglishReelsTab: React.FC<EnglishReelsTabProps> = ({ onSendToStudio
             pauseAfterSec: 0,
             voice: explanationTtsVoice,
             lang: explVoiceLang,
-            autoSplit: false,
+            autoSplit: shouldAutoSplitForTts(explSpeech, explVoiceLang, cardTarget.lang),
           });
         }
         cardMapping.push({ qIdx, explIdx, aIdx: null, thinkSec: 0, isOutro: c.type === 'outro' });
@@ -1882,20 +2182,24 @@ export const EnglishReelsTab: React.FC<EnglishReelsTabProps> = ({ onSendToStudio
         : '';
     const extraOutroIdx = extraOutroSpeech ? segments.length : -1;
     if (extraOutroSpeech) {
+      const oVoice = roleSeparated ? explanationTtsVoice : lessonVoice;
+      const oLang = roleSeparated ? explVoiceLang : lessonVoiceLang;
       segments.push({
         id: 'watermark-outro-speech',
         text: extraOutroSpeech,
         pauseAfterSec: 0.4,
-        voice: roleSeparated ? explanationTtsVoice : lessonVoice,
-        lang: roleSeparated ? explVoiceLang : lessonVoiceLang,
-        autoSplit: roleSeparated ? false : undefined,
+        voice: oVoice,
+        lang: oLang,
+        autoSplit: roleSeparated
+          ? shouldAutoSplitForTts(extraOutroSpeech, oLang, lessonVoiceLang)
+          : undefined,
       });
     }
 
     setTtsProgress(4);
     setTtsStageLabel(
       roleSeparated
-        ? 'Đang tạo giọng đọc tách vai (Ngoại ngữ cho nội dung · Giải thích cho dẫn nhập)...'
+        ? 'Đang tạo giọng đọc tách vai (tự xử lý từ xen kẽ nếu có)...'
         : 'Đang tạo giọng đọc bài học (Dual-TTS tách ngôn ngữ)...',
     );
     const data = await synthesizeAudioWithProgressJob(
@@ -1905,7 +2209,9 @@ export const EnglishReelsTab: React.FC<EnglishReelsTabProps> = ({ onSendToStudio
         lang: lessonVoiceLang,
         secondaryVoice: enableDualTts && targetLang !== 'none' ? explanationTtsVoice : undefined,
         secondaryLang: enableDualTts && targetLang !== 'none' ? explVoiceLang : undefined,
-        autoSplitLanguages: !roleSeparated,
+        autoSplitLanguages:
+          segments.some((s) => s.autoSplit === true || s.autoSplit === undefined) ||
+          !roleSeparated,
         rate: ttsRate,
         segments,
       },
@@ -2017,6 +2323,11 @@ export const EnglishReelsTab: React.FC<EnglishReelsTabProps> = ({ onSendToStudio
       aspectRatio: reelsAspectRatio,
       targetLang,
       backgroundImage,
+      subtitleConfig: {
+        position: subtitlePosition,
+        size: subtitleSize,
+        boxStyle: subtitleBoxStyle,
+      },
       compositionId: sceneJsonOverride ? undefined : selectedComposition,
       cardDurationsSec: durations,
       cardTimings: timings,
@@ -2090,8 +2401,17 @@ export const EnglishReelsTab: React.FC<EnglishReelsTabProps> = ({ onSendToStudio
     }
 
     const nextAudioUrl = URL.createObjectURL(finalAudioFile);
+    createdAudioUrlsRef.current.add(nextAudioUrl);
     setGeneratedAudioUrl((prev) => {
-      if (prev) URL.revokeObjectURL(prev);
+      if (prev && createdAudioUrlsRef.current.has(prev)) {
+        const stillReferenced = Object.entries(modeWorkspacesRef.current).some(
+          ([k, ws]) => k !== reelCreationMode && ws?.generatedAudioUrl === prev,
+        );
+        if (!stillReferenced) {
+          URL.revokeObjectURL(prev);
+          createdAudioUrlsRef.current.delete(prev);
+        }
+      }
       return nextAudioUrl;
     });
     setGeneratedAudioFile(finalAudioFile);
@@ -2311,7 +2631,7 @@ export const EnglishReelsTab: React.FC<EnglishReelsTabProps> = ({ onSendToStudio
                 type="button"
                 role="tab"
                 aria-selected={reelCreationMode === 'source'}
-                onClick={() => setReelCreationMode('source')}
+                onClick={() => switchReelCreationMode('source')}
                 className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-colors whitespace-nowrap shrink-0 ${
                   reelCreationMode === 'source'
                     ? 'bg-white text-indigo-700 shadow-xs'
@@ -2324,16 +2644,7 @@ export const EnglishReelsTab: React.FC<EnglishReelsTabProps> = ({ onSendToStudio
                 type="button"
                 role="tab"
                 aria-selected={reelCreationMode === 'creator'}
-                onClick={() => {
-                  setReelCreationMode('creator');
-                  if (
-                    creatorLearningLang !== 'en' &&
-                    lessonTitle === 'Hotel Check-in & Polite Requests' &&
-                    !pastedAiJson.trim()
-                  ) {
-                    applyStarterLesson(creatorLearningLang, targetLang, creatorLevel);
-                  }
-                }}
+                onClick={() => switchReelCreationMode('creator')}
                 className={`inline-flex items-center gap-1 px-3 py-1.5 text-xs font-semibold rounded-md transition-colors whitespace-nowrap shrink-0 ${
                   reelCreationMode === 'creator'
                     ? 'bg-indigo-600 text-white shadow-xs'
@@ -2347,13 +2658,7 @@ export const EnglishReelsTab: React.FC<EnglishReelsTabProps> = ({ onSendToStudio
                 type="button"
                 role="tab"
                 aria-selected={reelCreationMode === 'translation'}
-                onClick={() => {
-                  setReelCreationMode('translation');
-                  const hasTranslationCard = cards.some((c) => c.type === 'translation');
-                  if (!hasTranslationCard && !pastedAiJson.trim()) {
-                    applyTranslationStarterOrCustom();
-                  }
-                }}
+                onClick={() => switchReelCreationMode('translation')}
                 className={`inline-flex items-center gap-1 px-3 py-1.5 text-xs font-semibold rounded-md transition-colors whitespace-nowrap shrink-0 ${
                   reelCreationMode === 'translation'
                     ? 'bg-amber-500 text-white shadow-xs'
@@ -2470,7 +2775,7 @@ export const EnglishReelsTab: React.FC<EnglishReelsTabProps> = ({ onSendToStudio
           <section className="bg-white border border-slate-200 rounded-xl p-4 space-y-3">
             {reelCreationMode === 'source' ? (
               <>
-                <div className="grid grid-cols-1 sm:grid-cols-4 gap-2.5">
+                <div className="grid grid-cols-1 sm:grid-cols-5 gap-2.5">
                   <div className="sm:col-span-1">
                     <label className="block text-[11px] font-semibold text-slate-700 mb-1">
                       Tên bài học
@@ -2498,6 +2803,24 @@ export const EnglishReelsTab: React.FC<EnglishReelsTabProps> = ({ onSendToStudio
                       <option value="reading">Reading (Đoạn đọc)</option>
                       <option value="quiz">Quiz (True/False &amp; Comprehension)</option>
                       <option value="vocab">Vocabulary (Từ vựng &amp; IPA)</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-semibold text-slate-700 mb-1">
+                      Thời lượng Prompt
+                    </label>
+                    <select
+                      aria-label="Thời lượng render mục tiêu cho Prompt Từ Nguồn"
+                      value={String(sourceDurationMinutes)}
+                      onChange={(e) => setSourceDurationMinutes(Number(e.target.value) || 2)}
+                      className="w-full px-2.5 py-1.5 text-xs bg-white border border-slate-200 rounded-lg tabular-nums"
+                    >
+                      <option value="0.5">0.5 phút (30s)</option>
+                      <option value="1">1 phút</option>
+                      <option value="2">2 phút</option>
+                      <option value="3">3 phút</option>
+                      <option value="5">5 phút</option>
+                      <option value="10">10 phút</option>
                     </select>
                   </div>
                   <div>
@@ -3452,18 +3775,20 @@ export const EnglishReelsTab: React.FC<EnglishReelsTabProps> = ({ onSendToStudio
                     </div>
                   </div>
 
-                  <div>
-                    <label className="block text-[11px] font-semibold text-slate-700 mb-1">
-                      Phiên âm IPA (chỉ dùng nếu bài học từ vựng cần)
-                    </label>
-                    <input
-                      type="text"
-                      value={activeCard.phonetic || ''}
-                      onChange={(e) => updateCard(safeActiveIdx, { phonetic: e.target.value })}
-                      placeholder="Để trống nếu là bài đọc hiểu..."
-                      className="w-full px-2.5 py-1.5 text-xs bg-white border border-slate-200 rounded-lg font-mono"
-                    />
-                  </div>
+                  {activeCard.type !== 'translation' && (
+                    <div>
+                      <label className="block text-[11px] font-semibold text-slate-700 mb-1">
+                        Phiên âm IPA (chỉ dùng nếu bài học từ vựng cần)
+                      </label>
+                      <input
+                        type="text"
+                        value={activeCard.phonetic || ''}
+                        onChange={(e) => updateCard(safeActiveIdx, { phonetic: e.target.value })}
+                        placeholder="Để trống nếu là bài đọc hiểu..."
+                        className="w-full px-2.5 py-1.5 text-xs bg-white border border-slate-200 rounded-lg font-mono"
+                      />
+                    </div>
+                  )}
 
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                     <div>
@@ -3507,6 +3832,20 @@ export const EnglishReelsTab: React.FC<EnglishReelsTabProps> = ({ onSendToStudio
                             })
                           }
                           placeholder="Coi chừng cô ấy đấy!"
+                          className="w-full px-2.5 py-1.5 text-xs bg-white border border-amber-200 rounded-lg"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[11px] font-semibold text-amber-900 mb-1">
+                          Giải thích từ vựng khó trong câu (thay cho phiên âm cả câu)
+                        </label>
+                        <input
+                          type="text"
+                          value={activeCard.vocabNotes || ''}
+                          onChange={(e) =>
+                            updateCard(safeActiveIdx, { vocabNotes: e.target.value })
+                          }
+                          placeholder="vd: 彼女 (cô ấy) · 気をつけて (hãy cẩn thận)"
                           className="w-full px-2.5 py-1.5 text-xs bg-white border border-amber-200 rounded-lg"
                         />
                       </div>
@@ -4141,19 +4480,49 @@ export const EnglishReelsTab: React.FC<EnglishReelsTabProps> = ({ onSendToStudio
               >
                 {backgroundImage && (
                   <>
-                    <img
-                      src={backgroundImage.dataUrl}
-                      alt="Ảnh nền xem trước thẻ"
-                      data-testid="reels-card-bg-image"
-                      className="absolute inset-0 w-full h-full pointer-events-none"
-                      style={{
-                        objectFit: backgroundImage.fit === 'contain' ? 'contain' : 'cover',
-                      }}
-                    />
+                    {backgroundImage.kind === 'video' && backgroundImage.videoUrl ? (
+                      <video
+                        src={backgroundImage.videoUrl}
+                        autoPlay
+                        loop
+                        muted
+                        playsInline
+                        data-testid="reels-card-bg-video"
+                        className="absolute inset-0 w-full h-full pointer-events-none"
+                        style={{
+                          objectFit: backgroundImage.fit === 'contain' ? 'contain' : 'cover',
+                        }}
+                      />
+                    ) : backgroundImage.kind === 'preset' && backgroundImage.presetId ? (
+                      <div
+                        data-testid="reels-card-bg-preset"
+                        className="absolute inset-0 w-full h-full pointer-events-none"
+                        style={{
+                          background:
+                            BACKGROUND_PRESETS.find((p) => p.id === backgroundImage.presetId)
+                              ?.previewGradient ||
+                            'linear-gradient(160deg, #1E1B2E 0%, #3B2820 55%, #78350F 100%)',
+                        }}
+                      />
+                    ) : (
+                      backgroundImage.dataUrl && (
+                        <img
+                          src={backgroundImage.dataUrl}
+                          alt="Ảnh nền xem trước thẻ"
+                          data-testid="reels-card-bg-image"
+                          className="absolute inset-0 w-full h-full pointer-events-none"
+                          style={{
+                            objectFit: backgroundImage.fit === 'contain' ? 'contain' : 'cover',
+                          }}
+                        />
+                      )
+                    )}
                     <div
                       className="absolute inset-0 pointer-events-none"
                       style={{
-                        backgroundColor: `rgba(15, 23, 42, ${backgroundImage.scrimOpacity ?? 0.22})`,
+                        backgroundColor: `rgba(15, 23, 42, ${
+                          backgroundImage.learningScrimOpacity ?? backgroundImage.scrimOpacity ?? 0.22
+                        })`,
                       }}
                     />
                   </>
@@ -4169,7 +4538,7 @@ export const EnglishReelsTab: React.FC<EnglishReelsTabProps> = ({ onSendToStudio
                   {activeCard.type === 'vocab' && activeCard.title !== activeCard.content && (
                     <div className="text-base font-extrabold text-indigo-700">{activeCard.title}</div>
                   )}
-                  {activeCard.phonetic && (
+                  {activeCard.type !== 'translation' && activeCard.phonetic && (
                     <div className="text-xs font-mono text-slate-500">{activeCard.phonetic}</div>
                   )}
                   <div className="text-sm font-bold leading-snug text-slate-900">
@@ -4200,6 +4569,16 @@ export const EnglishReelsTab: React.FC<EnglishReelsTabProps> = ({ onSendToStudio
                   {activeCard.translation && (
                     <div className="text-xs text-slate-600 pt-1 border-t border-slate-100">
                       {activeCard.translation}
+                    </div>
+                  )}
+                  {activeCard.vocabNotes && (
+                    <div className="text-[11px] text-indigo-700 font-medium">
+                      Từ vựng: {activeCard.vocabNotes}
+                    </div>
+                  )}
+                  {activeCard.grammarNote && (
+                    <div className="text-[11px] text-amber-700 font-medium">
+                      Ngữ pháp: {activeCard.grammarNote}
                     </div>
                   )}
                   {activeCard.explanation && (
@@ -4550,8 +4929,18 @@ export const EnglishReelsTab: React.FC<EnglishReelsTabProps> = ({ onSendToStudio
                   aria-label="Bố cục KineticSub"
                   value={selectedComposition}
                   onChange={(e) => {
-                    setSelectedComposition(e.target.value as LayoutCompositionId);
+                    const nextComp = e.target.value as LayoutCompositionId;
+                    setSelectedComposition(nextComp);
                     setSceneJsonOverride(null);
+                    if (nextComp === 'plain') {
+                      setSubtitlePosition('center');
+                      setSubtitleSize('lg');
+                      setSubtitleBoxStyle('clean');
+                    } else if (selectedComposition === 'plain') {
+                      setSubtitlePosition('bottom');
+                      setSubtitleSize('md');
+                      setSubtitleBoxStyle('card');
+                    }
                   }}
                   className="w-full px-2 py-1.5 text-xs bg-white border border-slate-200 rounded-lg"
                 >
@@ -4564,69 +4953,138 @@ export const EnglishReelsTab: React.FC<EnglishReelsTabProps> = ({ onSendToStudio
               </div>
             </div>
 
-            {/* Background Image Upload (Auto-Resize 9:16) */}
-            <div className="pt-1 border-t border-slate-200/80 flex flex-wrap items-center justify-between gap-2">
-              <input
-                ref={bgInputRef}
-                type="file"
-                accept="image/*"
-                className="hidden"
-                onChange={(e) => void handleUploadBgImage(e)}
-              />
-              <button
-                type="button"
-                disabled={isExportingVideo || isProcessingBg}
-                onClick={() => bgInputRef.current?.click()}
-                className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-[11px] font-medium text-slate-700 bg-white border border-slate-200 rounded-lg hover:bg-slate-100 disabled:opacity-50"
-              >
-                <ImageIcon className="w-3.5 h-3.5 text-indigo-600" />
-                <span>
-                  {isProcessingBg
-                    ? `Đang resize ${reelsAspectRatio}...`
-                    : backgroundImage
-                      ? `Ảnh nền: ${backgroundImage.fileName || 'Đã nạp'}`
-                      : `Tải ảnh nền (Tự resize ${reelsAspectRatio})`}
+            {/* Ambient Presets + Background Image/Video Upload + Learning Focus Opacity + Subtitle Position/Size */}
+            <div className="pt-2 border-t border-slate-200/80 space-y-2">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="text-[11px] font-semibold text-slate-700">
+                  Nền không gian học tập (YouTube Ambience) hoặc tải Ảnh/Video
                 </span>
-              </button>
+                <input
+                  ref={bgInputRef}
+                  type="file"
+                  accept="image/*,video/mp4,video/webm,video/quicktime"
+                  className="hidden"
+                  onChange={(e) => void handleUploadBgImage(e)}
+                />
+                <button
+                  type="button"
+                  disabled={isExportingVideo || isProcessingBg}
+                  onClick={() => bgInputRef.current?.click()}
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-medium text-slate-700 bg-white border border-slate-200 rounded-lg hover:bg-slate-100 disabled:opacity-50"
+                >
+                  <ImageIcon className="w-3.5 h-3.5 text-indigo-600" />
+                  <span>
+                    {isProcessingBg
+                      ? `Đang xử lý ${reelsAspectRatio}...`
+                      : backgroundImage && backgroundImage.kind !== 'preset'
+                        ? `Nền: ${backgroundImage.fileName || 'Đã nạp'}`
+                        : `Tải Ảnh / Video MP4`}
+                  </span>
+                </button>
+              </div>
+
+              <div className="grid grid-cols-3 gap-1.5">
+                {BACKGROUND_PRESETS.map((preset) => {
+                  const isActive =
+                    backgroundImage?.kind === 'preset' && backgroundImage.presetId === preset.id;
+                  return (
+                    <button
+                      key={preset.id}
+                      type="button"
+                      title={preset.shortDesc}
+                      onClick={() => {
+                        if (videoBgBlobUrlRef.current) {
+                          URL.revokeObjectURL(videoBgBlobUrlRef.current);
+                          videoBgBlobUrlRef.current = null;
+                        }
+                        setBackgroundImage((prev) => ({
+                          kind: 'preset',
+                          presetId: preset.id as BackgroundPresetId,
+                          fileName: preset.name,
+                          fit: 'cover',
+                          scrimOpacity: prev?.scrimOpacity ?? 0.16,
+                          learningScrimOpacity: prev?.learningScrimOpacity ?? 0.42,
+                        }));
+                      }}
+                      className={`flex items-center gap-1.5 px-2 py-1 rounded-lg border text-left text-[10px] font-medium transition-colors ${
+                        isActive
+                          ? 'bg-indigo-50 border-indigo-400 text-indigo-900'
+                          : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
+                      }`}
+                    >
+                      <span
+                        className="w-3 h-3 rounded-sm shrink-0 border border-black/15"
+                        style={{ background: preset.previewGradient }}
+                      />
+                      <span className="truncate">{preset.name}</span>
+                    </button>
+                  );
+                })}
+              </div>
 
               {backgroundImage && (
-                <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setBackgroundImage((prev) =>
-                        prev
-                          ? {
-                              ...prev,
-                              fit: (prev.fit === 'contain' ? 'cover' : 'contain') as BackgroundFitMode,
-                            }
-                          : undefined,
-                      )
-                    }
-                    className="px-2 py-1 text-[10px] font-semibold bg-white border border-slate-200 rounded text-slate-700 hover:bg-slate-50"
-                    title={`Đổi chế độ phủ khung ${reelsAspectRatio}`}
-                  >
-                    {backgroundImage.fit === 'contain' ? 'Vừa khung' : 'Phủ đầy'}
-                  </button>
-                  <input
-                    type="range"
-                    aria-label="Độ tối lớp phủ ảnh nền Reels"
-                    min={0}
-                    max={0.7}
-                    step={0.05}
-                    value={backgroundImage.scrimOpacity ?? 0.22}
-                    onChange={(e) =>
-                      setBackgroundImage((prev) =>
-                        prev ? { ...prev, scrimOpacity: Number(e.target.value) } : undefined,
-                      )
-                    }
-                    title="Làm dịu ảnh nền để chữ nổi rõ hơn"
-                    className="w-16 accent-indigo-600 h-1"
-                  />
+                <div className="flex flex-wrap items-center justify-between gap-2 text-[10px] pt-1">
+                  {backgroundImage.kind !== 'preset' && (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setBackgroundImage((prev) =>
+                          prev
+                            ? {
+                                ...prev,
+                                fit: (prev.fit === 'contain' ? 'cover' : 'contain') as BackgroundFitMode,
+                              }
+                            : undefined,
+                        )
+                      }
+                      className="px-2 py-1 font-semibold bg-white border border-slate-200 rounded text-slate-700 hover:bg-slate-50"
+                      title={`Đổi chế độ phủ khung ${reelsAspectRatio}`}
+                    >
+                      {backgroundImage.fit === 'contain' ? 'Vừa khung' : 'Phủ đầy'}
+                    </button>
+                  )}
+                  <label className="flex items-center gap-1.5 text-slate-600">
+                    <span>Độ tối nền: {Math.round((backgroundImage.scrimOpacity ?? 0.2) * 100)}%</span>
+                    <input
+                      type="range"
+                      aria-label="Độ tối lớp phủ ảnh nền Reels"
+                      min={0}
+                      max={0.75}
+                      step={0.05}
+                      value={backgroundImage.scrimOpacity ?? 0.2}
+                      onChange={(e) =>
+                        setBackgroundImage((prev) =>
+                          prev ? { ...prev, scrimOpacity: Number(e.target.value) } : undefined,
+                        )
+                      }
+                      className="w-16 accent-indigo-600 h-1"
+                    />
+                  </label>
+                  <label className="flex items-center gap-1.5 text-slate-600">
+                    <span>Tập trung chữ: {Math.round((backgroundImage.learningScrimOpacity ?? 0.42) * 100)}%</span>
+                    <input
+                      type="range"
+                      aria-label="Độ tối nền khi vào chữ học Reels"
+                      min={0}
+                      max={0.85}
+                      step={0.05}
+                      value={backgroundImage.learningScrimOpacity ?? 0.42}
+                      onChange={(e) =>
+                        setBackgroundImage((prev) =>
+                          prev ? { ...prev, learningScrimOpacity: Number(e.target.value) } : undefined,
+                        )
+                      }
+                      className="w-16 accent-indigo-600 h-1"
+                    />
+                  </label>
                   <button
                     type="button"
                     onClick={() => {
                       setBgUploadError(null);
+                      if (videoBgBlobUrlRef.current) {
+                        URL.revokeObjectURL(videoBgBlobUrlRef.current);
+                        videoBgBlobUrlRef.current = null;
+                      }
                       setBackgroundImage(undefined);
                     }}
                     aria-label="Xóa ảnh nền Reels"
@@ -4636,6 +5094,55 @@ export const EnglishReelsTab: React.FC<EnglishReelsTabProps> = ({ onSendToStudio
                   </button>
                 </div>
               )}
+
+              <div className="grid grid-cols-3 gap-2 pt-1.5 border-t border-slate-200/80">
+                <div>
+                  <label className="block text-[10px] font-semibold text-slate-600 mb-1">
+                    Vị trí Sub
+                  </label>
+                  <select
+                    aria-label="Vị trí hiển thị Sub Reels"
+                    value={subtitlePosition}
+                    onChange={(e) => setSubtitlePosition(e.target.value as SubtitlePosition)}
+                    className="w-full px-2 py-1 text-[11px] bg-white border border-slate-200 rounded-lg"
+                  >
+                    <option value="top">Trên cùng</option>
+                    <option value="center">Giữa màn hình</option>
+                    <option value="bottom">Dưới đáy</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-[10px] font-semibold text-slate-600 mb-1">
+                    Cỡ chữ Sub
+                  </label>
+                  <select
+                    aria-label="Cỡ chữ Sub Reels"
+                    value={subtitleSize}
+                    onChange={(e) => setSubtitleSize(e.target.value as SubtitleSize)}
+                    className="w-full px-2 py-1 text-[11px] bg-white border border-slate-200 rounded-lg"
+                  >
+                    <option value="sm">Nhỏ</option>
+                    <option value="md">Vừa</option>
+                    <option value="lg">To (Rõ)</option>
+                    <option value="xl">Rất to (Plain)</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-[10px] font-semibold text-slate-600 mb-1">
+                    Khung chữ Sub
+                  </label>
+                  <select
+                    aria-label="Kiểu khung chữ Sub Reels"
+                    value={subtitleBoxStyle}
+                    onChange={(e) => setSubtitleBoxStyle(e.target.value as SubtitleBoxStyle)}
+                    className="w-full px-2 py-1 text-[11px] bg-white border border-slate-200 rounded-lg"
+                  >
+                    <option value="card">Hộp thẻ nền</option>
+                    <option value="clean">Chữ nổi không khung</option>
+                    <option value="pill">Dải tối mờ</option>
+                  </select>
+                </div>
+              </div>
             </div>
             {bgUploadError && (
               <p className="text-[11px] text-rose-700 bg-rose-50 border border-rose-200 rounded-lg px-2.5 py-1.5">

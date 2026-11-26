@@ -52,6 +52,7 @@ import { adjustCuesTiming, cuesToBlockTranscript } from './engine/transcriptPars
 import { resyncCuesToAudioFile } from './engine/ttsSyncHelper';
 import {
   BackgroundImageConfig,
+  BackgroundPresetId,
   CanvasThemeId,
   CustomComponentPresetConfig,
   isDarkCanvasTheme,
@@ -59,6 +60,7 @@ import {
   LessonProject,
   SceneElement,
   ScenePlanDocument,
+  SubtitleDisplayConfig,
   TranscriptCue,
   WatermarkOutroConfig,
   WordTiming,
@@ -73,16 +75,32 @@ export default function App() {
   const [project, setProject] = useState<LessonProject>(() => {
     const s = initialSavedSettings.studio;
     if (!s) return PRESET_JP_EN_POLITE;
+    const restoredBg: BackgroundImageConfig | undefined = s.backgroundPresetId
+      ? {
+          kind: 'preset',
+          presetId: s.backgroundPresetId as BackgroundPresetId,
+          fit: 'cover',
+          scrimOpacity: 0.2,
+          learningScrimOpacity:
+            typeof s.learningScrimOpacity === 'number' ? s.learningScrimOpacity : 0.45,
+        }
+      : undefined;
     const base: LessonProject = {
       ...PRESET_JP_EN_POLITE,
       aspectRatio: s.aspectRatio || PRESET_JP_EN_POLITE.aspectRatio || '9:16',
       theme: s.theme || PRESET_JP_EN_POLITE.theme,
       compositionId: s.compositionId || PRESET_JP_EN_POLITE.compositionId,
+      subtitleConfig: s.subtitleConfig,
+      backgroundImage: restoredBg,
       watermark: s.watermark ?? PRESET_JP_EN_POLITE.watermark,
     };
-    return s.compositionId || s.theme
-      ? recomposeProjectWithStyle(base, base.compositionId || 'story-scenes', { theme: base.theme })
-      : base;
+    const recomposed =
+      s.compositionId || s.theme
+        ? recomposeProjectWithStyle(base, base.compositionId || 'story-scenes', { theme: base.theme })
+        : base;
+    return s.subtitleConfig
+      ? { ...recomposed, subtitleConfig: s.subtitleConfig }
+      : recomposed;
   });
   const [currentTime, setCurrentTime] = useState<number>(4.8);
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
@@ -215,16 +233,33 @@ export default function App() {
           const nextComp = s.studio?.compositionId || prev.compositionId;
           const nextAspect = s.studio?.aspectRatio || prev.aspectRatio;
           const nextWm = s.studio?.watermark ?? prev.watermark;
+          const nextSub = s.studio?.subtitleConfig ?? prev.subtitleConfig;
+          const nextBg: BackgroundImageConfig | undefined = s.studio?.backgroundPresetId
+            ? {
+                kind: 'preset',
+                presetId: s.studio.backgroundPresetId as BackgroundPresetId,
+                fit: prev.backgroundImage?.fit || 'cover',
+                scrimOpacity: prev.backgroundImage?.scrimOpacity ?? 0.2,
+                learningScrimOpacity:
+                  typeof s.studio.learningScrimOpacity === 'number'
+                    ? s.studio.learningScrimOpacity
+                    : prev.backgroundImage?.learningScrimOpacity ?? 0.45,
+              }
+            : prev.backgroundImage;
           const patched: LessonProject = {
             ...prev,
             aspectRatio: nextAspect,
             theme: nextTheme,
             compositionId: nextComp,
+            subtitleConfig: nextSub,
+            backgroundImage: nextBg,
             watermark: nextWm,
           };
-          return nextTheme !== prev.theme || nextComp !== prev.compositionId
-            ? recomposeProjectWithStyle(patched, nextComp || 'story-scenes', { theme: nextTheme })
-            : patched;
+          const recomposed =
+            nextTheme !== prev.theme || nextComp !== prev.compositionId
+              ? recomposeProjectWithStyle(patched, nextComp || 'story-scenes', { theme: nextTheme })
+              : patched;
+          return nextSub ? { ...recomposed, subtitleConfig: nextSub } : recomposed;
         });
       }
     };
@@ -259,6 +294,10 @@ export default function App() {
         fps: mp4Settings.fps,
         theme: project.theme,
         compositionId: project.compositionId,
+        subtitleConfig: project.subtitleConfig,
+        backgroundPresetId:
+          project.backgroundImage?.kind === 'preset' ? project.backgroundImage.presetId || '' : '',
+        learningScrimOpacity: project.backgroundImage?.learningScrimOpacity,
         watermark: project.watermark,
       },
     });
@@ -270,6 +309,8 @@ export default function App() {
     mp4Settings.fps,
     project.theme,
     project.compositionId,
+    project.subtitleConfig,
+    project.backgroundImage,
     project.watermark,
   ]);
 
@@ -294,6 +335,7 @@ export default function App() {
     setProject((prev) => ({
       ...next,
       aspectRatio: prev.aspectRatio ?? mp4Settings.aspectRatio ?? '9:16',
+      subtitleConfig: prev.subtitleConfig,
       backgroundImage: prev.backgroundImage,
       watermark: prev.watermark,
     }));
@@ -349,13 +391,24 @@ export default function App() {
         const nextDur = audioDurationSec
           ? Number(Math.max(built.duration, audioDurationSec).toFixed(2))
           : built.duration;
-        return {
+        const withMeta: LessonProject = {
           ...built,
           aspectRatio: prev.aspectRatio ?? mp4Settings.aspectRatio ?? '9:16',
           duration: nextDur,
+          subtitleConfig: prev.subtitleConfig,
           backgroundImage: prev.backgroundImage,
           watermark: prev.watermark,
         };
+        return prev.compositionId === 'plain'
+          ? {
+              ...recomposeProjectWithStyle(withMeta, 'plain'),
+              subtitleConfig: prev.subtitleConfig ?? {
+                position: 'center',
+                size: 'lg',
+                boxStyle: 'clean',
+              },
+            }
+          : withMeta;
       });
       const firstCue = cues[0];
       const previewTime = firstCue
@@ -389,6 +442,7 @@ export default function App() {
         duration: audioDurationSec
           ? Number(Math.max(built.duration, audioDurationSec).toFixed(2))
           : built.duration,
+        subtitleConfig: project.subtitleConfig,
         backgroundImage: project.backgroundImage,
         watermark: project.watermark,
       };
@@ -431,10 +485,75 @@ export default function App() {
         );
         return;
       }
-      setProject((prev) => recomposeProjectWithStyle(prev, compositionId));
+      setProject((prev) => {
+        const recomposed = recomposeProjectWithStyle(prev, compositionId);
+        if (compositionId === 'plain') {
+          return {
+            ...recomposed,
+            subtitleConfig: {
+              position: 'center',
+              size: prev.subtitleConfig?.size || 'lg',
+              boxStyle: 'clean',
+            },
+          };
+        }
+        if (prev.compositionId === 'plain') {
+          const isDark = isDarkCanvasTheme(recomposed.theme);
+          return {
+            ...recomposed,
+            subtitleConfig: {
+              position: 'bottom',
+              size: prev.subtitleConfig?.size || 'md',
+              boxStyle: 'card',
+            },
+            elements: recomposed.elements.map((el) =>
+              el.props.kind === 'karaoke-card'
+                ? {
+                    ...el,
+                    layout: { ...el.layout, manualPosition: false },
+                    props: {
+                      ...el.props,
+                      variant: isDark ? 'dark-bar' : 'white-card',
+                    },
+                  }
+                : el,
+            ),
+          };
+        }
+        return recomposed;
+      });
     },
     [customCompositionConfig, currentTime],
   );
+
+  const handleChangeSubtitleConfig = useCallback((nextSub: SubtitleDisplayConfig) => {
+    setProject((prev) => {
+      const isDark = isDarkCanvasTheme(prev.theme);
+      return {
+        ...prev,
+        subtitleConfig: nextSub,
+        elements: prev.elements.map((el) => {
+          if (el.props.kind !== 'karaoke-card') return el;
+          return {
+            ...el,
+            layout: {
+              ...el.layout,
+              manualPosition: false,
+            },
+            props: {
+              ...el.props,
+              variant:
+                nextSub.boxStyle === 'clean'
+                  ? 'plain-shadow'
+                  : isDark
+                    ? 'dark-bar'
+                    : 'white-card',
+            },
+          };
+        }),
+      };
+    });
+  }, []);
 
   const handleApplyCustomComposition = useCallback(
     (config: CustomComponentPresetConfig, scope: 'all' | 'active-cue' = 'all') => {
@@ -472,12 +591,23 @@ export default function App() {
           compositionId: prev.compositionId,
           audioFileName: nextAudioFile?.name ?? audioFileName,
         });
-        return {
+        const withMeta: LessonProject = {
           ...built,
           aspectRatio: prev.aspectRatio ?? mp4Settings.aspectRatio ?? '9:16',
+          subtitleConfig: prev.subtitleConfig,
           backgroundImage: prev.backgroundImage,
           watermark: prev.watermark,
         };
+        return prev.compositionId === 'plain'
+          ? {
+              ...recomposeProjectWithStyle(withMeta, 'plain'),
+              subtitleConfig: prev.subtitleConfig ?? {
+                position: 'center',
+                size: 'lg',
+                boxStyle: 'clean',
+              },
+            }
+          : withMeta;
       });
       const nextCuesForTime = cues.length > 0 ? cues : project.cues;
       const firstCue = nextCuesForTime[0];
@@ -861,7 +991,7 @@ export default function App() {
       )}
 
       {/* Modern Studio Navigation Bar */}
-      <header className="sticky top-0 z-30 bg-white/95 backdrop-blur-md border-b border-slate-200/90 px-4 lg:px-6 py-2.5 shadow-xs">
+      <header className="sticky top-0 z-30 bg-white/95 backdrop-blur-md border-b border-slate-200/90 px-4 lg:px-6 py-2 shadow-xs">
         <div className="max-w-[1400px] mx-auto flex flex-wrap items-center justify-between gap-3">
           <a
             href="#studio"
@@ -871,70 +1001,82 @@ export default function App() {
             }}
             className="flex items-center gap-2.5 shrink-0 group"
           >
-            <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-indigo-600 via-violet-600 to-fuchsia-600 text-white flex items-center justify-center shadow-sm group-hover:shadow transition-shadow">
+            <div className="w-9 h-9 rounded-lg bg-slate-900 text-white flex items-center justify-center shadow-xs group-hover:bg-indigo-600 transition-colors">
               <Clapperboard className="w-4 h-4" />
             </div>
             <div className="leading-tight">
-              <div className="text-base font-bold tracking-tight text-slate-900 font-display">
-                KineticSub Studio
+              <div className="flex items-center gap-2">
+                <span className="text-[15px] font-bold tracking-tight text-slate-900 font-display">
+                  KineticSub Studio
+                </span>
+                <span className="px-1.5 py-0.5 text-[10px] font-mono font-semibold text-indigo-700 bg-indigo-50 border border-indigo-200 rounded">
+                  {project.aspectRatio || mp4Settings.aspectRatio || '9:16'}
+                </span>
               </div>
               <div className="text-[10px] font-medium text-slate-500">
-                Video Học Ngoại Ngữ 9:16 &amp; 16:9
+                Video Học Ngoại Ngữ · Ambient · Python Exporter
               </div>
             </div>
           </a>
 
           <nav
             aria-label="Menu chính"
-            className="flex items-center gap-1.5 bg-slate-100/90 p-1 rounded-2xl border border-slate-200/80 overflow-x-auto max-w-full"
+            className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl border border-slate-200/90 overflow-x-auto max-w-full"
           >
             <button
               type="button"
               onClick={() => setActiveTab('studio')}
-              className={`inline-flex items-center gap-2 px-3.5 py-2 text-xs font-semibold rounded-xl transition-all whitespace-nowrap shrink-0 ${
+              className={`inline-flex items-center gap-2 px-3.5 py-1.5 text-xs font-semibold rounded-lg transition-all whitespace-nowrap shrink-0 ${
                 activeTab === 'studio'
-                  ? 'bg-white text-indigo-700 shadow-sm ring-1 ring-slate-200/80'
-                  : 'text-slate-600 hover:text-slate-900 hover:bg-white/60'
+                  ? 'bg-white text-indigo-700 shadow-xs ring-1 ring-slate-200'
+                  : 'text-slate-600 hover:text-slate-900 hover:bg-white/70'
               }`}
             >
-              <Clapperboard className={`w-3.5 h-3.5 ${activeTab === 'studio' ? 'text-indigo-600' : 'text-slate-400'}`} />
+              <Clapperboard
+                className={`w-3.5 h-3.5 ${activeTab === 'studio' ? 'text-indigo-600' : 'text-slate-400'}`}
+              />
               <span>Dựng Video ({project.aspectRatio || mp4Settings.aspectRatio || '9:16'})</span>
             </button>
 
             <button
               type="button"
               onClick={() => setActiveTab('reels')}
-              className={`inline-flex items-center gap-2 px-3.5 py-2 text-xs font-semibold rounded-xl transition-all whitespace-nowrap shrink-0 ${
+              className={`inline-flex items-center gap-2 px-3.5 py-1.5 text-xs font-semibold rounded-lg transition-all whitespace-nowrap shrink-0 ${
                 activeTab === 'reels'
-                  ? 'bg-white text-violet-700 shadow-sm ring-1 ring-slate-200/80'
-                  : 'text-slate-600 hover:text-slate-900 hover:bg-white/60'
+                  ? 'bg-white text-violet-700 shadow-xs ring-1 ring-slate-200'
+                  : 'text-slate-600 hover:text-slate-900 hover:bg-white/70'
               }`}
             >
-              <Sparkles className={`w-3.5 h-3.5 ${activeTab === 'reels' ? 'text-violet-600' : 'text-slate-400'}`} />
+              <Sparkles
+                className={`w-3.5 h-3.5 ${activeTab === 'reels' ? 'text-violet-600' : 'text-slate-400'}`}
+              />
               <span>Video Ngoại Ngữ AI</span>
             </button>
 
             <button
               type="button"
               onClick={() => setActiveTab('edu-studio')}
-              className={`inline-flex items-center gap-2 px-3.5 py-2 text-xs font-semibold rounded-xl transition-all whitespace-nowrap shrink-0 ${
+              className={`inline-flex items-center gap-2 px-3.5 py-1.5 text-xs font-semibold rounded-lg transition-all whitespace-nowrap shrink-0 ${
                 activeTab === 'edu-studio'
-                  ? 'bg-white text-emerald-700 shadow-sm ring-1 ring-slate-200/80'
-                  : 'text-slate-600 hover:text-slate-900 hover:bg-white/60'
+                  ? 'bg-white text-emerald-700 shadow-xs ring-1 ring-slate-200'
+                  : 'text-slate-600 hover:text-slate-900 hover:bg-white/70'
               }`}
             >
-              <Film className={`w-3.5 h-3.5 ${activeTab === 'edu-studio' ? 'text-emerald-600' : 'text-slate-400'}`} />
+              <Film
+                className={`w-3.5 h-3.5 ${activeTab === 'edu-studio' ? 'text-emerald-600' : 'text-slate-400'}`}
+              />
               <span>Hậu Kỳ &amp; File Xuất</span>
             </button>
           </nav>
 
           <div className="flex items-center gap-2 shrink-0">
+            <div className="hidden sm:block h-5 w-px bg-slate-200" aria-hidden="true" />
             {isConfirmingReset ? (
-              <div className="inline-flex items-center gap-1 bg-rose-50 border border-rose-200 rounded-xl px-2 py-1">
+              <div className="inline-flex items-center gap-1 bg-rose-50 border border-rose-200 rounded-lg px-2 py-1">
                 <button
                   type="button"
                   onClick={() => void resetAllUserSettings()}
-                  className="px-2 py-1 text-[11px] font-semibold text-white bg-rose-600 rounded-lg hover:bg-rose-700 whitespace-nowrap shrink-0"
+                  className="px-2 py-1 text-[11px] font-semibold text-white bg-rose-600 rounded-md hover:bg-rose-700 whitespace-nowrap shrink-0"
                 >
                   Xác nhận Reset
                 </button>
@@ -951,7 +1093,7 @@ export default function App() {
                 type="button"
                 onClick={() => setIsConfirmingReset(true)}
                 title="Khôi phục tất cả cài đặt các tab về mặc định"
-                className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-slate-600 bg-white border border-slate-200 rounded-xl hover:border-rose-300 hover:text-rose-700 hover:bg-rose-50/40 transition-all shadow-xs whitespace-nowrap shrink-0"
+                className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium text-slate-600 bg-slate-50 border border-slate-200 rounded-lg hover:border-rose-300 hover:text-rose-700 hover:bg-rose-50/50 transition-colors whitespace-nowrap shrink-0"
               >
                 <RotateCcw className="w-3.5 h-3.5" />
                 <span>Mặc định</span>
@@ -961,7 +1103,7 @@ export default function App() {
             <button
               type="button"
               onClick={() => setIsComponentDbOpen(true)}
-              className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-slate-700 bg-white border border-slate-200 rounded-xl hover:border-indigo-300 hover:bg-indigo-50/50 hover:text-indigo-700 transition-all shadow-xs whitespace-nowrap shrink-0"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-700 bg-white border border-slate-200 rounded-lg hover:border-indigo-300 hover:bg-indigo-50/50 hover:text-indigo-700 transition-colors shadow-xs whitespace-nowrap shrink-0"
             >
               <Database className="w-3.5 h-3.5 text-indigo-600" />
               <span>Kho Component</span>
@@ -970,7 +1112,7 @@ export default function App() {
             <button
               type="button"
               onClick={() => setIsBatchModalOpen(true)}
-              className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-gradient-to-r from-indigo-600 to-violet-600 rounded-xl hover:from-indigo-700 hover:to-violet-700 transition-all shadow-sm whitespace-nowrap shrink-0"
+              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 transition-colors shadow-xs whitespace-nowrap shrink-0"
             >
               <Layers className="w-3.5 h-3.5" />
               <span>Chạy Batch Hàng Loạt</span>
@@ -1096,6 +1238,7 @@ export default function App() {
                   })
                 }
                 onChangeBackgroundImage={handleChangeBackgroundImage}
+                onChangeSubtitleConfig={handleChangeSubtitleConfig}
                 onChangeWatermark={handleChangeWatermark}
                 onSelectElement={setSelectedElementId}
                 onMoveElement={handleMoveElement}

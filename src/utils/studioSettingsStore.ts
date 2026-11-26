@@ -13,8 +13,13 @@ import type {
   ExportResolutionId,
 } from '../engine/mp4Config';
 import type {
+  BackgroundPresetId,
   CanvasThemeId,
   LayoutCompositionId,
+  SubtitleBoxStyle,
+  SubtitleDisplayConfig,
+  SubtitlePosition,
+  SubtitleSize,
   WatermarkOutroConfig,
 } from '../engine/types';
 
@@ -46,6 +51,10 @@ export interface PersistedStudioSettings {
     fps?: ExportFpsOption;
     theme?: CanvasThemeId;
     compositionId?: LayoutCompositionId;
+    subtitleConfig?: SubtitleDisplayConfig;
+    backgroundPresetId?: BackgroundPresetId | '';
+    learningScrimOpacity?: number;
+    targetDurationMinutes?: number;
     watermark?: WatermarkOutroConfig;
     step2CompositionMode?: 'manual' | 'ai-decide' | 'random' | 'custom';
     step2PromptStyle?: PromptVideoStyle;
@@ -57,6 +66,7 @@ export interface PersistedStudioSettings {
   };
   reels?: {
     reelCreationMode?: ReelCreationMode;
+    sourceDurationMinutes?: number;
     creatorTopicHint?: string;
     creatorFormat?: CreatorFormatCategory;
     creatorLearningLang?: LearningLanguageId;
@@ -86,6 +96,11 @@ export interface PersistedStudioSettings {
     reelsAspectRatio?: ExportAspectRatioId;
     selectedTheme?: CanvasThemeId;
     selectedComposition?: LayoutCompositionId;
+    subtitlePosition?: SubtitlePosition;
+    subtitleSize?: SubtitleSize;
+    subtitleBoxStyle?: SubtitleBoxStyle;
+    backgroundPresetId?: BackgroundPresetId | '';
+    learningScrimOpacity?: number;
     bgmPreset?: StudioBgmPresetId;
     bgmVolume?: number;
     watermarkConfig?: WatermarkOutroConfig;
@@ -139,6 +154,11 @@ export interface PersistedStudioSettings {
     readingIllustration?: string;
     readingBookFrame?: string;
     readingPointerStyle?: string;
+    readingDurationMinutes?: number;
+    readingSubtitlePosition?: SubtitlePosition;
+    readingSubtitleSize?: SubtitleSize;
+    readingBackgroundPresetId?: BackgroundPresetId | '';
+    readingLearningScrimOpacity?: number;
     readingIntroEnabled?: boolean;
     readingIntroSeconds?: number;
     readingOutroSpeechEnabled?: boolean;

@@ -1,5 +1,8 @@
+import { drawPresetBackground } from './backgroundPresets';
+import { drawLoadedImageCover, getCachedBgImage, getCachedBgVideo } from './canvasRenderer';
 import { parseTranscriptAuto } from './transcriptParser';
 import {
+  BackgroundImageConfig,
   TranscriptCue,
   WatermarkCorner,
   WatermarkOutroConfig,
@@ -353,6 +356,7 @@ export const READING_BOOK_PALETTES: ReadingBookPalette[] = [
 export type ReadingIllustrationStyle = 'Flat 2D' | '2.5D' | '3D Cartoon';
 
 export type ReadingBookFrameId =
+  | 'plain'
   | 'classic-page'
   | 'open-spread'
   | 'spiral-notebook'
@@ -366,6 +370,7 @@ export interface ReadingBookFrameMeta {
 }
 
 export const READING_BOOK_FRAMES: ReadingBookFrameMeta[] = [
+  { id: 'plain', label: 'Plain — Chỉ Chữ & Nền (Tối giản)', description: 'Không khung sách — chỉ hình/video nền có opacity dịu mắt và chữ nổi ở giữa' },
   { id: 'classic-page', label: 'Trang Sách Cổ Điển', description: 'Khung trang sách bo tròn có gáy nổi truyền thống' },
   { id: 'open-spread', label: 'Sách Mở Hai Trang', description: 'Mở trang đôi kèm dải ruy-băng đánh dấu trang' },
   { id: 'spiral-notebook', label: 'Sổ Lò Xo Dòng Kẻ', description: 'Gáy xoắn lò xo phía trên kèm dòng kẻ vở học tập' },
@@ -416,6 +421,9 @@ export interface ReadingAlongRenderOptions {
   illustrationStyle: ReadingIllustrationStyle;
   bookFrame?: ReadingBookFrameId;
   pointerStyle?: ReadingPointerStyleId;
+  background?: BackgroundImageConfig;
+  subtitlePosition?: EduKaraokePosition;
+  subtitleSize?: EduKaraokeSize;
   watermarkOutro: EduWatermarkOutroConfig;
 }
 
@@ -774,10 +782,11 @@ export function renderReadingAlongFrame(
   const bookFrame: ReadingBookFrameId = opts.bookFrame ?? 'classic-page';
   const pointerStyle: ReadingPointerStyleId = opts.pointerStyle ?? 'hand-classic';
   const isChalkboard = bookFrame === 'chalkboard';
+  const isPlainFrame = bookFrame === 'plain';
 
-  // Background gradient
+  // Background gradient fallback
   const grad = ctx.createLinearGradient(0, 0, 0, height);
-  if (isChalkboard) {
+  if (isChalkboard || isPlainFrame) {
     grad.addColorStop(0, '#1E293B');
     grad.addColorStop(1, '#0F172A');
   } else {
@@ -787,17 +796,278 @@ export function renderReadingAlongFrame(
   ctx.fillStyle = grad;
   ctx.fillRect(0, 0, width, height);
 
-  // Decorative floating circles
-  ctx.save();
-  ctx.globalAlpha = opts.illustrationStyle === '3D Cartoon' ? 0.32 : 0.2;
-  ctx.fillStyle = isChalkboard ? '#38BDF8' : palette.pageBorder;
-  ctx.beginPath();
-  ctx.arc(width * 0.14, height * 0.1, Math.min(width, height) * 0.11, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.beginPath();
-  ctx.arc(width * 0.88, height * 0.86, Math.min(width, height) * 0.14, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.restore();
+  const wm = opts.watermarkOutro;
+  const outroText = [wm.outroLine1.trim(), wm.outroLine2.trim()].filter(Boolean).join('\n');
+  const timeline = computeReadingTimelineMetrics({
+    words: opts.words,
+    totalDuration: opts.totalDuration,
+    contentDuration: opts.contentDuration,
+    introEnabled: opts.introEnabled,
+    introSeconds: opts.introSeconds,
+    outroSeconds: wm.outroSeconds,
+    outroText,
+  });
+  const inIntroPhase = timeline.hasIntro && opts.currentTime < timeline.introEnd;
+  const isLearningFocus = !inIntroPhase && (!timeline.hasOutro || opts.currentTime < timeline.outroStart);
+
+  // Optional preset / video / image background with focus opacity scrim
+  const bg = opts.background;
+  let hasCustomBg = false;
+  if (bg) {
+    if ((bg.kind === 'preset' || (!bg.kind && bg.presetId && !bg.dataUrl && !bg.videoUrl)) && bg.presetId) {
+      drawPresetBackground(ctx, bg.presetId, width, height, opts.currentTime);
+      hasCustomBg = true;
+    } else if (bg.kind === 'video' && bg.videoUrl) {
+      const vid = getCachedBgVideo(bg.videoUrl);
+      if (vid && vid.videoWidth > 0) {
+        if (vid.readyState >= 2 && Number.isFinite(vid.duration) && vid.duration > 0.05) {
+          const wrapped = ((Math.max(0, opts.currentTime) % vid.duration) + vid.duration) % vid.duration;
+          if (Math.abs(vid.currentTime - wrapped) > 0.08 && !vid.seeking) {
+            try {
+              vid.currentTime = wrapped;
+            } catch {
+              // ignore
+            }
+          }
+        }
+        ctx.save();
+        drawLoadedImageCover(ctx, vid, vid.videoWidth, vid.videoHeight, width, height, bg.fit || 'cover');
+        ctx.restore();
+        hasCustomBg = true;
+      }
+    } else if (bg.dataUrl) {
+      const img = getCachedBgImage(bg.dataUrl);
+      if (img) {
+        ctx.save();
+        drawLoadedImageCover(
+          ctx,
+          img,
+          img.naturalWidth || width,
+          img.naturalHeight || height,
+          width,
+          height,
+          bg.fit || 'cover',
+        );
+        ctx.restore();
+        hasCustomBg = true;
+      }
+    }
+    if (hasCustomBg) {
+      const baseScrim = bg.scrimOpacity ?? 0.22;
+      const focusScrim = bg.learningScrimOpacity ?? Math.min(0.85, Math.max(baseScrim, baseScrim + 0.22));
+      const effectiveScrim = Math.max(0, Math.min(0.92, isLearningFocus ? focusScrim : baseScrim));
+      if (effectiveScrim > 0.01) {
+        ctx.save();
+        ctx.fillStyle = `rgba(10, 15, 28, ${effectiveScrim})`;
+        ctx.fillRect(0, 0, width, height);
+        ctx.restore();
+      }
+    }
+  }
+
+  if (isPlainFrame) {
+    if (inIntroPhase) {
+      ctx.save();
+      const introProgress = Math.max(0, Math.min(1, opts.currentTime / Math.max(0.25, timeline.introEnd)));
+      const introFade = Math.min(1, opts.currentTime / 0.35 + 0.15);
+      ctx.globalAlpha = introFade;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.shadowColor = 'rgba(2, 6, 23, 0.85)';
+      ctx.shadowBlur = 16;
+      ctx.shadowOffsetY = 4;
+
+      const heroFs = Math.max(30, Math.round(Math.min(width, height) * 0.052));
+      ctx.font = `800 ${heroFs}px "Outfit", "Plus Jakarta Sans", sans-serif`;
+      ctx.fillStyle = '#FFFFFF';
+      ctx.fillText(opts.title || 'Reading Practice', width / 2, height * 0.43, width * 0.84);
+
+      const introSub = (opts.introSubtitle || `Listen carefully and follow word by word.`).trim();
+      const subFs = Math.max(20, Math.round(heroFs * 0.56));
+      ctx.font = `600 ${subFs}px "Plus Jakarta Sans", sans-serif`;
+      ctx.fillStyle = 'rgba(226, 232, 240, 0.94)';
+      ctx.fillText(introSub, width / 2, height * 0.54, width * 0.8);
+
+      const barW = Math.min(width * 0.44, 360);
+      const barH = 8;
+      ctx.fillStyle = 'rgba(255,255,255,0.22)';
+      roundRectPath(ctx, width / 2 - barW / 2, height * 0.63, barW, barH, 4);
+      ctx.fill();
+      ctx.fillStyle = '#FACC15';
+      roundRectPath(ctx, width / 2 - barW / 2, height * 0.63, Math.max(12, barW * introProgress), barH, 4);
+      ctx.fill();
+      ctx.restore();
+    } else {
+      const bodyDuration = Math.max(1, timeline.contentEnd - timeline.introEnd);
+      const wordsList =
+        opts.words.length > 0
+          ? opts.words
+          : buildEstimatedReadingWords(opts.text, bodyDuration).map((w) => ({
+              ...w,
+              start: Number((w.start + timeline.introEnd).toFixed(3)),
+              end: Number((w.end + timeline.introEnd).toFixed(3)),
+            }));
+      const subPos = opts.subtitlePosition ?? 'Giữa';
+      const subSize = opts.subtitleSize ?? 'Lớn';
+      const sizeScale = subSize === 'Nhỏ' ? 0.78 : subSize === 'Lớn' ? 1.24 : 1.0;
+      const baseFs = isLandscape ? Math.round(height * 0.052) : Math.round(width * 0.048);
+      const fontSize = Math.max(26, Math.min(82, Math.round(baseFs * sizeScale)));
+      const lineHeight = Math.round(fontSize * 1.48);
+      const wordGap = Math.round(fontSize * 0.34);
+      const maxLineW = Math.round(width * 0.84);
+      ctx.font = `700 ${fontSize}px "Outfit", "Plus Jakarta Sans", sans-serif`;
+
+      // Wrap all words into centered lines, then group into compact 3-line subtitle pages
+      const wrappedLines: Array<{ words: Array<{ item: WordTiming; index: number; w: number }>; totalW: number }> = [];
+      let curWords: Array<{ item: WordTiming; index: number; w: number }> = [];
+      let curW = 0;
+      wordsList.forEach((item, index) => {
+        const w = ctx.measureText(item.word).width;
+        const nextW = curWords.length === 0 ? w : curW + wordGap + w;
+        if (nextW > maxLineW && curWords.length > 0) {
+          wrappedLines.push({ words: curWords, totalW: curW });
+          curWords = [{ item, index, w }];
+          curW = w;
+        } else {
+          curWords.push({ item, index, w });
+          curW = nextW;
+        }
+      });
+      if (curWords.length > 0) {
+        wrappedLines.push({ words: curWords, totalW: curW });
+      }
+
+      const clampedWordTime = Math.max(
+        timeline.introEnd,
+        Math.min(opts.currentTime, Math.max(timeline.introEnd, timeline.contentEnd - 0.001)),
+      );
+      let globalActiveIdx = wordsList.findIndex(
+        (w) => clampedWordTime >= w.start && clampedWordTime <= w.end,
+      );
+      if (globalActiveIdx === -1 && wordsList.length > 0) {
+        for (let i = wordsList.length - 1; i >= 0; i--) {
+          if (clampedWordTime >= wordsList[i].start) {
+            globalActiveIdx = i;
+            break;
+          }
+        }
+        if (globalActiveIdx === -1) globalActiveIdx = 0;
+      }
+
+      const linesPerPage = 3;
+      const pages: typeof wrappedLines[] = [];
+      for (let i = 0; i < wrappedLines.length; i += linesPerPage) {
+        pages.push(wrappedLines.slice(i, i + linesPerPage));
+      }
+      const activePageIdx = Math.max(
+        0,
+        pages.findIndex((pg) => pg.some((ln) => ln.words.some((pw) => pw.index === globalActiveIdx))),
+      );
+      const activeLines = pages[activePageIdx] ?? wrappedLines.slice(0, linesPerPage);
+      const blockH = activeLines.length * lineHeight;
+      const anchorY =
+        subPos === 'Trên' ? height * 0.2 : subPos === 'Dưới' ? height * 0.8 : height * 0.5;
+      const startY = anchorY - blockH / 2 + lineHeight / 2;
+
+      ctx.save();
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'middle';
+      activeLines.forEach((ln, lIdx) => {
+        let cx = width / 2 - ln.totalW / 2;
+        const cy = startY + lIdx * lineHeight;
+        ln.words.forEach((pw) => {
+          const isActive = pw.index === globalActiveIdx;
+          const isSpoken = pw.index < globalActiveIdx;
+          ctx.save();
+          ctx.shadowColor = 'rgba(2, 6, 23, 0.9)';
+          ctx.shadowBlur = 14;
+          ctx.shadowOffsetY = 3;
+          ctx.lineWidth = Math.max(3, Math.round(fontSize * 0.08));
+          ctx.strokeStyle = 'rgba(2, 6, 23, 0.72)';
+          ctx.font = `${isActive ? 800 : 700} ${fontSize}px "Outfit", "Plus Jakarta Sans", sans-serif`;
+          if (isActive) {
+            ctx.translate(cx + pw.w / 2, cy);
+            ctx.scale(1.06, 1.06);
+            ctx.textAlign = 'center';
+            ctx.strokeText(pw.item.word, 0, 0);
+            ctx.fillStyle = '#FACC15';
+            ctx.fillText(pw.item.word, 0, 0);
+          } else {
+            ctx.strokeText(pw.item.word, cx, cy);
+            ctx.fillStyle = isSpoken ? '#FFFFFF' : 'rgba(241, 245, 249, 0.82)';
+            ctx.fillText(pw.item.word, cx, cy);
+          }
+          ctx.restore();
+          cx += pw.w + wordGap;
+        });
+      });
+      ctx.restore();
+    }
+
+    // Watermark + Outro still apply on plain mode
+    if (wm.watermarkEnabled && wm.watermarkText.trim()) {
+      ctx.save();
+      ctx.globalAlpha = Math.max(0.15, Math.min(1, wm.watermarkOpacity));
+      const wmFontSize = Math.max(14, Math.round(height * 0.02));
+      ctx.font = `700 ${wmFontSize}px "Plus Jakarta Sans", sans-serif`;
+      const wmText = wm.watermarkText.trim();
+      const tw = ctx.measureText(wmText).width;
+      const pad = Math.round(width * 0.032);
+      const boxW = tw + 22;
+      const boxH = wmFontSize + 14;
+      const x =
+        wm.watermarkCorner === 'top-left' || wm.watermarkCorner === 'bottom-left'
+          ? pad
+          : width - pad - boxW;
+      const y =
+        wm.watermarkCorner === 'top-left' || wm.watermarkCorner === 'top-right'
+          ? pad
+          : height - pad - boxH;
+      ctx.fillStyle = 'rgba(15, 23, 42, 0.52)';
+      roundRectPath(ctx, x, y, boxW, boxH, 10);
+      ctx.fill();
+      ctx.fillStyle = '#FFFFFF';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(wmText, x + 11, y + boxH / 2);
+      ctx.restore();
+    }
+    if (timeline.hasOutro && outroText && opts.currentTime >= timeline.outroStart) {
+      const progress = Math.min(
+        1,
+        (opts.currentTime - timeline.outroStart) / Math.min(0.55, Math.max(0.25, wm.outroSeconds)),
+      );
+      ctx.save();
+      ctx.fillStyle = `rgba(15, 23, 42, ${(0.9 * progress).toFixed(3)})`;
+      ctx.fillRect(0, 0, width, height);
+      ctx.globalAlpha = progress;
+      ctx.fillStyle = '#FFFFFF';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      const lines = outroText.split('\n');
+      const outroSize = Math.max(24, Math.round(height * 0.036));
+      ctx.font = `800 ${outroSize}px "Outfit", "Plus Jakarta Sans", sans-serif`;
+      const baseLineY = height / 2 - ((lines.length - 1) * outroSize * 1.4) / 2;
+      lines.forEach((line, idx) => {
+        ctx.fillText(line, width / 2, baseLineY + idx * outroSize * 1.4, width * 0.85);
+      });
+      ctx.restore();
+    }
+    return;
+  }
+
+  // Decorative floating circles (only when not covered by custom backdrop)
+  if (!hasCustomBg) {
+    ctx.save();
+    ctx.globalAlpha = opts.illustrationStyle === '3D Cartoon' ? 0.32 : 0.2;
+    ctx.fillStyle = isChalkboard ? '#38BDF8' : palette.pageBorder;
+    ctx.beginPath();
+    ctx.arc(width * 0.14, height * 0.1, Math.min(width, height) * 0.11, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(width * 0.88, height * 0.86, Math.min(width, height) * 0.14, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
 
   const bookX = width * (isLandscape ? 0.045 : 0.065);
   const bookY = height * (isLandscape ? 0.065 : 0.085);
@@ -952,21 +1222,8 @@ export function renderReadingAlongFrame(
   ctx.stroke();
 
   // Layout words with automatic multi-page pagination
-  const wm = opts.watermarkOutro;
-  const outroText = [wm.outroLine1.trim(), wm.outroLine2.trim()].filter(Boolean).join('\n');
-  const timeline = computeReadingTimelineMetrics({
-    words: opts.words,
-    totalDuration: opts.totalDuration,
-    contentDuration: opts.contentDuration,
-    introEnabled: opts.introEnabled,
-    introSeconds: opts.introSeconds,
-    outroSeconds: wm.outroSeconds,
-    outroText,
-  });
-
   const startBodyY = dividerY + refH * 0.026;
   const maxBodyY = bookY + bookH - refH * 0.075;
-  const inIntroPhase = timeline.hasIntro && opts.currentTime < timeline.introEnd;
 
   if (inIntroPhase) {
     // Dedicated Intro card ("Hôm nay học gì?") inside the book before words start

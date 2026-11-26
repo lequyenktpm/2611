@@ -1709,7 +1709,24 @@ async function startServer(): Promise<void> {
             spanFiles.map((f) => `file '${f.replace(/'/g, "'\\''")}'`).join('\n'),
             'utf8',
           );
-          await runProcess('ffmpeg', ['-y', '-f', 'concat', '-safe', '0', '-i', spanConcatTxt, '-c', 'copy', normPath]);
+          await runProcess('ffmpeg', [
+            '-y',
+            '-f',
+            'concat',
+            '-safe',
+            '0',
+            '-i',
+            spanConcatTxt,
+            '-c:a',
+            'libmp3lame',
+            '-ar',
+            '24000',
+            '-ac',
+            '1',
+            '-b:a',
+            '64k',
+            normPath,
+          ]);
         }
 
         const spokenDur = await getAudioDurationSec(normPath);
@@ -2780,9 +2797,13 @@ async function startServer(): Promise<void> {
       const topic = typeof req.body?.topic === 'string' ? req.body.topic.trim() : '';
       const sourceText = typeof req.body?.sourceText === 'string' ? req.body.sourceText.trim() : '';
       const sourceTitle = typeof req.body?.sourceTitle === 'string' ? req.body.sourceTitle.trim() : '';
-      const wordCountRaw = Number(req.body?.wordCount ?? 110);
+      const durationRaw = Number(req.body?.durationMinutes);
+      const hasDuration = Number.isFinite(durationRaw) && durationRaw > 0;
+      const wordCountRaw = Number(
+        req.body?.wordCount ?? (hasDuration ? Math.round(durationRaw * 125) : 110),
+      );
       const wordCount = Number.isFinite(wordCountRaw)
-        ? Math.max(40, Math.min(260, Math.round(wordCountRaw)))
+        ? Math.max(40, Math.min(1500, Math.round(wordCountRaw)))
         : 110;
 
       if (mode === 'adapt-url' && !sourceText) {

@@ -22,6 +22,7 @@ import {
   isDarkCanvasTheme,
   LayoutCompositionId,
   LessonProject,
+  SubtitleDisplayConfig,
   TranscriptCue,
   WatermarkOutroConfig,
 } from './types';
@@ -214,6 +215,7 @@ export interface ReelCard {
   translation?: string;
   explanationSpeech?: string;
   learningLang?: LearningLanguageId;
+  vocabNotes?: string;
   grammarNote?: string;
   contextExcerpt?: string;
   ttsText: string;
@@ -1524,12 +1526,29 @@ export function buildEnglishReelsWebAiPrompt(params: {
   title?: string;
   mode: ReelMode;
   targetLang: string;
+  durationMinutes?: number;
   style?: PromptVideoStyle;
   compositionId?: LayoutCompositionId | 'ai-decide';
   includeQuiz?: 'auto' | 'always' | 'none';
 }): string {
   const locale = getReelLocaleStrings(params.targetLang);
   const includeQuiz = params.includeQuiz ?? 'auto';
+  const durationMinutes =
+    typeof params.durationMinutes === 'number' &&
+    Number.isFinite(params.durationMinutes) &&
+    params.durationMinutes > 0
+      ? Math.max(0.5, Math.min(30, Number(params.durationMinutes.toFixed(1))))
+      : undefined;
+  const durationWordsEstimate = durationMinutes ? Math.round(durationMinutes * 125) : undefined;
+  const durationDirective = durationMinutes
+    ? `- **THỜI LƯỢNG RENDER MỤC TIÊU: ${durationMinutes} PHÚT (~${Math.round(durationMinutes * 60)} giây, tổng ~${durationWordsEstimate} từ lời đọc)**: ${
+        durationMinutes >= 3
+          ? 'Hãy mở rộng chi tiết từng phần, bổ sung nhiều thẻ từ vựng/ví dụ, phân tích sắc thái và mẫu câu sâu hơn để video đạt đủ độ dài kiến thức mong muốn.'
+          : durationMinutes <= 1
+            ? 'Giữ số thẻ súc tích, tinh gọn đúng trọng tâm để video hoàn chỉnh khớp khoảng thời lượng ngắn này.'
+            : 'Cân đối số thẻ `cards[]` và độ sâu giải thích để tổng thời gian đọc vừa vặn với thời lượng mong muốn.'
+      }`
+    : '';
   const cleanedUserTitle = (params.title || '').trim();
   const isStaleDefaultTitle =
     !cleanedUserTitle ||
@@ -1612,6 +1631,7 @@ export function buildEnglishReelsWebAiPrompt(params: {
     '',
     '# NHIỆM VỤ XỬ LÝ NGUỒN DỮ LIỆU',
     params.sourceUrl ? `- URL nguồn: ${params.sourceUrl}` : '',
+    durationDirective,
     !isStaleDefaultTitle
       ? `- Tên bài học gợi ý (đối chiếu lại với nội dung nguồn nếu cần): ${cleanedUserTitle}`
       : '- Chưa có tên bài học cố định — BẮT BUỘC đặt `"title"` phản ánh chính xác 100% nội dung bài trong nguồn bên dưới.',
@@ -1718,7 +1738,7 @@ export function buildEnglishReelsWebAiPrompt(params: {
     '',
     '# NỘI DUNG GỐC CẦN CHUYỂN HÓA',
     '"""',
-    params.sourceText.trim().slice(0, 14000),
+    (params.sourceText || '').trim().slice(0, 14000),
     '"""',
   ]
     .filter(Boolean)
@@ -2157,8 +2177,171 @@ export interface TranslationChallengeItemSeed {
   sourcePrompt: string;
   targetAnswer: string;
   phonetic?: string;
+  vocabNotes?: string;
   grammarNote?: string;
   explanationSpeech?: string;
+}
+
+export interface TranslationTargetLocaleStrings {
+  stageSteps: [string, string, string, string];
+  askPill: (idxLabel: string) => string;
+  askTitle: string;
+  askSub: (thinkSec: number) => string;
+  countdownPill: (remain: number) => string;
+  meterTitle: (remain: number) => string;
+  meterSub: string;
+  promptSub: (reps: number) => string;
+  repeatPill: (repIndex: number, total: number) => string;
+  tipPill: (total: number) => string;
+  sourceLabel: (prompt: string) => string;
+  defaultTip: (total: number) => string;
+  stamp: (total: number) => string;
+  repeatChip: (total: number) => string;
+  introBadge: (level: string) => string;
+  introKicker: (thinkSec: number, repeatCount: number) => string;
+  cardBadge: (num: number) => string;
+  outroTitle: string;
+  outroLabels: (total: number, thinkSec: number, repeatCount: number) => [string, string, string];
+}
+
+export function getTranslationTargetLocale(
+  learningLang: LearningLanguageId = 'en',
+): TranslationTargetLocaleStrings {
+  switch (learningLang) {
+    case 'ja':
+      return {
+        stageSteps: ['1. 元の文', '2. 考える', '3. 正解・反復', '4. まとめ'],
+        askPill: (idxLabel) => `${idxLabel} · 日本語に訳そう`,
+        askTitle: '日本語で言ってみよう',
+        askSub: (thinkSec) => `あと${thinkSec}秒でスタート...`,
+        countdownPill: (remain) => `⏱️ 声に出して言おう: あと${remain}秒`,
+        meterTitle: (remain) => `今すぐ言おう · ${remain}s`,
+        meterSub: '答えが出る前に声に出して訳そう！',
+        promptSub: (reps) => `声に出して練習 · タイマー後に${reps}回リピート`,
+        repeatPill: (r, total) => `✓ 正解 · リピート ${r}/${total}`,
+        tipPill: (total) => `💡 表現のポイント · ×${total}`,
+        sourceLabel: (prompt) => `元の文: ${prompt}`,
+        defaultTip: (total) => `${total}回声に出して定着させよう！`,
+        stamp: (total) => `×${total} リピート`,
+        repeatChip: (total) => `リピート ${total}回`,
+        introBadge: (level) => `瞬間作文 · ${level}`,
+        introKicker: (thinkSec, reps) => `${thinkSec}秒で回答 · ${reps}回リピート`,
+        cardBadge: (num) => `問題 #${num}`,
+        outroTitle: 'チャレンジ完了！',
+        outroLabels: (total, thinkSec, reps) => [`全${total}問`, `考える ${thinkSec}s`, `反復 ${reps}回`],
+      };
+    case 'zh':
+      return {
+        stageSteps: ['1. 原句', '2. 思考', '3. 答案与跟读', '4. 总结'],
+        askPill: (idxLabel) => `${idxLabel} · 翻译成中文`,
+        askTitle: '用中文说出来',
+        askSub: (thinkSec) => `准备在${thinkSec}秒内开口...`,
+        countdownPill: (remain) => `⏱️ 大声说出来: 还剩${remain}秒`,
+        meterTitle: (remain) => `现在开口 · ${remain}s`,
+        meterSub: '答案出现前大声说出来！',
+        promptSub: (reps) => `轮到你了 · 倒计时后跟读${reps}遍`,
+        repeatPill: (r, total) => `✓ 答案 · 跟读 ${r}/${total}`,
+        tipPill: (total) => `💡 表达要点 · ×${total}`,
+        sourceLabel: (prompt) => `原句: ${prompt}`,
+        defaultTip: (total) => `大声跟读${total}遍巩固语感！`,
+        stamp: (total) => `×${total} 跟读`,
+        repeatChip: (total) => `跟读 ${total}遍`,
+        introBadge: (level) => `口语反应 · ${level}`,
+        introKicker: (thinkSec, reps) => `${thinkSec}秒思考 · 跟读${reps}遍`,
+        cardBadge: (num) => `挑战 #${num}`,
+        outroTitle: '挑战完成！',
+        outroLabels: (total, thinkSec, reps) => [`${total}句`, `思考 ${thinkSec}s`, `跟读 ${reps}遍`],
+      };
+    case 'ko':
+      return {
+        stageSteps: ['1. 원문', '2. 생각하기', '3. 정답 · 반복', '4. 마무리'],
+        askPill: (idxLabel) => `${idxLabel} · 한국어로 말해요`,
+        askTitle: '한국어로 말해 보세요',
+        askSub: (thinkSec) => `${thinkSec}초 안에 말해 보세요...`,
+        countdownPill: (remain) => `⏱️ 큰 소리로 말하기: ${remain}초`,
+        meterTitle: (remain) => `지금 말하세요 · ${remain}s`,
+        meterSub: '정답이 나오기 전에 큰 소리로 말해 보세요!',
+        promptSub: (reps) => `내 차례 · 타이머 후 ${reps}번 따라 말하기`,
+        repeatPill: (r, total) => `✓ 정답 · 따라 말하기 ${r}/${total}`,
+        tipPill: (total) => `💡 핵심 포인트 · ×${total}`,
+        sourceLabel: (prompt) => `원문: ${prompt}`,
+        defaultTip: (total) => `${total}번 큰 소리로 따라 읽으세요!`,
+        stamp: (total) => `×${total} 반복`,
+        repeatChip: (total) => `${total}회 반복`,
+        introBadge: (level) => `스피킹 훈련 · ${level}`,
+        introKicker: (thinkSec, reps) => `${thinkSec}초 생각 · ${reps}회 반복`,
+        cardBadge: (num) => `문제 #${num}`,
+        outroTitle: '챌린지 완료!',
+        outroLabels: (total, thinkSec, reps) => [`${total}문장`, `${thinkSec}s 생각`, `${reps}회 반복`],
+      };
+    case 'fr':
+      return {
+        stageSteps: ['1. Phrase', '2. Réfléchir', '3. Réponse · Répéter', '4. Bilan'],
+        askPill: (idxLabel) => `${idxLabel} · TRADUISEZ EN FRANÇAIS`,
+        askTitle: 'Dites-le en français',
+        askSub: (thinkSec) => `Préparez-vous en ${thinkSec} secondes...`,
+        countdownPill: (remain) => `⏱️ PARLEZ À VOIX HAUTE : ${remain}S`,
+        meterTitle: (remain) => `DITES-LE MAINTENANT · ${remain}s`,
+        meterSub: 'Traduisez à voix haute avant la réponse !',
+        promptSub: (reps) => `À vous · Répétition ×${reps} après le chrono`,
+        repeatPill: (r, total) => `✓ RÉPONSE · RÉPÉTER ${r}/${total}`,
+        tipPill: (total) => `💡 ASTUCE CLÉ · ×${total}`,
+        sourceLabel: (prompt) => `Source : ${prompt}`,
+        defaultTip: (total) => `Répétez ${total} fois à voix haute !`,
+        stamp: (total) => `×${total} RÉPÉTER`,
+        repeatChip: (total) => `Répéter ${total}×`,
+        introBadge: (level) => `RÉFLEXE ORAL · ${level}`,
+        introKicker: (thinkSec, reps) => `${thinkSec}s RÉFLEXION · ×${reps} RÉPÉTER`,
+        cardBadge: (num) => `DÉFI #${num}`,
+        outroTitle: 'Défi terminé !',
+        outroLabels: (total, thinkSec, reps) => [`${total} phrases`, `Penser ${thinkSec}s`, `Répéter ${reps}×`],
+      };
+    case 'es':
+      return {
+        stageSteps: ['1. Frase', '2. Pensar', '3. Respuesta · Repetir', '4. Cierre'],
+        askPill: (idxLabel) => `${idxLabel} · TRADUCE AL ESPAÑOL`,
+        askTitle: 'Dilo en español',
+        askSub: (thinkSec) => `Prepárate en ${thinkSec} segundos...`,
+        countdownPill: (remain) => `⏱️ HABLA EN VOZ ALTA: ${remain}S`,
+        meterTitle: (remain) => `DILO AHORA · ${remain}s`,
+        meterSub: '¡Traduce en voz alta antes de ver la respuesta!',
+        promptSub: (reps) => `Tu turno · Repite ×${reps} al terminar`,
+        repeatPill: (r, total) => `✓ RESPUESTA · REPETIR ${r}/${total}`,
+        tipPill: (total) => `💡 CLAVE DEL DÍA · ×${total}`,
+        sourceLabel: (prompt) => `Original: ${prompt}`,
+        defaultTip: (total) => `¡Repite ${total} veces en voz alta!`,
+        stamp: (total) => `×${total} REPETIR`,
+        repeatChip: (total) => `Repetir ${total}×`,
+        introBadge: (level) => `REFLEJO ORAL · ${level}`,
+        introKicker: (thinkSec, reps) => `${thinkSec}s PENSAR · ×${reps} REPETIR`,
+        cardBadge: (num) => `RETO #${num}`,
+        outroTitle: '¡Reto completado!',
+        outroLabels: (total, thinkSec, reps) => [`${total} frases`, `Pensar ${thinkSec}s`, `Repetir ${reps}×`],
+      };
+    case 'en':
+    default:
+      return {
+        stageSteps: ['1. Prompt', '2. Think', '3. Answer & Repeat', '4. Recap'],
+        askPill: (idxLabel) => `${idxLabel} · TRANSLATE TO ENGLISH`,
+        askTitle: 'Speak in English',
+        askSub: (thinkSec) => `Get ready to respond in ${thinkSec}s...`,
+        countdownPill: (remain) => `⏱️ SPEAK OUT LOUD: ${remain}S`,
+        meterTitle: (remain) => `SAY IT NOW · ${remain}s`,
+        meterSub: 'Translate aloud before the answer appears!',
+        promptSub: (reps) => `Your turn · Answer repeats ${reps}× after timer`,
+        repeatPill: (r, total) => `✓ ANSWER · REPEAT ${r}/${total}`,
+        tipPill: (total) => `💡 KEY TAKEAWAY · ×${total}`,
+        sourceLabel: (prompt) => `Prompt: ${prompt}`,
+        defaultTip: (total) => `Repeat aloud ${total} times to lock it in!`,
+        stamp: (total) => `×${total} REPEAT`,
+        repeatChip: (total) => `Repeat ${total}×`,
+        introBadge: (level) => `QUICK SPEAK · ${level}`,
+        introKicker: (thinkSec, reps) => `${thinkSec}s THINK · ×${reps} REPEAT`,
+        cardBadge: (num) => `CHALLENGE #${num}`,
+        outroTitle: 'Challenge Complete!',
+        outroLabels: (total, thinkSec, reps) => [`${total} sentences`, `Think ${thinkSec}s`, `Repeat ${reps}×`],
+      };
+  }
 }
 
 const CURATED_TRANSLATION_DECKS: Record<
@@ -2172,75 +2355,75 @@ const CURATED_TRANSLATION_DECKS: Record<
   en: {
     catchyHookTitle: (level) =>
       `【Phản xạ dịch ${level}】"Coi chừng cô ấy đấy!" nói tiếng Anh sao cho tự nhiên?`,
-    introSubtitle: 'Nghe câu tiếng Việt · Tự bật ra tiếng Anh trước khi hết giờ đếm ngược',
+    introSubtitle: 'Listen to prompt · Speak aloud during countdown · Repeat after answer',
     items: [
       {
         sourcePrompt: 'Coi chừng cô ấy đấy!',
         targetAnswer: 'Watch out for her!',
-        phonetic: '/wɑːtʃ aʊt fɔːr hɜːr/',
-        grammarNote: 'Watch out for + O = coi chừng / đề phòng ai đó',
+        vocabNotes: 'watch out (coi chừng, đề phòng)',
+        grammarNote: 'watch out for + O = đề phòng / cẩn thận với ai',
         explanationSpeech: 'Watch out for her là cách nói tự nhiên khi cảnh báo ai đó coi chừng hoặc giữ khoảng cách.',
       },
       {
         sourcePrompt: 'Tùy bạn quyết định thôi.',
         targetAnswer: "It's entirely up to you.",
-        phonetic: '/ɪts ɪnˈtaɪər.li ʌp tuː juː/',
+        vocabNotes: 'entirely (hoàn toàn) · up to (tùy thuộc)',
         grammarNote: 'be up to + someone = tùy thuộc vào quyết định của ai',
         explanationSpeech: 'Thêm entirely nhấn mạnh ý hoàn toàn tùy bạn quyết định, rất lịch sự và tự nhiên.',
       },
       {
         sourcePrompt: 'Để tôi suy nghĩ thêm qua đêm nay đã.',
         targetAnswer: 'Let me sleep on it.',
-        phonetic: '/let miː sliːp ɑːn ɪt/',
-        grammarNote: 'sleep on it = suy nghĩ kỹ thêm trước khi quyết định',
+        vocabNotes: 'sleep on it (ngủ một đêm suy nghĩ kỹ thêm)',
+        grammarNote: 'Let + O + V = để ai đó làm gì',
         explanationSpeech: 'Người bản xứ dùng sleep on it thay vì think more khi chưa muốn chốt ngay.',
       },
       {
         sourcePrompt: 'Tôi đang trên đường tới rồi đây.',
         targetAnswer: "I'm on my way.",
-        phonetic: '/aɪm ɑːn maɪ weɪ/',
+        vocabNotes: 'on my way (đang trên đường tới)',
         grammarNote: "on one's way = đang trên đường di chuyển tới",
         explanationSpeech: 'Mẫu câu cực quen thuộc báo mình sắp tới nơi rồi.',
       },
       {
         sourcePrompt: 'Chuyện đó kể ra thì dài lắm.',
         targetAnswer: "It's a long story.",
-        phonetic: '/ɪts ə lɔːŋ ˈstɔː.ri/',
+        vocabNotes: 'long story (chuyện dài dòng)',
         grammarNote: "It's a long story = chuyện dài dòng lắm (tránh kể chi tiết)",
         explanationSpeech: 'Dùng khi không tiện giải thích hết đầu đuôi câu chuyện ngay lúc đó.',
       },
       {
         sourcePrompt: 'Đừng để bụng chuyện vừa rồi nhé.',
         targetAnswer: 'No hard feelings.',
-        phonetic: '/noʊ hɑːrd ˈfiː.lɪŋz/',
+        vocabNotes: 'hard feelings (ác cảm, giận dỗi để bụng)',
         grammarNote: 'No hard feelings = đừng giận hay để bụng nhé',
-        explanationSpeech: 'Cách nói nhẹ nhàng giữ hòa khí sau một góp ý thẳng thắn.',
+        explanationSpeech: 'Cách nói nhẹ nhàng giữ hòa khí sau một góp ý thẳng thắc.',
       },
       {
         sourcePrompt: 'Nghe quen tai thật đấy.',
         targetAnswer: 'That rings a bell.',
-        phonetic: '/ðæt rɪŋz ə bel/',
+        vocabNotes: 'ring a bell (nghe quen quen, gợi nhớ)',
         grammarNote: 'ring a bell = nghe quen quen, gợi nhớ lại',
         explanationSpeech: 'Dùng khi bạn nghe tên ai hoặc việc gì thấy quen mà chưa nhớ rõ ngay.',
       },
       {
         sourcePrompt: 'Tôi hoàn toàn nhất trí với bạn.',
         targetAnswer: "I couldn't agree more.",
-        phonetic: '/aɪ ˈkʊd.ənt əˈɡriː mɔːr/',
+        vocabNotes: 'agree (đồng ý) · more (hơn nữa)',
         grammarNote: "couldn't agree more = hoàn toàn đồng ý 100%",
         explanationSpeech: 'Chú ý có chữ not nhưng nghĩa lại là đồng tình tuyệt đối.',
       },
       {
         sourcePrompt: 'Chúc bạn may mắn ở buổi phỏng vấn nhé!',
         targetAnswer: 'Break a leg at the interview!',
-        phonetic: '/breɪk ə leɡ æt ði ˈɪn.tər.vjuː/',
+        vocabNotes: 'break a leg (chúc may mắn) · interview (phỏng vấn)',
         grammarNote: 'Break a leg = Chúc may mắn (thành ngữ tự nhiên)',
         explanationSpeech: 'Thành ngữ rất hay dùng để chúc bạn bè tỏa sáng trước khi thi hay phỏng vấn.',
       },
       {
         sourcePrompt: 'Cuối cùng mọi chuyện cũng ổn thỏa thôi.',
         targetAnswer: 'Everything will work out in the end.',
-        phonetic: '/ˈev.ri.θɪŋ wɪl wɜːrk aʊt/',
+        vocabNotes: 'work out (ổn thỏa) · in the end (cuối cùng)',
         grammarNote: 'work out = tiến triển tốt, ổn thỏa',
         explanationSpeech: 'Câu động viên ấm áp và tự nhiên khi ai đó đang lo lắng.',
       },
@@ -2249,62 +2432,62 @@ const CURATED_TRANSLATION_DECKS: Record<
   zh: {
     catchyHookTitle: (level) =>
       `【Phản xạ ${level}】"Cẩn thận với cô ấy đấy!" nói tiếng Trung sao cho chuẩn?`,
-    introSubtitle: 'Nghe câu gợi ý · Nói to tiếng Trung trong giây đếm ngược rồi kiểm tra Pinyin',
+    introSubtitle: '听原句 · 倒计时开口说中文 · 核对地道表达与词汇语法',
     items: [
       {
         sourcePrompt: 'Cẩn thận với cô ấy đấy!',
         targetAnswer: '小心她一点！',
-        phonetic: 'xiǎo xīn tā yì diǎn',
+        vocabNotes: '小心 (cẩn thận) · 一点 (một chút)',
         grammarNote: '小心 + A + 一点 = cẩn thận / coi chừng A một chút',
         explanationSpeech: 'Thêm yì diǎn ở cuối giúp câu nhắc nhở nghe tự nhiên đúng khẩu ngữ bản xứ.',
       },
       {
         sourcePrompt: 'Tùy bạn thôi, sao cũng được.',
         targetAnswer: '随便你吧。',
-        phonetic: 'suí biàn nǐ ba',
+        vocabNotes: '随便 (tùy ý) · 吧 (trợ từ ngữ khí nhẹ)',
         grammarNote: '随便你 = tùy bạn đấy',
         explanationSpeech: 'Dùng suí biàn nǐ ba với bạn bè khi nhường quyền chọn cho đối phương.',
       },
       {
         sourcePrompt: 'Tôi đang trên đường tới rồi.',
         targetAnswer: '我在路上了。',
-        phonetic: 'wǒ zài lù shàng le',
+        vocabNotes: '路 (đường) · 在…上 (đang trên…)',
         grammarNote: '在路上 = đang trên đường',
         explanationSpeech: 'Câu nhắn tin và nghe gọi phổ biến nhất khi hẹn gặp ở Trung Quốc.',
       },
       {
         sourcePrompt: 'Làm phiền bạn giúp tôi một chút nhé.',
         targetAnswer: '麻烦你帮我一下。',
-        phonetic: 'má fan nǐ bāng wǒ yí xià',
+        vocabNotes: '麻烦 (làm phiền) · 帮 (giúp) · 一下 (một chút)',
         grammarNote: '麻烦你 + V + 一下 = làm phiền bạn giúp chút',
         explanationSpeech: 'Cách mở lời nhờ vả vừa lịch sự vừa thân thiện.',
       },
       {
         sourcePrompt: 'Chuyện này nói ra thì dài lắm.',
         targetAnswer: '这事说来话长。',
-        phonetic: 'zhè shì shuō lái huà cháng',
+        vocabNotes: '这事 (chuyện này) · 说来话长 (nói ra thì dài)',
         grammarNote: '说来话长 = nói ra thì dài dòng lắm',
         explanationSpeech: 'Cụm bốn chữ cực hay khi bạn muốn tóm tắt nhanh một câu chuyện dài.',
       },
       {
         sourcePrompt: 'Để tôi suy nghĩ lại một chút đã.',
         targetAnswer: '让我想一想。',
-        phonetic: 'ràng wǒ xiǎng yì xiǎng',
-        grammarNote: '想一想 = suy nghĩ một chút',
+        vocabNotes: '让 (để, cho) · 想一想 (nghĩ một chút)',
+        grammarNote: 'V + 一 + V = làm gì đó một chút (lịch sự, nhẹ nhàng)',
         explanationSpeech: 'Lặp động từ xiǎng yì xiǎng làm giọng điệu mềm mại hơn.',
       },
       {
         sourcePrompt: 'Không sao đâu, đừng khách sáo.',
         targetAnswer: '没关系，别客气。',
-        phonetic: 'méi guān xi, bié kè qi',
-        grammarNote: '别客气 = đừng khách sáo',
+        vocabNotes: '没关系 (không sao) · 别客气 (đừng khách sáo)',
+        grammarNote: '别 + V/Adj = đừng…',
         explanationSpeech: 'Phản hồi tự nhiên khi người khác cảm ơn hoặc xin lỗi bạn.',
       },
       {
         sourcePrompt: 'Lâu rồi không gặp, dạo này bạn ổn chứ?',
         targetAnswer: '好久不见，最近怎么样？',
-        phonetic: 'hǎo jiǔ bú jiàn, zuì jìn zěn me yàng',
-        grammarNote: '好久不见 = lâu rồi không gặp',
+        vocabNotes: '好久不见 (lâu không gặp) · 最近 (dạo này) · 怎么样 (thế nào)',
+        grammarNote: 'A + 怎么样？ = A dạo này ra sao?',
         explanationSpeech: 'Câu mở đầu kinh điển khi gặp lại bạn cũ.',
       },
     ],
@@ -2312,48 +2495,48 @@ const CURATED_TRANSLATION_DECKS: Record<
   ja: {
     catchyHookTitle: (level) =>
       `【瞬間作文 ${level}】"Coi chừng cô ấy đấy!" nói tiếng Nhật sao cho tự nhiên?`,
-    introSubtitle: 'Phản xạ nhanh từ câu gợi ý sang tiếng Nhật trước khi hết thời gian',
+    introSubtitle: '日本語で瞬間英作文トレーニング · 重要語彙と文法ポイント付き',
     items: [
       {
         sourcePrompt: 'Coi chừng cô ấy đấy!',
         targetAnswer: '彼女には気をつけて！',
-        phonetic: 'かのじょには きをつけて',
+        vocabNotes: '彼女 (cô ấy) · 気をつけて (hãy cẩn thận)',
         grammarNote: 'A + には気をつけて = cẩn thận với A nhé',
         explanationSpeech: 'Trợ từ niha nhấn mạnh đối tượng cần chú ý hoặc đề phòng.',
       },
       {
         sourcePrompt: 'Tôi xin giao lại cho bạn quyết định.',
         targetAnswer: 'お任せします。',
-        phonetic: 'おまかせします',
-        grammarNote: 'お任せする = giao phó, tùy bạn quyết định',
+        vocabNotes: 'お任せ (sự giao phó, tùy chọn)',
+        grammarNote: 'お + Danh từ + します = kính ngữ khiêm tốn lịch sự',
         explanationSpeech: 'Rất hay dùng khi gọi món hoặc nhờ đồng nghiệp chọn phương án.',
       },
       {
         sourcePrompt: 'Bây giờ tôi đang trên đường tới.',
         targetAnswer: '今向かっています。',
-        phonetic: 'いま むかっています',
-        grammarNote: '向かっている = đang hướng tới nơi hẹn',
+        vocabNotes: '今 (bây giờ) · 向かう (hướng tới)',
+        grammarNote: 'Vている = đang thực hiện hành động',
         explanationSpeech: 'Câu báo đang tới rất tự nhiên trong giao tiếp hàng ngày.',
       },
       {
         sourcePrompt: 'Xin lỗi, cho tôi suy nghĩ một chút nhé.',
         targetAnswer: 'ちょっと考えさせてください。',
-        phonetic: 'ちょっと かんがえさせてください',
+        vocabNotes: 'ちょっと (một chút) · 考える (suy nghĩ)',
         grammarNote: 'Vさせてください = xin hãy cho phép tôi làm gì',
         explanationSpeech: 'Cách xin thêm thời gian suy nghĩ cực kỳ lịch sự ở Nhật.',
       },
       {
         sourcePrompt: 'Lâu rồi không gặp, anh khỏe không?',
         targetAnswer: 'お久しぶりです、お元気ですか。',
-        phonetic: 'おひさしぶりです、おげんきですか',
+        vocabNotes: '久しぶり (lâu ngày) · 元気 (khỏe mạnh)',
         grammarNote: 'お久しぶりです = lâu rồi mới gặp lại',
         explanationSpeech: 'Mẫu chào hỏi chuẩn mực khi gặp lại người quen.',
       },
       {
         sourcePrompt: 'Không vấn đề gì đâu, cứ yên tâm nhé.',
         targetAnswer: '大丈夫ですよ、安心してください。',
-        phonetic: 'だいじょうぶですよ、あんしんしてください',
-        grammarNote: '安心してください = xin hãy yên tâm',
+        vocabNotes: '大丈夫 (ổn, không sao) · 安心 (yên tâm)',
+        grammarNote: 'Vてください = xin hãy… (lịch sự)',
         explanationSpeech: 'Giúp trấn an người đối diện rất nhẹ nhàng.',
       },
     ],
@@ -2535,19 +2718,14 @@ export function buildTranslationChallengePrompt(params: {
 
   const scriptPurityHint =
     learningLang === 'zh'
-      ? 'Put **100% pure Simplified Chinese Hanzi (汉字)** inside `"speech"` and `"answer"` (NO Pinyin inside `"speech"`; put Pinyin inside `"phonetic"` only!).'
+      ? 'Put **100% pure Simplified Chinese Hanzi (汉字)** inside `"speech"` and `"answer"` (NO Pinyin inside `"speech"` or full-sentence `"phonetic"`).'
       : learningLang === 'ja'
-        ? 'Put **100% pure natural Japanese (漢字 + かな)** inside `"speech"` and `"answer"` (put Furigana/Romaji inside `"phonetic"` only!).'
+        ? 'Put **100% pure natural Japanese (漢字 + かな)** inside `"speech"` and `"answer"`. **NEVER** put full-sentence Hiragana or Romaji under the answer!'
         : learningLang === 'ko'
-          ? 'Put **100% pure Korean Hangul (한국어)** inside `"speech"` and `"answer"` (put Romanization inside `"phonetic"` only!).'
+          ? 'Put **100% pure Korean Hangul (한국어)** inside `"speech"` and `"answer"` (NO full-sentence Romanization).'
           : `Put **100% pure natural ${langOption.nativeName}** inside \`"speech"\` and \`"answer"\`.`;
 
-  const exampleSource =
-    learningLang === 'zh'
-      ? 'Cẩn thận với cô ấy đấy!'
-      : learningLang === 'ja'
-        ? 'Coi chừng cô ấy đấy!'
-        : 'Coi chừng cô ấy đấy!';
+  const exampleSource = 'Coi chừng cô ấy đấy!';
   const exampleTarget =
     learningLang === 'zh'
       ? '小心她一点！'
@@ -2560,19 +2738,20 @@ export function buildTranslationChallengePrompt(params: {
             : learningLang === 'es'
               ? '¡Ten cuidado con ella!'
               : 'Watch out for her!';
-  const examplePhonetic =
+  const exampleVocabNotes =
     learningLang === 'zh'
-      ? 'xiǎo xīn tā yì diǎn'
+      ? '小心 (cẩn thận) · 一点 (một chút)'
       : learningLang === 'ja'
-        ? 'かのじょには きをつけて'
+        ? '彼女 (cô ấy) · 気をつけて (hãy cẩn thận)'
         : learningLang === 'ko'
-          ? 'geu yeo-ja jo-sim-ha-se-yo'
+          ? '조심하세요 (hãy cẩn thận)'
           : learningLang === 'fr'
-            ? '/me.fi.twa dɛl/'
+            ? 'se méfier (đề phòng, cảnh giác)'
             : learningLang === 'es'
-              ? '/ten kwiˈða.ðo kon ˈe.ʝa/'
-              : '/wɑːtʃ aʊt fɔːr hɜːr/';
+              ? 'tener cuidado (cẩn thận, coi chừng)'
+              : 'watch out (coi chừng, đề phòng)';
 
+  const trLocale = getTranslationTargetLocale(learningLang);
   const viLangName = langOption.label.split(' (')[0].replace(/^Tiếng\s+/, 'tiếng ');
   return [
     `# ROLE: INSTANT TRANSLATION CHALLENGE DIRECTOR (PHẢN XẠ DỊCH CÂU — KIỂU 瞬間英作文)`,
@@ -2597,20 +2776,21 @@ export function buildTranslationChallengePrompt(params: {
     '- Root `"title"` AND the `"title"` card MUST use an irresistible, concise hook title quoting a concrete sentence from this exact lesson (e.g. `【Phản xạ ' + chosenLevel + '】"<Quoted Hook Sentence>" nói ' + viLangName + ' sao cho tự nhiên?`).',
     '- NEVER output boring titles like "Lesson 1" or "Translation Practice".',
     '',
-    '## 3. CARD STRUCTURE & DUAL-TTS SEPARATION',
-    `1. **Hook Intro Card (\`type: "title"\`)**: Catchy hook title, \`"speech": ""\`, and energetic 1-sentence hook in \`"explanationSpeech"\` in **${explainLangName}** inviting viewers to say each sentence aloud before the ${thinkSec}-second timer runs out!`,
+    '## 3. CARD STRUCTURE, VOCAB GLOSS & TARGET-LANGUAGE CHROME',
+    `1. **Hook Intro Card (\`type: "title"\`)**: Catchy hook title, \`"kicker"\` & \`"visual"\` labels written in **${langOption.nativeName}** (matching target learning language), \`"speech": ""\`, and energetic 1-sentence hook in \`"explanationSpeech"\` in **${explainLangName}** inviting viewers to say each sentence aloud before the ${thinkSec}-second timer runs out!`,
     `2. **${count} Translation Challenge Cards (\`type: "translation"\`)**:`,
     `   - \`"indexLabel": "01 / ${countPadded}"\` through \`"${countPadded} / ${countPadded}"\``,
     `   - \`"sourcePrompt"\`: Natural, idiomatic sentence in **${explainLangName}** (NOT stiff word-by-word textbook Vietnamese!).`,
     `   - \`"answer"\`: Natural spoken target sentence in **${langOption.nativeName}**.`,
-    `   - \`"phonetic"\`: IPA / Pinyin / Furigana / Romaji ONLY (leave empty if obvious, NEVER put inside \`"speech"\`).`,
     `   - \`"speech"\`: ${scriptPurityHint}`,
+    `   - **NO FULL-SENTENCE PHONETIC / HIRAGANA**: Leave \`"phonetic": ""\` empty! Do NOT write full-sentence Hiragana, Furigana, Romaji, or IPA beneath the target sentence.`,
+    `   - \`"vocabNotes"\`: **CRITICAL** — Gloss 1–3 difficult/key words or idioms from \`"answer"\` into **${explainLangName}** (e.g. \`${exampleVocabNotes}\`).`,
     `   - \`"grammarNote"\`: Ultra-concise 1-line structure/pattern takeaway in **${explainLangName}**.`,
     includeNuanceTip
       ? `   - \`"explanationSpeech"\`: Brief 1-sentence spoken tip in **${explainLangName}** explaining why native speakers say it this way (played after the ${repeatCount} repeats).`
       : `   - \`"explanationSpeech"\`: "" (keep empty so audio focuses 100% on Prompt -> Countdown -> ${repeatCount}x Repeats).`,
     `   - \`"thinkSec": ${thinkSec}\`, \`"repeatCount": ${repeatCount}\``,
-    `3. **Recap Outro Card (\`type: "outro"\`)**: \`"speech": ""\`, encouraging closing in \`"explanationSpeech"\` in **${explainLangName}**.`,
+    `3. **Recap Outro Card (\`type: "outro"\`)**: \`"speech": ""\`, encouraging closing in \`"explanationSpeech"\` in **${explainLangName}**, and \`visual\` labels written in **${langOption.nativeName}**.`,
     '',
     TYPOGRAPHY_MOBILE_READABILITY_PROMPT_BLOCK,
     '',
@@ -2631,19 +2811,20 @@ export function buildTranslationChallengePrompt(params: {
     '  "cards": [',
     '    {',
     '      "type": "title",',
-    `      "kicker": "PHẢN XẠ DỊCH · ${chosenLevel}",`,
+    `      "kicker": ${JSON.stringify(trLocale.introKicker(thinkSec, repeatCount))},`,
     `      "title": ${JSON.stringify(`【Phản xạ ${chosenLevel}】"${exampleSource}" nói sao cho chuẩn?`)},`,
     '      "speech": "",',
     `      "explanationSpeech": ${JSON.stringify(`Thử thách phản xạ ${count} câu ${viLangName} thực tế. Nghe câu tiếng Việt và bật ra ngay trong ${thinkSec} giây nhé!`)},`,
-    '      "visual": { "variant": "bs-card-header", "formula": "' + thinkSec + 's THINK · ×' + repeatCount + ' REPEAT", "title": "' + count + ' Câu Phản Xạ", "sceneIcon": "sparkles" }',
+    `      "visual": { "variant": "bs-card-header", "formula": ${JSON.stringify(trLocale.introKicker(thinkSec, repeatCount))}, "title": ${JSON.stringify(trLocale.askTitle)}, "sceneIcon": "sparkles" }`,
     '    },',
     '    {',
     '      "type": "translation",',
     `      "indexLabel": "01 / ${countPadded}",`,
     `      "sourcePrompt": ${JSON.stringify(exampleSource)},`,
     `      "answer": ${JSON.stringify(exampleTarget)},`,
-    `      "phonetic": ${JSON.stringify(examplePhonetic)},`,
+    '      "phonetic": "",',
     `      "speech": ${JSON.stringify(exampleTarget)},`,
+    `      "vocabNotes": ${JSON.stringify(exampleVocabNotes)},`,
     '      "grammarNote": "Cấu trúc tự nhiên hay dùng hàng ngày",',
     ...(includeNuanceTip
       ? ['      "explanationSpeech": "Cách nói ngắn gọn và tự nhiên nhất khi giao tiếp ngoài đời.",']
@@ -2654,11 +2835,11 @@ export function buildTranslationChallengePrompt(params: {
     '    },',
     '    {',
     '      "type": "outro",',
-    '      "title": "Hoàn thành thử thách!",',
+    `      "title": ${JSON.stringify(trLocale.outroTitle)},`,
     '      "speech": "",',
     '      "explanationSpeech": "Tuyệt vời! Hãy lưu lại video để luyện phản xạ nghe và bật câu mỗi ngày nhé!",',
     `      "translation": ${JSON.stringify(locale.promptExampleOutroTranslation)},`,
-    '      "visual": { "variant": "css-bento-stats", "title": "Phản Xạ Nhanh Hơn!", "labels": ["Nghe câu gốc", "Nghĩ ' + thinkSec + 's", "Đọc lặp ' + repeatCount + 'x"], "sceneIcon": "sparkles" }',
+    `      "visual": { "variant": "css-bento-stats", "title": ${JSON.stringify(trLocale.outroTitle)}, "labels": ${JSON.stringify(trLocale.outroLabels(count, thinkSec, repeatCount))}, "sceneIcon": "sparkles" }`,
     '    }',
     '  ]',
     '}',
@@ -2686,6 +2867,7 @@ export function buildTranslationCardsFromInput(params: {
   const includeNuanceTip = params.includeNuanceTip !== false;
   const targetLang = params.targetLang || 'Tiếng Việt';
   const locale = getReelLocaleStrings(targetLang);
+  const trLocale = getTranslationTargetLocale(learningLang);
   const deck = CURATED_TRANSLATION_DECKS[learningLang] || CURATED_TRANSLATION_DECKS.en;
 
   const rawLines = (params.customInputLines || '')
@@ -2750,12 +2932,12 @@ export function buildTranslationCardsFromInput(params: {
     {
       id: makeCardId(0),
       type: 'intro',
-      badge: `PHẢN XẠ · ${chosenLevel}`,
-      kicker: `${thinkSec}s SUY NGHĨ · LẶP ${repeatCount}×`,
+      badge: trLocale.introBadge(chosenLevel),
+      kicker: trLocale.introKicker(thinkSec, repeatCount),
       title,
       content: topicLabel
-        ? `Thử thách ${totalItems} câu phản xạ chủ đề: ${topicLabel}`
-        : `${totalItems} câu phản xạ ${viLangName} (${chosenLevel})`,
+        ? `${trLocale.askTitle} · ${topicLabel}`
+        : `${trLocale.askTitle} (${chosenLevel})`,
       translation: deck.introSubtitle,
       ttsText: '',
       explanationSpeech: `Thử thách phản xạ ${totalItems} câu ${viLangName}. Nghe câu tiếng Việt và bật ra ngay trong ${thinkSec} giây nhé!`,
@@ -2763,8 +2945,8 @@ export function buildTranslationCardsFromInput(params: {
       durationSec: 4.5,
       visual: {
         variant: 'bs-card-header',
-        formula: `${thinkSec}s THINK · ×${repeatCount}`,
-        title: `${totalItems} Câu Phản Xạ`,
+        formula: trLocale.introKicker(thinkSec, repeatCount),
+        title: trLocale.askTitle,
         subtitle: deck.introSubtitle,
         sceneIcon: 'sparkles',
       },
@@ -2783,13 +2965,13 @@ export function buildTranslationCardsFromInput(params: {
     const card: ReelCard = {
       id: makeCardId(idx + 1),
       type: 'translation',
-      badge: `DỊCH CÂU #${idx + 1}`,
+      badge: trLocale.cardBadge(idx + 1),
       indexLabel: idxStr,
       title: seed.targetAnswer,
       content: seed.targetAnswer,
       sourcePrompt: seed.sourcePrompt,
-      phonetic: seed.phonetic,
       translation: seed.sourcePrompt,
+      vocabNotes: seed.vocabNotes,
       grammarNote: seed.grammarNote,
       explanationSpeech: includeNuanceTip ? seed.explanationSpeech || '' : '',
       learningLang,
@@ -2807,8 +2989,8 @@ export function buildTranslationCardsFromInput(params: {
     id: makeCardId(cards.length),
     type: 'outro',
     badge: locale.outroBadge,
-    title: 'Hoàn thành thử thách!',
-    content: `Bạn đã phản xạ xong ${totalItems} câu ${viLangName}!`,
+    title: trLocale.outroTitle,
+    content: trLocale.outroTitle,
     translation: locale.outroTranslation,
     ttsText: '',
     explanationSpeech: `Tuyệt vời! Bạn vừa luyện phản xạ xong ${totalItems} câu. Hãy lưu lại video để luyện bật câu nhanh hơn mỗi ngày nhé!`,
@@ -2816,8 +2998,8 @@ export function buildTranslationCardsFromInput(params: {
     durationSec: 4.0,
     visual: {
       variant: 'css-bento-stats',
-      title: 'Phản Xạ Tự Nhiên!',
-      labels: [`${totalItems} câu`, `Nghĩ ${thinkSec}s`, `Lặp ${repeatCount} lần`],
+      title: trLocale.outroTitle,
+      labels: trLocale.outroLabels(totalItems, thinkSec, repeatCount),
       sceneIcon: 'sparkles',
     },
   });
@@ -3478,6 +3660,12 @@ export function parseEnglishReelsAiJson(
       const speechVal = typeof c.speech === 'string' && c.speech.trim() ? c.speech.trim() : '';
       const translationRaw =
         typeof c.translation === 'string' && c.translation.trim() ? c.translation.trim() : '';
+      const vocabNotes =
+        typeof c.vocabNotes === 'string' && c.vocabNotes.trim()
+          ? c.vocabNotes.trim()
+          : typeof c.vocab === 'string' && c.vocab.trim()
+            ? c.vocab.trim()
+            : undefined;
       const grammarNote =
         typeof c.grammarNote === 'string' && c.grammarNote.trim()
           ? c.grammarNote.trim()
@@ -3594,7 +3782,13 @@ export function parseEnglishReelsAiJson(
             (rawType === 'answer'
               ? 'ANSWER'
               : type === 'translation'
-                ? `DỊCH CÂU #${cards.filter((x) => x.type === 'translation').length + 1}`
+                ? getTranslationTargetLocale(
+                    typeof c.learningLang === 'string' && c.learningLang.trim()
+                      ? (c.learningLang.trim().toLowerCase() as LearningLanguageId)
+                      : typeof parsed.learningLang === 'string' && parsed.learningLang.trim()
+                        ? (parsed.learningLang.trim().toLowerCase() as LearningLanguageId)
+                        : 'en',
+                  ).cardBadge(cards.filter((x) => x.type === 'translation').length + 1)
                 : type === 'intro' && kickerVal
                   ? kickerVal
                   : type.toUpperCase()),
@@ -3629,6 +3823,7 @@ export function parseEnglishReelsAiJson(
         translation: mergedTranslation,
         explanationSpeech: explanationSpeechRaw,
         learningLang: cardLearningLang,
+        vocabNotes,
         grammarNote,
         contextExcerpt,
         ttsText,
@@ -3874,6 +4069,7 @@ export function reelCardsToLessonProject(
     aspectRatio?: ExportAspectRatioId;
     targetLang?: string;
     backgroundImage?: BackgroundImageConfig;
+    subtitleConfig?: SubtitleDisplayConfig;
     cardDurationsSec?: number[];
     cardTimings?: ReelCardTimingMeta[];
     audioFileName?: string;
@@ -4118,14 +4314,41 @@ export function reelCardsToLessonProject(
     };
   }
 
+  const compId = options?.compositionId || 'story-scenes';
+  const defaultTrLocale = getTranslationTargetLocale(
+    (safeCards.find((c) => c.learningLang)?.learningLang as LearningLanguageId) || 'en',
+  );
+  const resolvedSubtitleConfig: SubtitleDisplayConfig = {
+    position: options?.subtitleConfig?.position || (compId === 'plain' ? 'center' : 'bottom'),
+    size: options?.subtitleConfig?.size || (compId === 'plain' ? 'lg' : 'md'),
+    boxStyle:
+      options?.subtitleConfig?.boxStyle ||
+      (compId === 'plain' ? 'clean' : 'card'),
+  };
+  const karaokeCenterY =
+    resolvedSubtitleConfig.position === 'top'
+      ? 260
+      : resolvedSubtitleConfig.position === 'center'
+        ? 960
+        : 1585;
+  const karaokeVariantForConfig: 'white-card' | 'dark-bar' | 'plain-shadow' =
+    resolvedSubtitleConfig.boxStyle === 'clean' || compId === 'plain'
+      ? resolvedSubtitleConfig.boxStyle === 'clean'
+        ? 'plain-shadow'
+        : isDark
+          ? 'dark-bar'
+          : 'white-card'
+      : isDark
+        ? 'dark-bar'
+        : 'white-card';
+
   const hasQuiz = safeCards.some((c) => c.type === 'quiz');
   const hasTranslation = safeCards.some((c) => c.type === 'translation');
   const stageSteps: string[] = hasTranslation
-    ? ['1. Câu gốc', '2. Suy nghĩ', '3. Đáp án & Lặp', '4. Tổng kết']
+    ? defaultTrLocale.stageSteps
     : hasQuiz
       ? locale.stageStepsQuiz
       : locale.stageStepsSimple;
-  const compId = options?.compositionId || 'story-scenes';
 
   const compLayoutProfile: Record<
     string,
@@ -4269,14 +4492,170 @@ export function reelCardsToLessonProject(
               ? 2
               : 1;
 
+    // ── PLAIN COMPOSITION (NO CARDS/ILLUSTRATIONS — PURE BACKGROUND + SUBTITLES) ──
+    if (compId === 'plain') {
+      const plainHelperBase = [card.vocabNotes, card.grammarNote, card.translation]
+        .filter(Boolean)
+        .join(' · ')
+        .slice(0, 140);
+
+      if (card.type === 'translation') {
+        const sourcePromptText = card.sourcePrompt || card.translation || card.title;
+        const trLocale = getTranslationTargetLocale(card.learningLang || 'en');
+        const preRevealEnd = Math.max(start + 0.1, win.answerStart);
+        elements.push({
+          id: `reel-plain-tr-q-${idx}`,
+          type: 'karaoke-card',
+          label: `Sub Gốc #${idx + 1}`,
+          startTime: start,
+          endTime: preRevealEnd,
+          enterAnimation: 'fade-scale',
+          exitAnimation: 'fade-out',
+          layout: { x: 540, y: karaokeCenterY, width: 920, scale: 1, zIndex: 35, manualPosition: true },
+          props: {
+            kind: 'karaoke-card',
+            cueId: win.questionCue.id,
+            words: win.questionCue.words,
+            variant: karaokeVariantForConfig,
+            activeColor: '#FACC15',
+            inactiveColor: 'rgba(226, 232, 240, 0.84)',
+            spokenColor: '#FFFFFF',
+            helperText: `${card.indexLabel || trLocale.cardBadge(idx + 1)} · ${trLocale.askTitle} (${Math.max(1, Math.round(win.thinkSec))}s)`,
+          },
+        });
+        const repSlots = win.repeatSlots || [];
+        const answerHelper =
+          [card.vocabNotes, card.grammarNote, trLocale.sourceLabel(sourcePromptText)]
+            .filter(Boolean)
+            .join(' · ')
+            .slice(0, 150) || trLocale.defaultTip(win.repeatCount || 2);
+        repSlots.forEach((slot, rIdx) => {
+          const slotEnd =
+            rIdx < repSlots.length - 1
+              ? repSlots[rIdx + 1].start
+              : win.nuanceSlot
+                ? win.nuanceSlot.start
+                : end;
+          elements.push({
+            id: `reel-plain-tr-r-${idx}-${rIdx}`,
+            type: 'karaoke-card',
+            label: `Sub Lặp ${rIdx + 1} #${idx + 1}`,
+            startTime: slot.start,
+            endTime: slotEnd,
+            enterAnimation: 'pop-up',
+            exitAnimation: 'fade-out',
+            layout: { x: 540, y: karaokeCenterY, width: 920, scale: 1, zIndex: 36, manualPosition: true },
+            props: {
+              kind: 'karaoke-card',
+              cueId: slot.cue.id,
+              words: slot.cue.words,
+              variant: karaokeVariantForConfig,
+              activeColor: '#4ADE80',
+              inactiveColor: 'rgba(226, 232, 240, 0.86)',
+              spokenColor: '#FFFFFF',
+              helperText: answerHelper,
+            },
+          });
+        });
+        if (win.nuanceSlot && end - win.nuanceSlot.start > 0.1) {
+          elements.push({
+            id: `reel-plain-tr-tip-${idx}`,
+            type: 'karaoke-card',
+            label: `Sub Mẹo #${idx + 1}`,
+            startTime: win.nuanceSlot.start,
+            endTime: end,
+            enterAnimation: 'fade-scale',
+            exitAnimation: 'fade-out',
+            layout: { x: 540, y: karaokeCenterY, width: 920, scale: 1, zIndex: 37, manualPosition: true },
+            props: {
+              kind: 'karaoke-card',
+              cueId: win.nuanceSlot.cue.id,
+              words: win.nuanceSlot.cue.words,
+              variant: karaokeVariantForConfig,
+              activeColor: '#93C5FD',
+              inactiveColor: 'rgba(226, 232, 240, 0.84)',
+              spokenColor: '#FFFFFF',
+              helperText: `${card.content}${card.vocabNotes ? ` · ${card.vocabNotes}` : ''}`,
+            },
+          });
+        }
+        return;
+      }
+
+      if (card.type === 'quiz' && card.options && card.options.length > 0) {
+        const preRevealEnd = Math.max(win.thinkEnd, win.questionEnd);
+        elements.push({
+          id: `reel-plain-q-${idx}`,
+          type: 'karaoke-card',
+          label: `Sub Quiz #${idx + 1}`,
+          startTime: start,
+          endTime: preRevealEnd,
+          enterAnimation: 'fade-scale',
+          exitAnimation: 'fade-out',
+          layout: { x: 540, y: karaokeCenterY, width: 920, scale: 1, zIndex: 35, manualPosition: true },
+          props: {
+            kind: 'karaoke-card',
+            cueId: win.questionCue.id,
+            words: win.questionCue.words,
+            variant: karaokeVariantForConfig,
+            activeColor: '#FACC15',
+            inactiveColor: 'rgba(226, 232, 240, 0.84)',
+            spokenColor: '#FFFFFF',
+            helperText: plainHelperBase || undefined,
+          },
+        });
+        if (win.answerCue && end - win.answerStart > 0.1) {
+          elements.push({
+            id: `reel-plain-a-${idx}`,
+            type: 'karaoke-card',
+            label: `Sub Quiz Ans #${idx + 1}`,
+            startTime: win.answerStart,
+            endTime: end,
+            enterAnimation: 'pop-up',
+            exitAnimation: 'fade-out',
+            layout: { x: 540, y: karaokeCenterY, width: 920, scale: 1, zIndex: 36, manualPosition: true },
+            props: {
+              kind: 'karaoke-card',
+              cueId: win.answerCue.id,
+              words: win.answerCue.words,
+              variant: karaokeVariantForConfig,
+              activeColor: '#4ADE80',
+              inactiveColor: 'rgba(226, 232, 240, 0.86)',
+              spokenColor: '#FFFFFF',
+              helperText: card.explanation || plainHelperBase || undefined,
+            },
+          });
+        }
+        return;
+      }
+
+      elements.push({
+        id: `reel-plain-k-${idx}`,
+        type: 'karaoke-card',
+        label: `Sub #${idx + 1}`,
+        startTime: start,
+        endTime: end,
+        enterAnimation: 'fade-scale',
+        exitAnimation: 'fade-out',
+        layout: { x: 540, y: karaokeCenterY, width: 920, scale: 1, zIndex: 35, manualPosition: true },
+        props: {
+          kind: 'karaoke-card',
+          cueId: win.questionCue.id,
+          words: win.questionCue.words,
+          variant: karaokeVariantForConfig,
+          activeColor: '#FACC15',
+          inactiveColor: 'rgba(226, 232, 240, 0.84)',
+          spokenColor: '#FFFFFF',
+          helperText: plainHelperBase || undefined,
+        },
+      });
+      return;
+    }
+
     // ── TRANSLATION CHALLENGE CARD (PROMPT → THINK COUNTDOWN → REVEAL & REPEAT N×) ──
     if (card.type === 'translation') {
       const sourcePromptText = card.sourcePrompt || card.translation || card.title;
-      const targetLangMeta = LEARNING_LANGUAGE_OPTIONS.find(
-        (l) => l.id === (card.learningLang || 'en'),
-      );
-      const targetLangShort =
-        targetLangMeta?.label.split(' (')[0].replace(/^Tiếng\s+/, 'tiếng ') || 'ngoại ngữ';
+      const trLocale = getTranslationTargetLocale(card.learningLang || 'en');
       const totalRepeats = win.repeatCount || Math.max(1, card.repeatCount ?? 2);
 
       // Top Roadmap Strip
@@ -4292,7 +4671,7 @@ export function reelCardsToLessonProject(
           layout: { x: 540, y: activeProfile.stripY, width: 920, scale: 1, zIndex: 12 },
           props: {
             kind: 'comparison-strip',
-            items: stageSteps.map((sLbl, sIdx) => ({
+            items: trLocale.stageSteps.map((sLbl, sIdx) => ({
               label: sLbl,
               activateAt:
                 sIdx === 0
@@ -4313,7 +4692,7 @@ export function reelCardsToLessonProject(
         elements.push({
           id: `reel-tr-pill-ask-${idx}`,
           type: 'topic-pill',
-          label: `Phản xạ #${idx + 1}`,
+          label: `Prompt #${idx + 1}`,
           startTime: start,
           endTime: win.questionEnd,
           enterAnimation: 'pop-up',
@@ -4321,7 +4700,7 @@ export function reelCardsToLessonProject(
           layout: { x: 540, y: activeProfile.pillY, width: 700, scale: 1, zIndex: 16 },
           props: {
             kind: 'topic-pill',
-            text: `${card.indexLabel || card.badge || `CÂU #${idx}`} · DỊCH SANG ${targetLangShort.toUpperCase()}`,
+            text: trLocale.askPill(card.indexLabel || card.badge || `#${idx}`),
             bgColor: '#FEF3C7',
             textColor: '#92400E',
           },
@@ -4340,9 +4719,9 @@ export function reelCardsToLessonProject(
             kind: 'illustration-prop',
             variant: 'bs-card-header',
             data: {
-              formula: card.indexLabel || `CÂU #${idx}`,
-              title: `Nói sang ${targetLangShort}`,
-              subtitle: `Chuẩn bị bật ra trong ${Math.max(1, Math.round(win.thinkSec))} giây...`,
+              formula: card.indexLabel || `#${idx}`,
+              title: trLocale.askTitle,
+              subtitle: trLocale.askSub(Math.max(1, Math.round(win.thinkSec))),
               sceneIcon: 'mic',
             },
           },
@@ -4362,7 +4741,7 @@ export function reelCardsToLessonProject(
           elements.push({
             id: `reel-tr-countdown-pill-${idx}-${s}`,
             type: 'topic-pill',
-            label: `Nghĩ ${remain}s`,
+            label: `${remain}s`,
             startTime: t0,
             endTime: t1,
             enterAnimation: 'pop-up',
@@ -4370,7 +4749,7 @@ export function reelCardsToLessonProject(
             layout: { x: 540, y: activeProfile.pillY, width: 680, scale: 1, zIndex: 18 },
             props: {
               kind: 'topic-pill',
-              text: `⏱️ TỰ NÓI TO TRONG: ${remain} GIÂY`,
+              text: trLocale.countdownPill(remain),
               bgColor: remain <= 2 ? '#FEE2E2' : '#FEF3C7',
               textColor: remain <= 2 ? '#B91C1C' : '#B45309',
             },
@@ -4389,8 +4768,8 @@ export function reelCardsToLessonProject(
               kind: 'illustration-prop',
               variant: 'bs-progress-meter',
               data: {
-                title: `BẬT RA NGAY TRONG ${remain}s`,
-                subtitle: `Dịch sang ${targetLangShort} trước khi hiện đáp án!`,
+                title: trLocale.meterTitle(remain),
+                subtitle: trLocale.meterSub,
                 value: Number(((s + 1) / wholeSecs).toFixed(2)),
                 sceneIcon: 'clock',
               },
@@ -4404,7 +4783,7 @@ export function reelCardsToLessonProject(
       elements.push({
         id: `reel-tr-prompt-card-${idx}`,
         type: 'sentence-card',
-        label: `Câu gốc #${idx + 1}`,
+        label: `Prompt #${idx + 1}`,
         startTime: start,
         endTime: preRevealEnd,
         enterAnimation: 'pop-up',
@@ -4413,7 +4792,7 @@ export function reelCardsToLessonProject(
         props: {
           kind: 'sentence-card',
           text: sourcePromptText,
-          subtext: `Dịch sang ${targetLangShort} · Đọc lặp ${totalRepeats} lần sau khi hết giờ`,
+          subtext: trLocale.promptSub(totalRepeats),
           badge: 'question',
           emphasisColor: '#D97706',
           bgColor: isDark ? 'rgba(15, 23, 42, 0.94)' : '#FFFFFF',
@@ -4424,17 +4803,17 @@ export function reelCardsToLessonProject(
       elements.push({
         id: `reel-tr-karaoke-q-${idx}`,
         type: 'karaoke-card',
-        label: `Sub Gốc #${idx + 1}`,
+        label: `Sub Q #${idx + 1}`,
         startTime: start,
         endTime: preRevealEnd,
         enterAnimation: 'slide-up',
         exitAnimation: 'fade-out',
-        layout: { x: 540, y: 1585, width: 900, scale: 1, zIndex: 35 },
+        layout: { x: 540, y: karaokeCenterY, width: 900, scale: 1, zIndex: 35 },
         props: {
           kind: 'karaoke-card',
           cueId: win.questionCue.id,
           words: win.questionCue.words,
-          variant: isDark ? 'dark-bar' : 'white-card',
+          variant: karaokeVariantForConfig,
           activeColor: isDark ? '#FACC15' : '#D97706',
           inactiveColor: isDark ? '#CBD5E1' : '#9CA3AF',
           spokenColor: isDark ? '#FFFFFF' : '#111827',
@@ -4454,7 +4833,7 @@ export function reelCardsToLessonProject(
           elements.push({
             id: `reel-tr-pill-rep-${idx}-${rIdx}`,
             type: 'topic-pill',
-            label: `Lặp ${rIdx + 1}/${totalRepeats}`,
+            label: `Repeat ${rIdx + 1}/${totalRepeats}`,
             startTime: slot.start,
             endTime: slotEnd,
             enterAnimation: 'pop-up',
@@ -4462,7 +4841,7 @@ export function reelCardsToLessonProject(
             layout: { x: 540, y: activeProfile.pillY, width: 720, scale: 1, zIndex: 18 },
             props: {
               kind: 'topic-pill',
-              text: `✓ ĐÁP ÁN · ĐỌC LẶP LẦN ${rIdx + 1}/${totalRepeats}`,
+              text: trLocale.repeatPill(rIdx + 1, totalRepeats),
               bgColor: '#DCFCE7',
               textColor: '#15803D',
             },
@@ -4471,17 +4850,17 @@ export function reelCardsToLessonProject(
           elements.push({
             id: `reel-tr-karaoke-r-${idx}-${rIdx}`,
             type: 'karaoke-card',
-            label: `Sub Lặp ${rIdx + 1} #${idx + 1}`,
+            label: `Sub R${rIdx + 1} #${idx + 1}`,
             startTime: slot.start,
             endTime: slotEnd,
             enterAnimation: 'pop-up',
             exitAnimation: 'fade-out',
-            layout: { x: 540, y: 1585, width: 900, scale: 1, zIndex: 36 },
+            layout: { x: 540, y: karaokeCenterY, width: 900, scale: 1, zIndex: 36 },
             props: {
               kind: 'karaoke-card',
               cueId: slot.cue.id,
               words: slot.cue.words,
-              variant: isDark ? 'dark-bar' : 'white-card',
+              variant: karaokeVariantForConfig,
               activeColor: '#16A34A',
               inactiveColor: isDark ? '#CBD5E1' : '#9CA3AF',
               spokenColor: isDark ? '#FFFFFF' : '#064E3B',
@@ -4493,7 +4872,7 @@ export function reelCardsToLessonProject(
           elements.push({
             id: `reel-tr-pill-tip-${idx}`,
             type: 'topic-pill',
-            label: `Mẹo sắc thái #${idx + 1}`,
+            label: `Takeaway #${idx + 1}`,
             startTime: win.nuanceSlot.start,
             endTime: end,
             enterAnimation: 'pop-up',
@@ -4501,7 +4880,7 @@ export function reelCardsToLessonProject(
             layout: { x: 540, y: activeProfile.pillY, width: 720, scale: 1, zIndex: 18 },
             props: {
               kind: 'topic-pill',
-              text: `💡 GHI NHỚ NHANH · ×${totalRepeats} ĐÃ ĐỌC`,
+              text: trLocale.tipPill(totalRepeats),
               bgColor: '#E0E7FF',
               textColor: '#3730A3',
             },
@@ -4510,17 +4889,17 @@ export function reelCardsToLessonProject(
           elements.push({
             id: `reel-tr-karaoke-tip-${idx}`,
             type: 'karaoke-card',
-            label: `Sub Mẹo #${idx + 1}`,
+            label: `Sub Tip #${idx + 1}`,
             startTime: win.nuanceSlot.start,
             endTime: end,
             enterAnimation: 'pop-up',
             exitAnimation: 'fade-out',
-            layout: { x: 540, y: 1585, width: 900, scale: 1, zIndex: 37 },
+            layout: { x: 540, y: karaokeCenterY, width: 900, scale: 1, zIndex: 37 },
             props: {
               kind: 'karaoke-card',
               cueId: win.nuanceSlot.cue.id,
               words: win.nuanceSlot.cue.words,
-              variant: isDark ? 'dark-bar' : 'white-card',
+              variant: karaokeVariantForConfig,
               activeColor: '#4F46E5',
               inactiveColor: isDark ? '#CBD5E1' : '#9CA3AF',
               spokenColor: isDark ? '#FFFFFF' : '#1E1B4B',
@@ -4528,11 +4907,11 @@ export function reelCardsToLessonProject(
           });
         }
 
-        // Visual comparison / nuance tip card during reveal
+        // Visual comparison / nuance tip card during reveal (no full-sentence phonetic; highlight vocab + grammar)
         elements.push({
           id: `reel-tr-ans-prop-${idx}`,
           type: 'illustration-prop',
-          label: `Đáp án Visual #${idx + 1}`,
+          label: `Answer Visual #${idx + 1}`,
           startTime: win.answerStart,
           endTime: end,
           enterAnimation: 'pop-up',
@@ -4542,22 +4921,22 @@ export function reelCardsToLessonProject(
             kind: 'illustration-prop',
             variant: 'bs-alert-tip',
             data: {
-              title: `Câu gốc: ${sourcePromptText}`,
+              title: trLocale.sourceLabel(sourcePromptText),
               speechText:
-                card.grammarNote ||
-                card.explanationSpeech ||
-                `Đọc to lặp lại ${totalRepeats} lần để quen miệng!`,
-              highlightWord: `Lặp ${totalRepeats}×`,
+                [card.vocabNotes, card.grammarNote, card.explanationSpeech]
+                  .filter(Boolean)
+                  .join(' · ') || trLocale.defaultTip(totalRepeats),
+              highlightWord: trLocale.repeatChip(totalRepeats),
               sceneIcon: 'sparkles',
             },
           },
         });
 
-        // Revealed Target Translation Sentence Card
+        // Revealed Target Translation Sentence Card (gloss vocab + grammar instead of full-sentence phonetic)
         elements.push({
           id: `reel-tr-ans-card-${idx}`,
           type: 'sentence-card',
-          label: `Bản dịch #${idx + 1}`,
+          label: `Answer #${idx + 1}`,
           startTime: win.answerStart,
           endTime: end,
           enterAnimation: 'pop-up',
@@ -4566,9 +4945,11 @@ export function reelCardsToLessonProject(
           props: {
             kind: 'sentence-card',
             text: card.content,
-            subtext: [card.phonetic, sourcePromptText, card.grammarNote].filter(Boolean).join(' · '),
+            subtext: [card.vocabNotes, card.grammarNote, sourcePromptText]
+              .filter(Boolean)
+              .join(' · '),
             badge: 'check',
-            stampText: `×${totalRepeats} LẶP`,
+            stampText: trLocale.stamp(totalRepeats),
             stampColor: '#16A34A',
             emphasisColor: '#16A34A',
             bgColor: isDark ? 'rgba(6, 78, 59, 0.94)' : '#ECFDF5',
@@ -4843,12 +5224,12 @@ export function reelCardsToLessonProject(
         endTime: Math.max(win.thinkEnd, win.questionEnd),
         enterAnimation: 'slide-up',
         exitAnimation: 'fade-out',
-        layout: { x: 540, y: 1585, width: 900, scale: 1, zIndex: 35 },
+        layout: { x: 540, y: karaokeCenterY, width: 900, scale: 1, zIndex: 35 },
         props: {
           kind: 'karaoke-card',
           cueId: win.questionCue.id,
           words: win.questionCue.words,
-          variant: isDark ? 'dark-bar' : 'white-card',
+          variant: karaokeVariantForConfig,
           activeColor: isDark ? '#FACC15' : '#D97706',
           inactiveColor: isDark ? '#CBD5E1' : '#9CA3AF',
           spokenColor: isDark ? '#FFFFFF' : '#111827',
@@ -4864,12 +5245,12 @@ export function reelCardsToLessonProject(
           endTime: end,
           enterAnimation: 'pop-up',
           exitAnimation: 'fade-out',
-          layout: { x: 540, y: 1585, width: 900, scale: 1, zIndex: 36 },
+          layout: { x: 540, y: karaokeCenterY, width: 900, scale: 1, zIndex: 36 },
           props: {
             kind: 'karaoke-card',
             cueId: win.answerCue.id,
             words: win.answerCue.words,
-            variant: isDark ? 'dark-bar' : 'white-card',
+            variant: karaokeVariantForConfig,
             activeColor: '#16A34A',
             inactiveColor: isDark ? '#CBD5E1' : '#9CA3AF',
             spokenColor: isDark ? '#FFFFFF' : '#064E3B',
@@ -5143,12 +5524,12 @@ export function reelCardsToLessonProject(
       endTime: end,
       enterAnimation: 'slide-up',
       exitAnimation: 'fade-out',
-      layout: { x: 540, y: 1585, width: 900, scale: 1, zIndex: 35 },
+      layout: { x: 540, y: karaokeCenterY, width: 900, scale: 1, zIndex: 35 },
       props: {
         kind: 'karaoke-card',
         cueId: win.questionCue.id,
         words: win.questionCue.words,
-        variant: isDark ? 'dark-bar' : 'white-card',
+        variant: karaokeVariantForConfig,
         activeColor: isDark ? '#FACC15' : '#2563EB',
         inactiveColor: isDark ? '#CBD5E1' : '#9CA3AF',
         spokenColor: isDark ? '#FFFFFF' : '#111827',
@@ -5156,7 +5537,9 @@ export function reelCardsToLessonProject(
     });
   });
 
-  const resolvedElements = resolveProjectOverlaps(elements);
+  const resolvedElements = resolveProjectOverlaps(elements, {
+    preserveKaraokeY: compId === 'plain' || resolvedSubtitleConfig.position !== 'bottom',
+  });
   const aspectRatio: ExportAspectRatioId = options?.aspectRatio || '9:16';
 
   return {
@@ -5167,6 +5550,7 @@ export function reelCardsToLessonProject(
     compositionId: compId,
     aspectRatio,
     backgroundImage: options?.backgroundImage,
+    subtitleConfig: resolvedSubtitleConfig,
     duration: totalDuration,
     fps: 30,
     audioFileName: options?.audioFileName,

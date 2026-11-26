@@ -21,6 +21,7 @@ export function buildSceneGenerationPrompt(
     theme?: CanvasThemeId;
     customConfig?: CustomComponentPresetConfig;
     audioDurationSec?: number | null;
+    targetDurationMinutes?: number;
   },
 ): string {
   const style = options?.style ?? 'tiktok-cards';
@@ -80,7 +81,7 @@ export function buildSceneGenerationPrompt(
 - Đặt "theme": "${options?.theme ?? 'studio-slate'}" (hoặc các nền sáng/tối tùy chọn, chữ karaoke vàng #FACC15 khi nền tối).
 - Ưu tiên dùng \`kind: "shape_3d"\` với \`shape_type: "card_3d" | "pill_3d" | "cube_3d" | "staircase_3d"\` làm điểm nhấn chính ở \`y: 0.24..0.68\`.`;
   } else if (aiDecideComposition) {
-    const compositionList = LAYOUT_COMPOSITIONS.filter((c) => c.id !== 'custom')
+    const compositionList = LAYOUT_COMPOSITIONS.filter((c) => c.id !== 'custom' && c.id !== 'plain')
       .map(
         (c) =>
           `  - "${c.id}" → ${c.name}: ${c.description} (theme: ${c.recommendedTheme}, signature: ${c.signatureVariant})`,
@@ -125,6 +126,13 @@ Quy tắc an toàn (KHÔNG invent type hay icon ngoài danh mục):
     options?.theme ??
     (isWordReveal || is3D ? 'studio-slate' : compMeta?.recommendedTheme ?? 'pastel-sunrise');
 
+  const targetMinutes =
+    typeof options?.targetDurationMinutes === 'number' &&
+    Number.isFinite(options.targetDurationMinutes) &&
+    options.targetDurationMinutes > 0
+      ? Math.max(0.5, Math.min(30, Number(options.targetDurationMinutes.toFixed(1))))
+      : null;
+
   const audioDiagLine =
     audioDur !== null
       ? `- Tổng thời lượng Audio đo được: **${audioDur.toFixed(2)}s** · Segment cuối kết thúc lúc: **${cuesLastEnd.toFixed(2)}s**${
@@ -133,6 +141,16 @@ Quy tắc an toàn (KHÔNG invent type hay icon ngoài danh mục):
             : ''
         }.`
       : `- Tổng phạm vi Transcript: \`${totalStart}\` → \`${totalEnd}\` (${cues.length} segments).`;
+
+  const durationBudgetLine = targetMinutes
+    ? `- **Thời lượng & Mật độ kiến thức mục tiêu**: Người dùng mong muốn video hoàn chỉnh dài khoảng **${targetMinutes} phút (~${Math.round(targetMinutes * 60)} giây)**. ${
+        targetMinutes >= 3
+          ? 'Hãy chia scene chi tiết, bổ sung thêm thẻ giải thích sắc thái, ví dụ đối chiếu và bước phân tích sâu để nội dung đủ giàu kiến thức cho thời lượng mục tiêu.'
+          : targetMinutes <= 1
+            ? 'Giữ nhịp nhanh, súc tích, cô đọng đúng trọng tâm để không kéo dài lê thê vượt quá thời lượng mục tiêu.'
+            : 'Cân đối số scene và độ chi tiết vừa vặn, tự nhiên với thời lượng mục tiêu.'
+      }`
+    : '';
 
   const pickCleanSampleQuote = (raw: string | undefined, fallback: string, maxChars = 64): string => {
     const clean = (raw || '').trim();
@@ -154,7 +172,7 @@ Bạn đóng vai **Instructional Designer + Motion Graphics Director** cho video
 Trả về **DUY NHẤT 1 KHỐI JSON HỢP LỆ** chuẩn \`schema_version: "1.9"\` (không giải thích ngoài JSON).
 
 ## STAGE 1 — AUDIO + TRANSCRIPT (BẢO TOÀN NGUYÊN VĂN 100%)
-${audioDiagLine}
+${audioDiagLine}${durationBudgetLine ? `\n${durationBudgetLine}` : ''}
 - **LUẬT BẢO TOÀN TRANSCRIPT**: Sao chép CHÍNH XÁC từng ký tự trong \`source_segments[]\` bên dưới (giữ nguyên dấu phẩy, dấu ngoặc kép \`"..."\`, chấm hỏi, xuống dòng, \`segment_id\`, \`start\`, \`end\`). Tuyệt đối KHÔNG sửa chính tả, không bỏ dấu ngoặc kép (VD: \`"I'm looking," he says,\` phải giữ nguyên từng dấu câu). Không bao giờ trộn hai bộ timestamp khác nhau.
 
 ## STAGE 2 — INSTRUCTIONAL DESIGNER (CHIA ĐA SCENE SƯ PHẠM)
