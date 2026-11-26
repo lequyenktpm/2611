@@ -1,0 +1,535 @@
+import type { VectorPrimitive } from './customComponentTypes';
+import type { ExportAspectRatioId } from './mp4Config';
+
+export type CanvasThemeId =
+  | 'pastel-sunrise'
+  | 'soft-lavender'
+  | 'mint-breeze'
+  | 'warm-paper'
+  | 'studio-slate';
+
+export type BackgroundFitMode = 'cover' | 'contain';
+
+export interface BackgroundImageConfig {
+  dataUrl: string;
+  fileName?: string;
+  fit?: BackgroundFitMode;
+  scrimOpacity?: number; // 0..0.85 overlay to keep text crisp over photos
+}
+
+export interface WordTiming {
+  word: string;
+  start: number;
+  end: number;
+  highlightColor?: string;
+}
+
+export interface TranscriptCue {
+  id: string;
+  start: number;
+  end: number;
+  text: string;
+  words: WordTiming[];
+}
+
+export type EnterAnimation = 'pop-up' | 'slide-up' | 'fade-scale' | 'drop-in';
+export type ExitAnimation = 'fade-out' | 'slide-down' | 'shrink';
+
+export type Shape3DType =
+  | 'card_3d'
+  | 'pill_3d'
+  | 'cube_3d'
+  | 'rect_3d'
+  | 'staircase_3d';
+
+export type TextSizeRole = 'display' | 'headline' | 'body' | 'caption' | 'label';
+export type TextWeightRole = 'regular' | 'medium' | 'bold' | 'black';
+
+export type SceneElementType =
+  | 'comparison-strip'
+  | 'topic-pill'
+  | 'illustration-prop'
+  | 'sentence-card'
+  | 'tone-meter'
+  | 'word-stack'
+  | 'shape-3d'
+  | 'karaoke-card';
+
+export interface ElementLayout {
+  x: number; // Center X on canvas
+  y: number; // Center Y on canvas
+  width: number;
+  height?: number;
+  scale: number;
+  zIndex: number;
+  manualPosition?: boolean;
+}
+
+export interface ComparisonItem {
+  label: string;
+  sublabel?: string;
+  activateAt?: number;
+  accentColor?: string;
+}
+
+export interface WordStackRow {
+  prefix: string;
+  suffix: string;
+  suffixColor: string;
+  appearAt: number;
+  phonetic?: string;
+}
+
+export interface ComparisonStripProps {
+  kind: 'comparison-strip';
+  items: ComparisonItem[];
+}
+
+export interface TopicPillProps {
+  kind: 'topic-pill';
+  text: string;
+  bgColor: string;
+  textColor: string;
+}
+
+export type IllustrationSceneIcon =
+  | 'tv'
+  | 'eye'
+  | 'glasses'
+  | 'watch'
+  | 'listen'
+  | 'walk'
+  | 'phone'
+  | 'airplane'
+  | 'luggage'
+  | 'menu'
+  | 'cup'
+  | 'shopping-bag'
+  | 'price-tag'
+  | 'stethoscope'
+  | 'sun'
+  | 'rain'
+  | 'umbrella'
+  | 'snowflake'
+  | 'book'
+  | 'pencil'
+  | 'graduation'
+  | 'laptop'
+  | 'calendar'
+  | 'briefcase'
+  | 'clock'
+  | 'car'
+  | 'bus'
+  | 'home'
+  | 'dumbbell'
+  | 'music'
+  | 'mic'
+  | 'camera'
+  | 'heart'
+  | 'sparkles'
+  | 'brain'
+  | 'lightning'
+  | 'scale'
+  | 'gift'
+  | 'wallet'
+  | 'map-pin'
+  | 'globe'
+  | 'handshake'
+  | 'chat';
+
+export type BuiltinIllustrationVariant =
+  | 'cafe-water'
+  | 'coffee-cup'
+  | 'pronunciation-wave'
+  | 'speech-bubble'
+  | 'friends-chat'
+  | 'office-work'
+  | 'hotel-desk'
+  | 'lightbulb-tip'
+  | 'ear-listen'
+  | 'flow-diagram'
+  | 'gauge-arc'
+  | 'timeline-track'
+  | 'checklist-card'
+  | 'dialogue-upgrade'
+  | 'clock-face'
+  | 'spatial-boxes'
+  | 'avatar-speech'
+  | 'phrase-icon-split'
+  | 'trio-icon-cards'
+  | 'contrast-pair-cards'
+  | 'quiz-fill-blank'
+  | 'airport-travel'
+  | 'restaurant-order'
+  | 'shopping-price'
+  | 'doctor-health'
+  | 'weather-forecast'
+  | 'study-desk'
+  | 'commute-transport'
+  | 'home-routine'
+  | 'gym-fitness'
+  | 'phone-call'
+  | 'tense-timeline'
+  | 'degree-scale'
+  | 'phrasal-split'
+  | 'idiom-split'
+  | 'syllable-stress'
+  | 'intonation-curve'
+  | 'bs-alert-tip'
+  | 'bs-card-header'
+  | 'bs-progress-meter'
+  | 'bs-toast-notify'
+  | 'bs-list-group'
+  | 'bs-pricing-tier'
+  | 'bs-accordion-faq'
+  | 'bs-breadcrumb-path'
+  | 'css-bento-stats'
+  | 'css-glass-quote'
+  | 'css-chat-thread'
+  | 'css-roadmap-steps'
+  | 'css-toggle-switch'
+  | 'css-browser-mockup'
+  | 'css-grammar-equation'
+  | 'css-flashcard-flip'
+  | 'css-sticky-note'
+  | 'bs-badge-cluster'
+  | 'css-magnifying-word'
+  | 'bs-modal-quiz'
+  | 'dynamic-scene';
+
+export type IllustrationVariant = BuiltinIllustrationVariant | (string & {});
+
+export interface IllustrationFlowNode {
+  label: string;
+  sublabel?: string;
+  icon?: 'clock' | 'history' | 'rocket' | 'chat' | 'star' | 'check' | 'water' | 'office';
+  sceneIcon?: IllustrationSceneIcon;
+  color?: string;
+}
+
+export interface IllustrationChecklistItem {
+  text: string;
+  highlight?: string;
+  ok?: boolean;
+}
+
+export interface IllustrationDialogueRow {
+  prompt: string;
+  upgrade: string;
+  badgeColor?: string;
+}
+
+export interface IllustrationSpatialBox {
+  title: string;
+  subtitle?: string;
+  icon: 'dot' | 'surface' | 'cube' | 'check' | 'cross' | 'letter';
+  accent?: string;
+}
+
+export interface DynamicSceneMotif {
+  icon: IllustrationSceneIcon;
+  label: string;
+  sublabel?: string;
+  accent?: string;
+  status?: 'check' | 'cross' | 'neutral';
+}
+
+export interface DynamicSceneSpec {
+  layout:
+    | 'split-compare'
+    | 'hero-icon-formula'
+    | 'triple-card-grid'
+    | 'timeline-bridge'
+    | 'phonetic-breakdown';
+  badgeText?: string;
+  headline?: string;
+  subtext?: string;
+  formula?: string;
+  connector?: 'arrow' | 'vs' | 'equals' | 'plus';
+  motifs: DynamicSceneMotif[];
+}
+
+export interface IllustrationPropData {
+  title?: string;
+  subtitle?: string;
+  nodes?: IllustrationFlowNode[];
+  labels?: string[];
+  value?: number; // 0..1 for gauge / timeline-track / degree-scale
+  timeHour?: number;
+  timeMinute?: number;
+  formula?: string;
+  checklist?: IllustrationChecklistItem[];
+  upgrades?: IllustrationDialogueRow[];
+  boxes?: IllustrationSpatialBox[];
+  speechText?: string;
+  reactionText?: string;
+  sceneIcon?: IllustrationSceneIcon;
+  highlightWord?: string;
+  dynamicScene?: DynamicSceneSpec;
+  customPrimitives?: VectorPrimitive[];
+}
+
+export interface IllustrationPropProps {
+  kind: 'illustration-prop';
+  variant: IllustrationVariant;
+  data?: IllustrationPropData;
+}
+
+export type LayoutCompositionId =
+  | 'story-scenes'
+  | 'flow-steps'
+  | 'gauge-tone'
+  | 'checklist-cards'
+  | 'dialogue-upgrade'
+  | 'timeline-track'
+  | 'spatial-contrast'
+  | 'avatar-dialogue'
+  | 'clock-spotlight'
+  | 'phrase-icon-split'
+  | 'word-reveal'
+  | '3d-shapes'
+  | 'custom';
+
+export interface CustomComponentPresetConfig {
+  variant: IllustrationVariant;
+  sceneIcon?: IllustrationSceneIcon;
+  title?: string;
+  subtitle?: string;
+  speechText?: string;
+  labels?: string[];
+  highlightWord?: string;
+  formula?: string;
+  accentColor?: string;
+  cardBgColor?: string;
+  cardTextColor?: string;
+  showStrip?: boolean;
+  showToneMeter?: boolean;
+  showSentenceCard?: boolean;
+  illustrationY?: number;
+}
+
+export interface SentenceCardProps {
+  kind: 'sentence-card';
+  text: string;
+  subtext?: string;
+  badge?: 'check' | 'cross' | 'question' | 'none';
+  stampText?: string;
+  stampColor?: string;
+  emphasisWord?: string;
+  emphasisColor?: string;
+  strikethrough?: boolean;
+  bgColor?: string;
+  textColor?: string;
+}
+
+export interface ToneMeterProps {
+  kind: 'tone-meter';
+  title: string;
+  leftLabel: string;
+  rightLabel: string;
+  valueStart: number; // 0..1
+  valueEnd: number; // 0..1
+  animateStart: number;
+  animateEnd: number;
+}
+
+export interface WordStackProps {
+  kind: 'word-stack';
+  rows: WordStackRow[];
+}
+
+export interface Shape3DProps {
+  kind: 'shape-3d';
+  shapeType: Shape3DType;
+  fill: string;
+  shadow: boolean;
+  highlight: boolean;
+  depth: number;
+  cornerRadius: number;
+  textContent?: string;
+  textColor?: string;
+  textSize?: TextSizeRole;
+  textWeight?: TextWeightRole;
+  stepLabels?: string[];
+}
+
+export interface KaraokeCardProps {
+  kind: 'karaoke-card';
+  cueId: string;
+  words: WordTiming[];
+  activeColor: string;
+  inactiveColor: string;
+  spokenColor: string;
+  variant?: 'white-card' | 'dark-bar';
+}
+
+export type SceneElementProps =
+  | ComparisonStripProps
+  | TopicPillProps
+  | IllustrationPropProps
+  | SentenceCardProps
+  | ToneMeterProps
+  | WordStackProps
+  | Shape3DProps
+  | KaraokeCardProps;
+
+export interface SceneElement {
+  id: string;
+  type: SceneElementType;
+  label: string;
+  startTime: number;
+  endTime: number;
+  enterAnimation: EnterAnimation;
+  exitAnimation: ExitAnimation;
+  layout: ElementLayout;
+  props: SceneElementProps;
+  atWordIndex?: number;
+}
+
+export type WatermarkCorner = 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right';
+
+export interface WatermarkOutroConfig {
+  watermarkEnabled: boolean;
+  watermarkText: string;
+  watermarkCorner: WatermarkCorner;
+  watermarkOpacity: number; // 0.15..1.0
+  outroSeconds: number; // 0..6
+  outroLine1: string;
+  outroLine2: string;
+}
+
+export interface LessonProject {
+  id: string;
+  title: string;
+  subtitle: string;
+  theme: CanvasThemeId;
+  compositionId?: LayoutCompositionId;
+  backgroundImage?: BackgroundImageConfig;
+  watermark?: WatermarkOutroConfig;
+  duration: number;
+  fps: 30 | 60;
+  aspectRatio?: ExportAspectRatioId;
+  cues: TranscriptCue[];
+  elements: SceneElement[];
+  audioFileName?: string;
+}
+
+export interface ScenePlanShape {
+  type: Shape3DType;
+  position: { x: number; y: number; w: number; h: number };
+  fill: string;
+  shadow?: boolean;
+  highlight?: boolean;
+  depth?: number;
+  corner_radius?: number;
+  at: number;
+  until?: number;
+  step_labels?: string[];
+}
+
+export interface ScenePlanText {
+  content: string;
+  shape_index?: number;
+  position?: { x: number; y: number; w?: number };
+  style?: {
+    size?: TextSizeRole;
+    color?: string;
+    weight?: TextWeightRole;
+    align?: 'left' | 'center' | 'right';
+  };
+  at: number;
+  until?: number;
+}
+
+export interface ScenePlanEntry {
+  id: string;
+  shapes?: ScenePlanShape[];
+  texts?: ScenePlanText[];
+}
+
+export interface ScenePlanDocument {
+  scenes: ScenePlanEntry[];
+}
+
+export interface ThemePalette {
+  id: CanvasThemeId;
+  name: string;
+  isDark?: boolean;
+  bgTop: string;
+  bgBottom: string;
+  glowA: string;
+  glowB: string;
+  cardBg: string;
+  textPrimary: string;
+  textMuted: string;
+  accentBlue: string;
+}
+
+export const CANVAS_THEMES: Record<CanvasThemeId, ThemePalette> = {
+  'pastel-sunrise': {
+    id: 'pastel-sunrise',
+    name: 'Pastel Nắng Sớm',
+    bgTop: '#F5F3FF',
+    bgBottom: '#FFF5EB',
+    glowA: '#E9E2FF',
+    glowB: '#FFE4D6',
+    cardBg: '#FFFFFF',
+    textPrimary: '#111827',
+    textMuted: '#9CA3AF',
+    accentBlue: '#2563EB',
+  },
+  'soft-lavender': {
+    id: 'soft-lavender',
+    name: 'Oải Hương Mềm',
+    bgTop: '#EEF2FF',
+    bgBottom: '#FAF5FF',
+    glowA: '#DDD6FE',
+    glowB: '#E0E7FF',
+    cardBg: '#FFFFFF',
+    textPrimary: '#0F172A',
+    textMuted: '#94A3B8',
+    accentBlue: '#4F46E5',
+  },
+  'mint-breeze': {
+    id: 'mint-breeze',
+    name: 'Bạc Hà Dịu Mát',
+    bgTop: '#ECFDF5',
+    bgBottom: '#F0F9FF',
+    glowA: '#D1FAE5',
+    glowB: '#E0F2FE',
+    cardBg: '#FFFFFF',
+    textPrimary: '#0F172A',
+    textMuted: '#94A3B8',
+    accentBlue: '#0284C7',
+  },
+  'warm-paper': {
+    id: 'warm-paper',
+    name: 'Giấy Kem Editorial',
+    bgTop: '#FAF8F5',
+    bgBottom: '#F3EFEA',
+    glowA: '#FDE68A',
+    glowB: '#FED7AA',
+    cardBg: '#FFFFFF',
+    textPrimary: '#1C1917',
+    textMuted: '#A8A29E',
+    accentBlue: '#D97706',
+  },
+  'studio-slate': {
+    id: 'studio-slate',
+    name: 'Nền Tối Studio Tối Giản',
+    isDark: true,
+    bgTop: '#111827',
+    bgBottom: '#1E293B',
+    glowA: 'rgba(56, 189, 248, 0.14)',
+    glowB: 'rgba(99, 102, 241, 0.12)',
+    cardBg: '#1E293B',
+    textPrimary: '#F8FAFC',
+    textMuted: '#94A3B8',
+    accentBlue: '#38BDF8',
+  },
+};
+
+export function isDarkCanvasTheme(themeId: CanvasThemeId | undefined | string): boolean {
+  if (!themeId) return false;
+  return Boolean((CANVAS_THEMES as Record<string, ThemePalette>)[themeId]?.isDark);
+}

@@ -1,0 +1,3744 @@
+import { buildSceneGenerationPrompt, PromptVideoStyle } from './aiPromptBuilder';
+import type { VectorPrimitive } from './customComponentTypes';
+import { normalizeCustomComponent } from './customComponentStore';
+import { resolveProjectOverlaps } from './layoutSolver';
+import type { ExportAspectRatioId } from './mp4Config';
+import {
+  cleanReadingWorksheetInput,
+  isWorksheetScaffoldingLine,
+} from './readingPromptBuilder';
+import {
+  FlexibleSceneDocument,
+  parseScenePlanJson,
+  scenePlanToProject,
+} from './scenePlanAdapter';
+import { interpolateWordTimings, stripTimestampsFromScript } from './transcriptParser';
+import {
+  BackgroundImageConfig,
+  CanvasThemeId,
+  IllustrationPropData,
+  IllustrationSceneIcon,
+  IllustrationVariant,
+  isDarkCanvasTheme,
+  LayoutCompositionId,
+  LessonProject,
+  TranscriptCue,
+  WatermarkOutroConfig,
+} from './types';
+import {
+  getCatalogSummaryForPrompt,
+  isKnownIllustrationVariant,
+  resolveContextualVisualForCue,
+} from './vectorComponentDb';
+
+export type ReelCardType = 'intro' | 'vocab' | 'quiz' | 'outro';
+export type ReelMode = 'auto' | 'reading' | 'quiz' | 'vocab';
+export type ReelCreationMode = 'source' | 'creator';
+export type LearningLanguageId = 'en' | 'ja' | 'zh' | 'ko' | 'fr' | 'es';
+export type CreatorFormatCategory =
+  | 'auto'
+  | 'vocab'
+  | 'phrases'
+  | 'phrasal_verbs'
+  | 'mistakes'
+  | 'grammar'
+  | 'comparisons'
+  | 'real_life';
+
+export interface LearningLanguageOption {
+  id: LearningLanguageId;
+  label: string;
+  nativeName: string;
+  systemName: string;
+  defaultLevel: string;
+  defaultVoice: string;
+  voiceLang: string;
+}
+
+export const LEARNING_LANGUAGE_OPTIONS: LearningLanguageOption[] = [
+  {
+    id: 'en',
+    label: 'Tiếng Anh (English)',
+    nativeName: 'English',
+    systemName: 'CEFR (A1 → C2)',
+    defaultLevel: 'B1',
+    defaultVoice: 'en-US-JennyNeural',
+    voiceLang: 'en-US',
+  },
+  {
+    id: 'ja',
+    label: 'Tiếng Nhật (日本語)',
+    nativeName: '日本語 (Japanese)',
+    systemName: 'JLPT (N5 → N1)',
+    defaultLevel: 'N5',
+    defaultVoice: 'ja-JP-NanamiNeural',
+    voiceLang: 'ja-JP',
+  },
+  {
+    id: 'zh',
+    label: 'Tiếng Trung (中文)',
+    nativeName: '中文 (Chinese)',
+    systemName: 'HSK (1 → 6)',
+    defaultLevel: 'HSK 1',
+    defaultVoice: 'zh-CN-XiaoxiaoNeural',
+    voiceLang: 'zh-CN',
+  },
+  {
+    id: 'ko',
+    label: 'Tiếng Hàn (한국어)',
+    nativeName: '한국어 (Korean)',
+    systemName: 'TOPIK (1 → 6)',
+    defaultLevel: 'TOPIK 1',
+    defaultVoice: 'ko-KR-SunHiNeural',
+    voiceLang: 'ko-KR',
+  },
+  {
+    id: 'fr',
+    label: 'Tiếng Pháp (Français)',
+    nativeName: 'Français (French)',
+    systemName: 'CEFR (A1 → C2)',
+    defaultLevel: 'A2',
+    defaultVoice: 'fr-FR-DeniseNeural',
+    voiceLang: 'fr-FR',
+  },
+  {
+    id: 'es',
+    label: 'Tiếng Tây Ban Nha (Español)',
+    nativeName: 'Español (Spanish)',
+    systemName: 'CEFR (A1 → C2)',
+    defaultLevel: 'A2',
+    defaultVoice: 'es-ES-ElviraNeural',
+    voiceLang: 'es-ES',
+  },
+];
+
+export interface LanguageLevelOption {
+  id: string;
+  label: string;
+  description: string;
+}
+
+export function getLevelsForLearningLanguage(lang: LearningLanguageId): LanguageLevelOption[] {
+  if (lang === 'ja') {
+    return [
+      { id: 'N5', label: 'N5 (Sơ cấp · Nhập môn)', description: 'JLPT N5: Hiragana/Katakana, ~100 Kanji cơ bản, mẫu câu です/ます hàng ngày' },
+      { id: 'N4', label: 'N4 (Sơ trung cấp)', description: 'JLPT N4: Giao tiếp hàng ngày tự nhiên, thể て/た/ない, cụm động từ thông dụng' },
+      { id: 'N3', label: 'N3 (Trung cấp)', description: 'JLPT N3: Đọc hiểu tình huống thực tế, sắc thái lịch sự vs thân mật' },
+      { id: 'N2', label: 'N2 (Trung cao cấp)', description: 'JLPT N2: Diễn đạt trang trọng, công sở, cụm từ nối học thuật & tin tức' },
+      { id: 'N1', label: 'N1 (Cao cấp)', description: 'JLPT N1: Từ vựng sắc thái tinh tế, thành ngữ Hán tự & văn phong bản xứ nâng cao' },
+      { id: 'N5→N1', label: 'N5 → N1 (Tăng dần Dễ → Khó)', description: 'Sắp xếp lộ trình từ cơ bản N5 nâng cấp dần đến cao cấp N1' },
+    ];
+  }
+  if (lang === 'zh') {
+    return [
+      { id: 'HSK 1', label: 'HSK 1 (Sơ cấp 1)', description: 'HSK 1: Giao tiếp cơ bản, Pinyin & câu ngắn hàng ngày' },
+      { id: 'HSK 2', label: 'HSK 2 (Sơ cấp 2)', description: 'HSK 2: Sinh hoạt hàng ngày, hỏi đường, mua sắm' },
+      { id: 'HSK 3', label: 'HSK 3 (Trung cấp 1)', description: 'HSK 3: Diễn đạt ý kiến, công việc & học tập' },
+      { id: 'HSK 4', label: 'HSK 4 (Trung cấp 2)', description: 'HSK 4: Tranh luận mượt mà, thành ngữ 4 chữ phổ biến' },
+      { id: 'HSK 5', label: 'HSK 5 (Cao cấp 1)', description: 'HSK 5: Đọc báo, diễn đạt tinh tế như người bản xứ' },
+      { id: 'HSK 6', label: 'HSK 6 (Cao cấp 2)', description: 'HSK 6: Thành ngữ & văn phong chuyên sâu' },
+      { id: 'HSK 1→6', label: 'HSK 1 → 6 (Dễ → Khó)', description: 'Tăng dần độ khó từ HSK 1 lên HSK 6' },
+    ];
+  }
+  if (lang === 'ko') {
+    return [
+      { id: 'TOPIK 1', label: 'TOPIK 1 (Sơ cấp 1)', description: 'TOPIK 1: Hangul, kính ngữ cơ bản & hội thoại ngắn' },
+      { id: 'TOPIK 2', label: 'TOPIK 2 (Sơ cấp 2)', description: 'TOPIK 2: Giao tiếp đời sống hàng ngày tự nhiên' },
+      { id: 'TOPIK 3', label: 'TOPIK 3 (Trung cấp 1)', description: 'TOPIK 3: Kính ngữ công sở & biểu đạt cảm xúc' },
+      { id: 'TOPIK 4', label: 'TOPIK 4 (Trung cấp 2)', description: 'TOPIK 4: Cụm từ tự nhiên & cấu trúc ngữ pháp trung cấp' },
+      { id: 'TOPIK 5', label: 'TOPIK 5 (Cao cấp 1)', description: 'TOPIK 5: Diễn đạt học thuật & tin tức' },
+      { id: 'TOPIK 6', label: 'TOPIK 6 (Cao cấp 2)', description: 'TOPIK 6: Thành ngữ & sắc thái bản xứ cao cấp' },
+      { id: 'TOPIK 1→6', label: 'TOPIK 1 → 6 (Dễ → Khó)', description: 'Tăng dần độ khó từ TOPIK 1 lên TOPIK 6' },
+    ];
+  }
+  return [
+    { id: 'A1', label: 'A1 (Sơ cấp · Beginner)', description: 'CEFR A1: Từ vựng nền tảng, câu ngắn dễ nhớ hàng ngày' },
+    { id: 'A2', label: 'A2 (Cơ bản · Elementary)', description: 'CEFR A2: Giao tiếp đời sống quen thuộc, cụm từ thiết yếu' },
+    { id: 'B1', label: 'B1 (Trung cấp · Intermediate)', description: 'CEFR B1: Cụm động từ thực tế, thay thế từ cũ kỹ bằng cách nói tự nhiên' },
+    { id: 'B2', label: 'B2 (Trung cao cấp · Upper-Int)', description: 'CEFR B2: Từ vựng nâng cấp sắc bén cho công sở, thuyết trình & hội thoại' },
+    { id: 'C1', label: 'C1 (Cao cấp · Advanced)', description: 'CEFR C1: Idioms tinh tế, sắc thái chính xác & diễn đạt chuyên nghiệp' },
+    { id: 'C2', label: 'C2 (Thành thạo · Mastery)', description: 'CEFR C2: Ngôn ngữ giàu hình ảnh, sắc thái bản xứ bậc cao' },
+    { id: 'A1→C2', label: 'A1 → C2 (Tăng dần Dễ → Khó)', description: 'Lộ trình đi từ câu đơn giản A1 nâng cấp dần lên C2' },
+  ];
+}
+
+export function recommendCreatorItemCount(
+  durationMinutes: number,
+  includeExplanationSpeech = false,
+): number {
+  const safeMin = Math.max(0.5, Math.min(30, Number(durationMinutes) || 1));
+  const itemsPerMin = includeExplanationSpeech ? 4.2 : 6.5;
+  const raw = Math.round(safeMin * itemsPerMin);
+  return Math.max(4, Math.min(30, raw));
+}
+
+export interface ReelCardVisualConfig {
+  variant?: IllustrationVariant;
+  title?: string;
+  subtitle?: string;
+  labels?: string[];
+  value?: number;
+  formula?: string;
+  highlightWord?: string;
+  sceneIcon?: IllustrationSceneIcon;
+  speechText?: string;
+  customPrimitives?: VectorPrimitive[];
+}
+
+export interface ReelCard {
+  id: string;
+  type: ReelCardType;
+  badge: string;
+  indexLabel?: string;
+  kicker?: string;
+  title: string;
+  content: string;
+  example?: string;
+  phonetic?: string;
+  translation?: string;
+  explanationSpeech?: string;
+  learningLang?: LearningLanguageId;
+  grammarNote?: string;
+  contextExcerpt?: string;
+  ttsText: string;
+  ttsAnswerText?: string;
+  thinkSec?: number;
+  options?: string[];
+  answerIndex?: number;
+  explanation?: string;
+  durationSec?: number;
+  visual?: ReelCardVisualConfig;
+}
+
+export interface ReelCardTimingMeta {
+  totalSec: number;
+  questionSec?: number;
+  thinkSec?: number;
+  answerSec?: number;
+}
+
+export interface ReelExtractedExercise {
+  id: string;
+  title: string;
+  mode: Exclude<ReelMode, 'auto'>;
+  rawText: string;
+}
+
+export interface ReelDirectoryLink {
+  title: string;
+  url: string;
+}
+
+export interface ReelScrapeResult {
+  url: string;
+  title: string;
+  isDirectoryPage: boolean;
+  links: ReelDirectoryLink[];
+  rawText: string;
+  exercises: ReelExtractedExercise[];
+  detectedMode: Exclude<ReelMode, 'auto'>;
+}
+
+export interface ParsedEnglishReelsResponse {
+  title: string;
+  mode: Exclude<ReelMode, 'auto'>;
+  creatorSubMode?: string;
+  cards: ReelCard[];
+  sceneJson?: FlexibleSceneDocument | null;
+}
+
+function makeCardId(index: number): string {
+  return `reel-card-${Date.now().toString(36)}-${index}-${Math.random().toString(36).slice(2, 5)}`;
+}
+
+export function detectReelMode(text: string): Exclude<ReelMode, 'auto'> {
+  const lower = text.toLowerCase();
+  const hasQuizSignals =
+    /\btrue\s*\/\s*false\b|\btrue or false\b|\bmultiple choice\b|\bcomprehension\b/i.test(lower) ||
+    /(^|\n)\s*(?:q?\d+[.)]|\([a-d]\)|[a-d][.)])\s+/i.test(text);
+  if (hasQuizSignals) return 'quiz';
+
+  const lines = text
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean);
+  const vocabLineCount = lines.filter((l) =>
+    /^[\w\s'-]{1,34}\s*(?:\/[^/]+\/\s*)?(?:[-–—:=]|→)\s*.+/.test(l),
+  ).length;
+  if (vocabLineCount >= 2 || (lines.length >= 3 && vocabLineCount >= lines.length * 0.45)) {
+    return 'vocab';
+  }
+  return 'reading';
+}
+
+export function splitMultipleExercisesFromText(text: string): ReelExtractedExercise[] {
+  const cleaned = text.replace(/\r\n/g, '\n').trim();
+  if (!cleaned) return [];
+
+  const headingRe =
+    /(?=^(?:#{1,3}\s+|(?:Task|Exercise|Part|Reading|Quiz|Vocabulary|Activity|Lesson)\s*\d+[:.\-–\s]))/gim;
+  const rawParts = cleaned
+    .split(headingRe)
+    .map((s) => s.trim())
+    .filter((s) => {
+      if (s.length < 30) return false;
+      const bodyCheck = cleanReadingWorksheetInput(s);
+      return bodyCheck.lines.length >= 1 && bodyCheck.bodyText.length >= 25;
+    });
+
+  if (rawParts.length <= 1) {
+    const cleanedDoc = cleanReadingWorksheetInput(cleaned);
+    return [
+      {
+        id: 'ex-1',
+        title: cleanedDoc.title || 'Bài học chính',
+        mode: detectReelMode(cleanedDoc.bodyText || cleaned),
+        rawText: cleanedDoc.bodyText || cleaned,
+      },
+    ];
+  }
+
+  return rawParts.slice(0, 10).map((part, idx) => {
+    const cleanedPart = cleanReadingWorksheetInput(part);
+    return {
+      id: `ex-${idx + 1}`,
+      title: cleanedPart.title || `Bài tập ${idx + 1}`,
+      mode: detectReelMode(cleanedPart.bodyText || part),
+      rawText: cleanedPart.bodyText || part,
+    };
+  });
+}
+
+export function estimateCardSpeechDuration(text: string): number {
+  const words = text.trim().split(/\s+/).filter(Boolean).length;
+  return Number(Math.max(2.2, Math.min(18, words / 2.4 + 0.65)).toFixed(2));
+}
+
+function isMetadataNoiseLine(line: string): boolean {
+  const t = line.trim();
+  if (!t) return true;
+  if (isWorksheetScaffoldingLine(t)) return true;
+  if (
+    /^(?:true\s*\/\s*false(?:\s+quiz)?|multiple\s*choice|comprehension(?:\s+quiz)?|vocabulary(?:\s+list)?|reading(?:\s+passage)?|answer\s*key)\s*:?$/i.test(
+      t,
+    )
+  ) {
+    return true;
+  }
+  if (/^(?:Answer|Key|Đáp án|Click here|Share|Read more|Subscribe)\b/i.test(t) && t.length < 45) {
+    return true;
+  }
+  return false;
+}
+
+export interface ReelLocaleStrings {
+  code: 'vi' | 'en' | 'ja' | 'none';
+  targetLanguageLabel: string;
+  stageStepsQuiz: [string, string, string, string];
+  stageStepsSimple: [string, string, string];
+  roadmapLabel: string;
+  introBadgeQuiz: string;
+  introBadgeVocab: string;
+  introBadgeDefault: string;
+  introGoalPrefix: string;
+  introRoadmapLine: string;
+  introVisualSubtitle: string;
+  readingBadgePrefix: string;
+  vocabBadgePrefix: string;
+  sentenceTitlePrefix: string;
+  outroBadge: string;
+  outroTitle: string;
+  outroContentPrefix: string;
+  outroTranslation: string;
+  outroLabels: [string, string, string];
+  quizAskTag: string;
+  thinkCountdown: (sec: number) => string;
+  chooseAnswerTitle: (sec: number) => string;
+  chooseAnswerSubtitle: string;
+  correctAnswerPill: (letter: string, opt: string) => string;
+  correctAnswerCardTitle: (letter: string, opt: string) => string;
+  correctBadge: string;
+  correctStamp: string;
+  correctOptionSublabel: string;
+  contextPassageTitle: string;
+  contextPassageUrl: string;
+  listenChooseSubtext: string;
+  defaultExplanation: (letter: string, opt: string) => string;
+  lessonOverviewFormula: string;
+  vocabPrefix: string;
+  grammarPrefix: string;
+  promptExampleBadge: string;
+  promptExampleIntroContent: string;
+  promptExampleTranslation: string;
+  promptExampleVocabTranslation: string;
+  promptExampleContextTitle: string;
+  promptExampleExplanation: string;
+  promptExampleOutroContent: string;
+  promptExampleOutroTranslation: string;
+  promptExampleOutroLabels: [string, string, string];
+  promptExampleStickyLabels: [string, string];
+}
+
+export function getReelLocaleStrings(targetLang?: string): ReelLocaleStrings {
+  const norm = (targetLang || 'Tiếng Việt').trim().toLowerCase();
+  if (norm === '日本語' || norm === 'japanese' || norm === 'ja' || norm === 'tiếng nhật') {
+    return {
+      code: 'ja',
+      targetLanguageLabel: '日本語 (Japanese)',
+      stageStepsQuiz: ['1. 導入', '2. 読解', '3. クイズ', '4. まとめ'],
+      stageStepsSimple: ['1. 導入', '2. 学習', '3. まとめ'],
+      roadmapLabel: '構成',
+      introBadgeQuiz: 'クイズレッスン',
+      introBadgeVocab: '語彙レッスン',
+      introBadgeDefault: '今日のレッスン',
+      introGoalPrefix: '今日のテーマ:',
+      introRoadmapLine: '流れ: 1. 導入 · 2. 読解と語彙 · 3. クイズ＆まとめ',
+      introVisualSubtitle: '導入 · 読解＆単語 · クイズ · まとめ',
+      readingBadgePrefix: 'リーディング',
+      vocabBadgePrefix: '単語',
+      sentenceTitlePrefix: '文',
+      outroBadge: 'まとめ',
+      outroTitle: 'レッスン振り返り',
+      outroContentPrefix: '学習完了:',
+      outroTranslation: '新しい単語と文法を毎日声に出して復習しましょう！',
+      outroLabels: ['導入', '読解・単語', 'まとめ'],
+      quizAskTag: '問題',
+      thinkCountdown: (sec) => `⏱️ 考える時間: ${sec}秒`,
+      chooseAnswerTitle: (sec) => `あと${sec}秒で選択`,
+      chooseAnswerSubtitle: '時間内に正しい答えを選びましょう！',
+      correctAnswerPill: (letter, opt) => `✓ 正解: ${letter}. ${opt}`,
+      correctAnswerCardTitle: (letter, opt) => `正解: ${letter}. ${opt}`,
+      correctBadge: '正解',
+      correctStamp: '正解!',
+      correctOptionSublabel: '正解',
+      contextPassageTitle: '参照パッセージ',
+      contextPassageUrl: 'https://english.practice/passage-check',
+      listenChooseSubtext: '音声を聞いて正しい答えを選びましょう！',
+      defaultExplanation: (letter, opt) => `正解は ${letter}. ${opt} です。`,
+      lessonOverviewFormula: '今日の目標',
+      vocabPrefix: '重要語彙:',
+      grammarPrefix: '文法:',
+      promptExampleBadge: '今日のレッスン',
+      promptExampleIntroContent: '今日の学習: サバイバル読解 & be going to の使い方',
+      promptExampleTranslation: '構成: 1. 導入 → 2. 読解と重要語彙 → 3. クイズ5秒',
+      promptExampleVocabTranslation: '語彙: exciting (ワクワクする) · programme (番組)\\n文法: 現在形（番組内容の説明）',
+      promptExampleContextTitle: '参照パッセージ',
+      promptExampleExplanation: '本文に live in the mountains for ten days と書かれています。',
+      promptExampleOutroContent: '重要語彙と be going to を声に出して復習しよう！',
+      promptExampleOutroTranslation: '毎日音読して定着させましょう！',
+      promptExampleOutroLabels: ['exciting / prize', 'be going to + V', 'クイズ完了'],
+      promptExampleStickyLabels: ['exciting = ワクワクする', 'programme = 番組'],
+    };
+  }
+  if (norm === 'english' || norm === 'en' || norm === 'none') {
+    const isNone = norm === 'none';
+    return {
+      code: isNone ? 'none' : 'en',
+      targetLanguageLabel: isNone
+        ? 'English-only (clear concise English notes, no extra translation)'
+        : 'English (clear concise English vocabulary & grammar notes)',
+      stageStepsQuiz: ['1. Intro', '2. Read & Vocab', '3. Quiz 5s', '4. Recap'],
+      stageStepsSimple: ['1. Intro', '2. Lesson', '3. Recap'],
+      roadmapLabel: 'Lesson Flow',
+      introBadgeQuiz: 'QUIZ LESSON',
+      introBadgeVocab: 'VOCAB LESSON',
+      introBadgeDefault: "TODAY'S LESSON",
+      introGoalPrefix: "Today's Focus:",
+      introRoadmapLine: 'Plan: 1. Intro · 2. Reading & Vocab · 3. Quiz & Recap',
+      introVisualSubtitle: 'Intro · Reading & Vocab · Quiz · Recap',
+      readingBadgePrefix: 'READING',
+      vocabBadgePrefix: 'VOCAB',
+      sentenceTitlePrefix: 'Line',
+      outroBadge: 'RECAP',
+      outroTitle: 'Lesson Recap',
+      outroContentPrefix: 'Lesson Complete:',
+      outroTranslation: 'Review key vocabulary & read aloud daily for fluency!',
+      outroLabels: ['Listen Well', 'Read & Vocab', 'Speak Daily'],
+      quizAskTag: 'QUESTION',
+      thinkCountdown: (sec) => `⏱️ THINK: ${sec} SEC`,
+      chooseAnswerTitle: (sec) => `CHOOSE IN ${sec}s`,
+      chooseAnswerSubtitle: 'Pick the best option before time runs out!',
+      correctAnswerPill: (letter, opt) => `✓ CORRECT: ${letter}. ${opt}`,
+      correctAnswerCardTitle: (letter, opt) => `Correct Answer: ${letter}. ${opt}`,
+      correctBadge: 'CORRECT',
+      correctStamp: 'CORRECT!',
+      correctOptionSublabel: 'Correct Answer',
+      contextPassageTitle: 'REFERENCE PASSAGE',
+      contextPassageUrl: 'https://english.practice/passage-check',
+      listenChooseSubtext: 'Listen carefully and choose the best option!',
+      defaultExplanation: (letter, opt) => `The correct answer is ${letter}. ${opt}.`,
+      lessonOverviewFormula: "TODAY'S GOAL",
+      vocabPrefix: 'Key Words:',
+      grammarPrefix: 'Grammar:',
+      promptExampleBadge: "TODAY'S LESSON",
+      promptExampleIntroContent: "Today's Goal: Outdoor survival story & be going to for plans",
+      promptExampleTranslation: 'Plan: 1. Intro → 2. Reading & Key Words → 3. Interactive Quiz',
+      promptExampleVocabTranslation: 'Key Words: exciting (thrilling) · programme (TV show)\\nGrammar: Present Simple for describing TV plots',
+      promptExampleContextTitle: 'REFERENCE PASSAGE',
+      promptExampleExplanation: 'The passage states: live in the mountains for ten days.',
+      promptExampleOutroContent: 'Review key vocabulary & practice be going to!',
+      promptExampleOutroTranslation: 'Read aloud daily to lock in every new phrase!',
+      promptExampleOutroLabels: ['exciting / prize', 'be going to + V', 'Quiz Ready'],
+      promptExampleStickyLabels: ['exciting = thrilling', 'programme = TV show'],
+    };
+  }
+  return {
+    code: 'vi',
+    targetLanguageLabel: targetLang || 'Tiếng Việt',
+    stageStepsQuiz: ['1. Mở bài', '2. Đọc & Từ', '3. Quiz 5s', '4. Tổng kết'],
+    stageStepsSimple: ['1. Giới thiệu', '2. Bài học', '3. Tổng kết'],
+    roadmapLabel: 'Lộ trình',
+    introBadgeQuiz: 'BÀI HỌC QUIZ',
+    introBadgeVocab: 'BÀI HỌC TỪ VỰNG',
+    introBadgeDefault: 'BÀI HỌC HÔM NAY',
+    introGoalPrefix: 'Hôm nay học gì?',
+    introRoadmapLine: 'Lộ trình: 1. Giới thiệu bài · 2. Đọc & Từ vựng · 3. Quiz & Tổng kết',
+    introVisualSubtitle: 'Mở bài · Đọc & Từ · Quiz · Tổng kết',
+    readingBadgePrefix: 'BÀI ĐỌC',
+    vocabBadgePrefix: 'TỪ VỰNG',
+    sentenceTitlePrefix: 'Câu',
+    outroBadge: 'TỔNG KẾT',
+    outroTitle: 'Tổng kết bài học',
+    outroContentPrefix: 'Hoàn thành bài học:',
+    outroTranslation: 'Nhớ ôn lại từ mới & cấu trúc ngữ pháp vừa học mỗi ngày nhé!',
+    outroLabels: ['Giới thiệu', 'Đọc & Từ vựng', 'Tổng kết'],
+    quizAskTag: 'ĐỌC CÂU HỎI',
+    thinkCountdown: (sec) => `⏱️ SUY NGHĨ: ${sec} GIÂY`,
+    chooseAnswerTitle: (sec) => `CHỌN ĐÁP ÁN TRONG ${sec}s`,
+    chooseAnswerSubtitle: 'Hãy tự chọn đáp án trước khi hết giờ!',
+    correctAnswerPill: (letter, opt) => `✓ ĐÁP ÁN ĐÚNG: ${letter}. ${opt}`,
+    correctAnswerCardTitle: (letter, opt) => `Đáp án đúng: ${letter}. ${opt}`,
+    correctBadge: 'ĐÁP ÁN ĐÚNG',
+    correctStamp: 'CORRECT!',
+    correctOptionSublabel: 'Đáp án đúng',
+    contextPassageTitle: 'ĐOẠN VĂN BÀI ĐỌC',
+    contextPassageUrl: 'https://english.practice/reading-context',
+    listenChooseSubtext: 'Lắng nghe và chọn phương án đúng!',
+    defaultExplanation: (letter, opt) => `Đáp án đúng là ${letter}. ${opt}`,
+    lessonOverviewFormula: 'MỤC TIÊU BÀI HỌC',
+    vocabPrefix: 'Từ khó:',
+    grammarPrefix: 'Ngữ pháp:',
+    promptExampleBadge: 'BÀI HỌC HÔM NAY',
+    promptExampleIntroContent: 'Hôm nay học gì? Đọc hiểu về thử thách sinh tồn & cấu trúc be going to',
+    promptExampleTranslation: 'Lộ trình: 1. Giới thiệu → 2. Đọc & Từ khó → 3. Quiz có đoạn văn đối chiếu',
+    promptExampleVocabTranslation: 'Từ khó: exciting (thú vị) · programme (chương trình)\\nNgữ pháp: Hiện tại đơn kể nội dung phim/TV',
+    promptExampleContextTitle: 'ĐOẠN VĂN ĐỐI CHIẾU',
+    promptExampleExplanation: 'Đoạn văn nêu rõ: live in the mountains for ten days.',
+    promptExampleOutroContent: 'Review vocabulary & practice be going to!',
+    promptExampleOutroTranslation: 'Ôn lại từ khó & luyện đọc to mỗi ngày nhé!',
+    promptExampleOutroLabels: ['exciting / prize', 'be going to + V', 'Quiz Ready'],
+    promptExampleStickyLabels: ['exciting = thú vị', 'programme = chương trình'],
+  };
+}
+
+const COMMON_GLOSSARY_MULTI: Array<{ re: RegExp; vi: string; en: string; ja: string }> = [
+  { re: /\bcomfort zone\b/i, vi: 'comfort zone (vùng an toàn)', en: 'comfort zone (familiar routine)', ja: 'comfort zone（安心領域）' },
+  { re: /\bprogramme\b|\bprogram\b/i, vi: 'programme (chương trình)', en: 'programme (TV show)', ja: 'programme（番組）' },
+  { re: /\bexciting\b/i, vi: 'exciting (thú vị)', en: 'exciting (thrilling)', ja: 'exciting（ワクワクする）' },
+  { re: /\bmountains?\b/i, vi: 'mountain (ngọn núi)', en: 'mountain (high peak)', ja: 'mountain（山）' },
+  { re: /\bdifficult\b/i, vi: 'difficult (khó khăn)', en: 'difficult (hard to do)', ja: 'difficult（難しい）' },
+  { re: /\bdangerous\b/i, vi: 'dangerous (nguy hiểm)', en: 'dangerous (unsafe)', ja: 'dangerous（危険な）' },
+  { re: /\bcomfortable\b/i, vi: 'comfortable (thoải mái)', en: 'comfortable (cozy)', ja: 'comfortable（快適な）' },
+  { re: /\bpossible\b/i, vi: 'possible (có thể)', en: 'possible (achievable)', ja: 'possible（可能な）' },
+  { re: /\bprize\b/i, vi: 'prize (giải thưởng)', en: 'prize (reward)', ja: 'prize（賞・賞金）' },
+  { re: /\bfinishes?\b/i, vi: 'finish (kết thúc)', en: 'finish (complete)', ja: 'finish（終える）' },
+  { re: /\bsteak\b/i, vi: 'steak (bít tết)', en: 'steak (grilled beef)', ja: 'steak（ステーキ）' },
+  { re: /\blong hot bath\b/i, vi: 'hot bath (tắm nước nóng)', en: 'hot bath (warm soak)', ja: 'hot bath（熱いお風呂）' },
+  { re: /\beveryone\b/i, vi: 'everyone (mọi người)', en: 'everyone (all people)', ja: 'everyone（みんな）' },
+  { re: /\busually\b/i, vi: 'usually (thường xuyên)', en: 'usually (most of the time)', ja: 'usually（たいてい）' },
+  { re: /\bsometimes\b/i, vi: 'sometimes (đôi khi)', en: 'sometimes (occasionally)', ja: 'sometimes（時々）' },
+  { re: /\btomorrow\b/i, vi: 'tomorrow (ngày mai)', en: 'tomorrow (next day)', ja: 'tomorrow（明日）' },
+  { re: /\bbreakfast\b/i, vi: 'breakfast (bữa sáng)', en: 'breakfast (morning meal)', ja: 'breakfast（朝食）' },
+  { re: /\bquiet\b/i, vi: 'quiet (yên tĩnh)', en: 'quiet (peaceful)', ja: 'quiet（静かな）' },
+  { re: /\bcheck in\b/i, vi: 'check in (nhận phòng)', en: 'check in (register at hotel)', ja: 'check in（チェックインする）' },
+  { re: /\bpolite\b/i, vi: 'polite (lịch sự)', en: 'polite (courteous)', ja: 'polite（丁寧な）' },
+  { re: /\bsafe\b/i, vi: 'safe (an toàn)', en: 'safe (protected)', ja: 'safe（安全な）' },
+  { re: /\bwin\b/i, vi: 'win (giành chiến thắng)', en: 'win (come first)', ja: 'win（勝つ）' },
+  { re: /\bplans?\b/i, vi: 'plan (kế hoạch)', en: 'plan (future intention)', ja: 'plan（計画）' },
+  { re: /\bspend\b/i, vi: 'spend (chi tiêu)', en: 'spend (pay money)', ja: 'spend（使う・費やす）' },
+  { re: /\bsave\b/i, vi: 'save (tiết kiệm)', en: 'save (keep money)', ja: 'save（貯金する）' },
+  { re: /\btravel\b/i, vi: 'travel (du lịch)', en: 'travel (visit places)', ja: 'travel（旅行する）' },
+];
+
+export function extractVocabAndGrammarNote(
+  sentence: string,
+  targetLang = 'Tiếng Việt',
+): { vocabNote?: string; grammarNote?: string } {
+  const s = sentence.trim();
+  const locale = getReelLocaleStrings(targetLang);
+  if (!s || locale.code === 'none') return {};
+
+  const vocabHits: string[] = [];
+  for (const item of COMMON_GLOSSARY_MULTI) {
+    if (item.re.test(s) && vocabHits.length < 3) {
+      vocabHits.push(
+        locale.code === 'ja' ? item.ja : locale.code === 'en' ? item.en : item.vi,
+      );
+    }
+  }
+
+  let grammarNote: string | undefined;
+  if (/\b(?:am|is|are|'m|'re|'s)\s+going\s+to\b/i.test(s)) {
+    grammarNote =
+      locale.code === 'ja'
+        ? `${locale.grammarPrefix} be going to + V（未来の予定）`
+        : locale.code === 'en'
+          ? `${locale.grammarPrefix} be going to + V (future plans)`
+          : 'Ngữ pháp: be going to + V (dự định tương lai)';
+  } else if (/\bneed\s+to\s+[a-z]+/i.test(s)) {
+    grammarNote =
+      locale.code === 'ja'
+        ? `${locale.grammarPrefix} need to + V（〜する必要がある）`
+        : locale.code === 'en'
+          ? `${locale.grammarPrefix} need to + V (necessity)`
+          : 'Ngữ pháp: need to + V (cần phải làm gì)';
+  } else if (/\b(?:could|would)\s+(?:i|we|you)\b/i.test(s)) {
+    grammarNote =
+      locale.code === 'ja'
+        ? `${locale.grammarPrefix} Could / Would + S + V（丁寧な依頼）`
+        : locale.code === 'en'
+          ? `${locale.grammarPrefix} Could / Would + S + V (polite request)`
+          : 'Ngữ pháp: Could/Would + S + V (hỏi lịch sự)';
+  } else if (/\b(?:is|are|am)\s+[a-z]+ing\b/i.test(s)) {
+    grammarNote =
+      locale.code === 'ja'
+        ? `${locale.grammarPrefix} 現在進行形（be + V-ing）`
+        : locale.code === 'en'
+          ? `${locale.grammarPrefix} Present Continuous (be + V-ing)`
+          : 'Ngữ pháp: Hiện tại tiếp diễn (be + V-ing)';
+  } else if (/\b(?:usually|sometimes|every\s+day)\b/i.test(s)) {
+    grammarNote =
+      locale.code === 'ja'
+        ? `${locale.grammarPrefix} 現在形（習慣・頻度副詞）`
+        : locale.code === 'en'
+          ? `${locale.grammarPrefix} Present Simple (habits & frequency)`
+          : 'Ngữ pháp: Hiện tại đơn (thói quen/trạng từ tần suất)';
+  } else if (/\bstarts?\s+on\b|\bat\s+\d{1,2}[:.]\d{2}/i.test(s)) {
+    grammarNote =
+      locale.code === 'ja'
+        ? `${locale.grammarPrefix} on + 曜日 · at + 時刻`
+        : locale.code === 'en'
+          ? `${locale.grammarPrefix} Prepositions: on + day · at + exact time`
+          : 'Cụm giới từ: on + thứ · at + giờ cụ thể';
+  }
+
+  const vocabNote = vocabHits.length > 0 ? `${locale.vocabPrefix} ${vocabHits.join(' · ')}` : undefined;
+  return { vocabNote, grammarNote };
+}
+
+function pickConciseQuizExcerpt(
+  sentences: string[],
+  question: string,
+  answerText: string,
+  fallbackText: string,
+): string | undefined {
+  if (sentences.length > 0) {
+    const queryWords = new Set(
+      `${question} ${answerText}`
+        .toLowerCase()
+        .replace(/[^a-z0-9\s]/g, ' ')
+        .split(/\s+/)
+        .filter((w) => w.length >= 3 && !['the', 'and', 'for', 'are', 'that', 'with', 'this', 'from', 'what', 'when', 'where', 'how', 'why', 'does', 'true', 'false'].includes(w)),
+    );
+    const scored = sentences.map((s, idx) => {
+      const lower = s.toLowerCase();
+      let score = 0;
+      queryWords.forEach((w) => {
+        if (lower.includes(w)) score += 1;
+      });
+      return { s, idx, score };
+    });
+    const best = [...scored].sort((a, b) => b.score - a.score || a.idx - b.idx)[0];
+    if (best) {
+      const chosen = [best.s];
+      if (best.s.length < 130 && best.idx + 1 < sentences.length) {
+        const nextS = sentences[best.idx + 1];
+        if (best.s.length + nextS.length + 1 <= 240) {
+          chosen.push(nextS);
+        }
+      }
+      return chosen.join(' ');
+    }
+  }
+  const clean = fallbackText.replace(/\n+/g, ' ').trim();
+  if (!clean) return undefined;
+  if (clean.length <= 220) return clean;
+  const firstTwo = clean.split(/(?<=[.!?])\s+/).slice(0, 2).join(' ').trim();
+  return firstTwo.length > 10 ? firstTwo.slice(0, 240) : clean.slice(0, 220);
+}
+
+export function sanitizeTtsSpeech(raw: string): string {
+  const withoutTimestamps = stripTimestampsFromScript(String(raw || ''));
+  const keptLines = withoutTimestamps
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter((l) => {
+      if (!l) return false;
+      if (isMetadataNoiseLine(l)) return false;
+      if (/^(?:answer|key|đáp án)\s*[:.]\s*[A-Da-d0-9]{1,2}\s*$/i.test(l)) return false;
+      return true;
+    });
+
+  let text = keptLines
+    .join(' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/https?:\/\/\S+|www\.\S+/gi, ' ')
+    .replace(/\/[^/\s]{2,40}\//g, ' ')
+    .replace(/\s*&\s*/g, ' and ')
+    .replace(/[`*_~#>]+/g, ' ')
+    .replace(
+      /(?:^|\s)(?:Q?\d+[.)]|Task\s*\d+[:.]?|Part\s*\d+[:.]?|Exercise\s*\d+[:.]?|Question\s*\d+[:.]?|\([A-Da-d]\)|[A-Da-d][.)])\s+/gi,
+      ' ',
+    )
+    .replace(
+      /(?:^|\s)(?:Title|Topic|Badge|Word|Phrase|Example|Answer|Key|Explanation|Note|Đáp án|Giải thích)\s*:\s*/gi,
+      ' ',
+    )
+    .replace(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  if (!text) return '';
+  if (!/[.!?…]$/.test(text)) {
+    text = `${text}.`;
+  }
+  return text;
+}
+
+/**
+ * Splits a Quiz card cleanly into two spoken TTS parts around the thinking countdown:
+ * - questionSpeech: Conversational Quiz lead-in + short pause + question + options + thinking cue
+ * - answerSpeech: Reads correct answer + explanation AFTER countdown finishes
+ */
+export function getQuizCardSpeechParts(
+  card: ReelCard,
+  quizPosition = 1,
+): {
+  questionSpeech: string;
+  answerSpeech: string;
+  thinkSec: number;
+} {
+  const opts = (card.options || []).filter((o) => o.trim().length > 0);
+  const safeAnsIdx = Math.min(card.answerIndex ?? 0, Math.max(0, opts.length - 1));
+  const thinkSec =
+    card.type === 'quiz'
+      ? Math.max(0, Math.min(10, Number(card.thinkSec ?? 5)))
+      : 0;
+
+  let questionSpeech = sanitizeTtsSpeech(card.ttsText || card.content || card.title);
+  if (
+    card.type === 'quiz' &&
+    !/^(?:now|here is|let's|quick quiz|question|time for)/i.test(questionSpeech)
+  ) {
+    const leadIn =
+      quizPosition <= 1
+        ? "Now let's test your understanding! ... Question one:"
+        : `Next question, number ${quizPosition}: ...`;
+    questionSpeech = `${leadIn} ${questionSpeech}`;
+  }
+  if (
+    card.type === 'quiz' &&
+    opts.length > 0 &&
+    !/(?:take\s+(?:five|\d+)\s+seconds|seconds?\s+to\s+think)/i.test(questionSpeech)
+  ) {
+    const optStr = opts
+      .slice(0, 4)
+      .map((o, i) => `${String.fromCharCode(65 + i)}, ${o}`)
+      .join('. ');
+    questionSpeech = sanitizeTtsSpeech(
+      `${questionSpeech.replace(/[.!?]+$/, '')}. ... ${optStr}. ${
+        thinkSec > 0 ? `Take ${thinkSec} seconds to think.` : ''
+      }`,
+    );
+  }
+
+  let answerSpeech = card.ttsAnswerText ? sanitizeTtsSpeech(card.ttsAnswerText) : '';
+  if (card.type === 'quiz' && !answerSpeech && opts.length > 0) {
+    const letter = String.fromCharCode(65 + safeAnsIdx);
+    const ansLabel = opts[safeAnsIdx];
+    const expl = card.explanation ? ` ${card.explanation}` : '';
+    answerSpeech = sanitizeTtsSpeech(
+      `Time is up! The correct answer is ${letter}, ${ansLabel}.${expl}`,
+    );
+  }
+
+  return { questionSpeech, answerSpeech, thinkSec };
+}
+
+const CREATOR_CARD_ROTATION_VARIANTS: IllustrationVariant[] = [
+  'css-magnifying-word',
+  'contrast-pair-cards',
+  'phrase-icon-split',
+  'css-flashcard-flip',
+  'trio-icon-cards',
+  'bs-badge-cluster',
+  'dialogue-upgrade',
+  'css-sticky-note',
+  'bs-alert-tip',
+  'css-grammar-equation',
+  'degree-scale',
+  'bs-card-header',
+];
+
+function pickNonRepeatingVariant(
+  preferred: IllustrationVariant,
+  prevVariant: IllustrationVariant | null | undefined,
+  idx: number,
+): IllustrationVariant {
+  if (!prevVariant || preferred !== prevVariant) return preferred;
+  const candidate = CREATOR_CARD_ROTATION_VARIANTS[(idx + 1) % CREATOR_CARD_ROTATION_VARIANTS.length];
+  if (candidate !== prevVariant) return candidate;
+  return CREATOR_CARD_ROTATION_VARIANTS[(idx + 2) % CREATOR_CARD_ROTATION_VARIANTS.length];
+}
+
+function defaultVisualForCard(
+  card: ReelCard,
+  idx: number,
+  total: number,
+  targetLang?: string,
+  prevVariant?: IllustrationVariant | null,
+): ReelCardVisualConfig {
+  const locale = getReelLocaleStrings(targetLang);
+  if (card.visual?.variant || card.visual?.customPrimitives?.length) {
+    const chosen = card.visual.variant
+      ? pickNonRepeatingVariant(card.visual.variant, prevVariant, idx)
+      : undefined;
+    return {
+      ...card.visual,
+      variant: chosen ?? card.visual.variant,
+    };
+  }
+  if (card.type === 'intro') {
+    return {
+      variant: pickNonRepeatingVariant('bs-card-header', prevVariant, idx),
+      formula: card.kicker || card.badge || locale.lessonOverviewFormula,
+      title: card.title,
+      subtitle: card.translation || locale.introVisualSubtitle,
+      highlightWord: locale.introBadgeDefault,
+      sceneIcon: 'graduation',
+    };
+  }
+  if (card.type === 'outro') {
+    return {
+      variant: pickNonRepeatingVariant('css-bento-stats', prevVariant, idx),
+      title: card.title || locale.outroTitle,
+      labels: locale.outroLabels,
+      sceneIcon: 'sparkles',
+    };
+  }
+  if (card.type === 'quiz') {
+    return {
+      variant: pickNonRepeatingVariant('bs-accordion-faq', prevVariant, idx),
+      title: card.title || `Quiz Challenge #${idx}`,
+      subtitle: card.translation || locale.listenChooseSubtext,
+      speechText: card.content,
+      sceneIcon: 'brain',
+    };
+  }
+
+  const combined = `${card.title} ${card.content} ${card.translation || ''}`.toLowerCase();
+  const hasContrastCue =
+    /\bvs\.?\b|\binstead of\b|\bdon't say\b|\bstop saying\b|->|→|\bwhereas\b|\bcompare\b/i.test(
+      combined,
+    );
+  const hasGrammarCue =
+    /\bgrammar\b|\btense\b|\bverb\s*\+|\bpreposition\b|\bstructure\b|\brule\b/i.test(combined);
+  const hasDegreeCue =
+    /\bmore\s+\w+\b|\bpolite\b|\bformal\b|\bstronger\b|\blevel\b|\bbetter\b/i.test(combined);
+
+  if (hasContrastCue) {
+    const preferred: IllustrationVariant =
+      idx % 2 === 0 ? 'contrast-pair-cards' : 'dialogue-upgrade';
+    return {
+      variant: pickNonRepeatingVariant(preferred, prevVariant, idx),
+      title: card.title,
+      subtitle: [card.phonetic, card.translation].filter(Boolean).join(' · ') || card.content,
+      speechText: card.example || card.content,
+      highlightWord: card.title,
+      sceneIcon: 'chat',
+    };
+  }
+
+  if (hasGrammarCue) {
+    return {
+      variant: pickNonRepeatingVariant('css-grammar-equation', prevVariant, idx),
+      title: card.title,
+      subtitle: [card.phonetic, card.translation].filter(Boolean).join(' · ') || card.content,
+      formula: card.indexLabel || card.badge || 'KEY RULE',
+      speechText: card.example || card.content,
+      sceneIcon: 'book',
+    };
+  }
+
+  if (hasDegreeCue && idx % 3 === 1) {
+    return {
+      variant: pickNonRepeatingVariant('degree-scale', prevVariant, idx),
+      title: card.title,
+      subtitle: [card.phonetic, card.translation].filter(Boolean).join(' · ') || card.content,
+      labels: ['Basic', 'Better', 'Natural'],
+      value: 0.85,
+      sceneIcon: 'sparkles',
+    };
+  }
+
+  if (card.phonetic || card.translation || card.example) {
+    const ctx = resolveContextualVisualForCue(
+      `${card.title} ${card.content} ${card.translation || ''}`,
+      card.title,
+    );
+    if (ctx.matchedRule !== 'fallback' && !ctx.variant.startsWith('bs-') && !ctx.variant.startsWith('css-')) {
+      return {
+        variant: pickNonRepeatingVariant(ctx.variant, prevVariant, idx),
+        title: card.title,
+        subtitle: [card.phonetic, card.translation].filter(Boolean).join(' · ') || card.content,
+        sceneIcon: ctx.sceneIcon,
+        speechText: card.example || card.content,
+      };
+    }
+    const creatorPool: IllustrationVariant[] = [
+      'css-magnifying-word',
+      'phrase-icon-split',
+      'css-flashcard-flip',
+      'bs-badge-cluster',
+      'contrast-pair-cards',
+      'trio-icon-cards',
+      'css-sticky-note',
+      'bs-alert-tip',
+    ];
+    const picked = pickNonRepeatingVariant(
+      creatorPool[idx % creatorPool.length],
+      prevVariant,
+      idx,
+    );
+    return {
+      variant: picked,
+      title: card.title || card.content,
+      subtitle: [card.phonetic, card.translation].filter(Boolean).join(' · ') || 'Key Vocabulary',
+      speechText: card.example || card.content,
+      highlightWord: card.title,
+      sceneIcon: ctx.sceneIcon,
+    };
+  }
+  const ctx = resolveContextualVisualForCue(
+    `${card.title} ${card.content}`,
+    card.title,
+  );
+  if (ctx.matchedRule !== 'fallback') {
+    return {
+      variant: pickNonRepeatingVariant(ctx.variant, prevVariant, idx),
+      title: card.title,
+      subtitle: card.translation || card.content,
+      sceneIcon: ctx.sceneIcon,
+      speechText: card.content,
+      ...ctx.data,
+    };
+  }
+  const rotatingVariants: IllustrationVariant[] = [
+    'phrase-icon-split',
+    'css-browser-mockup',
+    'contrast-pair-cards',
+    'bs-toast-notify',
+    'css-glass-quote',
+    'css-roadmap-steps',
+  ];
+  return {
+    variant: pickNonRepeatingVariant(
+      rotatingVariants[idx % rotatingVariants.length],
+      prevVariant,
+      idx,
+    ),
+    title: card.title || `Lesson Part ${idx}/${Math.max(1, total - 1)}`,
+    subtitle: card.translation || card.content,
+    speechText: card.content,
+    labels: ['Listen', 'Understand', 'Speak'],
+    sceneIcon: 'book',
+  };
+}
+
+export function buildReelCardsRuleBased(
+  rawText: string,
+  options?: {
+    title?: string;
+    mode?: ReelMode;
+    targetLang?: string;
+  },
+): { title: string; mode: Exclude<ReelMode, 'auto'>; cards: ReelCard[] } {
+  const locale = getReelLocaleStrings(options?.targetLang);
+  const worksheet = cleanReadingWorksheetInput(rawText, options?.title);
+  const cleaned = worksheet.bodyText || rawText.replace(/\r\n/g, '\n').trim();
+  const lines = worksheet.lines.filter((l) => Boolean(l) && !isMetadataNoiseLine(l));
+  const mode =
+    options?.mode && options.mode !== 'auto' ? options.mode : detectReelMode(cleaned);
+  const docTitle = worksheet.title || 'English Practice Reel';
+  const spokenTitle = sanitizeTtsSpeech(docTitle).replace(/[.!?]+$/, '');
+  const introSpeech =
+    mode === 'quiz'
+      ? `Welcome to today's English lesson on ${spokenTitle}. First, read the key details, then answer our interactive quiz.`
+      : mode === 'vocab'
+        ? `Welcome to today's vocabulary lesson on ${spokenTitle}. Today we will learn essential phrases and their meanings.`
+        : `Welcome to today's English reading lesson on ${spokenTitle}. Follow each sentence, learn key vocabulary and grammar, and finish strong.`;
+
+  const cards: ReelCard[] = [
+    {
+      id: makeCardId(0),
+      type: 'intro',
+      badge:
+        mode === 'quiz'
+          ? locale.introBadgeQuiz
+          : mode === 'vocab'
+            ? locale.introBadgeVocab
+            : locale.introBadgeDefault,
+      title: docTitle,
+      content: `${locale.introGoalPrefix} ${docTitle}`,
+      translation: locale.code !== 'none' ? locale.introRoadmapLine : undefined,
+      ttsText: introSpeech,
+      durationSec: estimateCardSpeechDuration(introSpeech),
+      visual: {
+        variant: 'bs-card-header',
+        formula: locale.lessonOverviewFormula,
+        title: docTitle,
+        subtitle: locale.introVisualSubtitle,
+        sceneIcon: 'graduation',
+      },
+    },
+  ];
+
+  // Parse body reading/vocab lines BEFORE quiz section if mixed article + quiz!
+  const explicitQuizIdx = cleaned.search(
+    /(?:^|\n)\s*(?:True\s*\/\s*False(?:\s+Quiz)?|Multiple\s*Choice|Comprehension(?:\s+Quiz)?|Quiz\b|Question\s*1\b|Q\d+[.)])/im,
+  );
+  const quizSplitIdx =
+    explicitQuizIdx >= 0
+      ? explicitQuizIdx
+      : mode === 'quiz'
+        ? cleaned.search(/(?:^|\n)\s*Q?\d+[.)]\s+/im)
+        : -1;
+  const readingChunk =
+    quizSplitIdx > 0
+      ? cleaned.slice(0, quizSplitIdx).trim()
+      : mode === 'quiz'
+        ? ''
+        : cleaned;
+
+  let readingSentences: string[] = [];
+
+  if (mode === 'vocab') {
+    for (let i = 0; i < lines.length && cards.length < 12; i++) {
+      const line = lines[i];
+      if (line.startsWith('#')) continue;
+      const match = line.match(
+        /^([^/\-–—:=]+?)(?:\s+(\/[^/]+\/))?\s*(?:[-–—:=]|→)\s*(.+)$/,
+      );
+      if (match) {
+        const word = match[1].replace(/^\d+[.)]\s*/, '').trim();
+        const phonetic = match[2]?.trim();
+        const meaning = match[3].trim();
+        const cleanSpoken = sanitizeTtsSpeech(word);
+        if (!cleanSpoken) continue;
+        cards.push({
+          id: makeCardId(cards.length),
+          type: 'vocab',
+          badge: `${locale.vocabBadgePrefix} #${cards.length}`,
+          title: word,
+          content: word,
+          phonetic,
+          translation: meaning,
+          ttsText: cleanSpoken,
+          durationSec: estimateCardSpeechDuration(cleanSpoken),
+          visual: {
+            variant: 'css-flashcard-flip',
+            title: word,
+            subtitle: meaning,
+            sceneIcon: 'book',
+          },
+        });
+      }
+    }
+  } else if (readingChunk) {
+    const cleanReadingLines = readingChunk
+      .split('\n')
+      .map((l) => l.trim())
+      .filter((l, idx) => {
+        if (!l || isMetadataNoiseLine(l)) return false;
+        if (idx === 0 && l.replace(/^#+\s*/, '').trim().toLowerCase() === docTitle.toLowerCase()) {
+          return false;
+        }
+        return !/^(?:Q\d+[.)]|\([A-Da-d]\)|[A-Da-d][.)])\s+/i.test(l);
+      })
+      .map((l) => l.replace(/^#+\s*/, '').replace(/^\d+[.)]\s*/, '').trim())
+      .filter((l) => l.length >= 6);
+
+    const sentences = cleanReadingLines
+      .join(' ')
+      .split(/(?<=[.!?])\s+/)
+      .map((s) => s.trim())
+      .filter((s) => s.length >= 8 && !isMetadataNoiseLine(s));
+
+    readingSentences = sentences;
+
+    for (const s of sentences.slice(0, 10)) {
+      const cleanSpoken = sanitizeTtsSpeech(s);
+      if (!cleanSpoken) continue;
+      const notes = extractVocabAndGrammarNote(s, options?.targetLang);
+      const combinedNote = [notes.vocabNote, notes.grammarNote].filter(Boolean).join('\n') || undefined;
+      const ctx = resolveContextualVisualForCue(`${docTitle} ${s}`, s);
+      cards.push({
+        id: makeCardId(cards.length),
+        type: 'vocab',
+        badge: `${locale.readingBadgePrefix} #${cards.length}`,
+        title: `${locale.sentenceTitlePrefix} ${cards.length} · ${docTitle}`,
+        content: s,
+        translation: combinedNote,
+        grammarNote: notes.grammarNote,
+        ttsText: cleanSpoken,
+        durationSec: estimateCardSpeechDuration(cleanSpoken),
+        visual: {
+          variant: ctx.matchedRule !== 'fallback' ? ctx.variant : 'css-browser-mockup',
+          title: docTitle,
+          subtitle: notes.vocabNote || notes.grammarNote || s.slice(0, 64),
+          speechText: s,
+          sceneIcon: ctx.sceneIcon,
+          ...ctx.data,
+        },
+      });
+    }
+  }
+
+  // Extract Quiz blocks (capped at 4 high-signal concise questions)
+  const hasQuizBlocks = quizSplitIdx >= 0 || mode === 'quiz';
+
+  if (hasQuizBlocks) {
+    const quizSource = quizSplitIdx >= 0 ? cleaned.slice(quizSplitIdx) : cleaned;
+    const qBlocks = quizSource
+      .split(/(?=^(?:Q?\d+[.)]\s+))/gm)
+      .map((b) => b.trim())
+      .filter(Boolean);
+
+    let quizCount = 0;
+    for (const block of qBlocks) {
+      if (quizCount >= 4) break;
+      const blockLines = block.split('\n').map((l) => l.trim()).filter(Boolean);
+      if (blockLines.length === 0) continue;
+      const firstLine = blockLines[0];
+      const looksLikeQuizBlock =
+        /^Q\d+[.)]\s+/i.test(firstLine) ||
+        /\b(?:Answer|Key|Đáp án)[:\s]/i.test(block) ||
+        /^(?:\([A-Da-d]\)|[A-Da-d][.)])\s+/m.test(block) ||
+        (mode === 'quiz' && /^Q?\d+[.)]\s+/i.test(firstLine));
+      if (!looksLikeQuizBlock) continue;
+
+      const question = firstLine.replace(/^Q?\d+[.)]\s*/i, '').trim();
+      if (question.length < 5 || isMetadataNoiseLine(question)) continue;
+
+      const opts: string[] = [];
+      let answerIndex = 0;
+      let explanation = '';
+      for (const bl of blockLines.slice(1)) {
+        const optMatch = bl.match(/^(?:\(([A-Da-d])\)|([A-Da-d])[.)])\s+(.+)$/);
+        if (optMatch) {
+          opts.push(optMatch[3].trim());
+          continue;
+        }
+        const ansMatch = bl.match(/^(?:Answer|Key|Đáp án)[:\s]+(.+)$/i);
+        if (ansMatch) {
+          const val = ansMatch[1].trim();
+          const letterIdx = 'abcd'.indexOf(val.charAt(0).toLowerCase());
+          if (letterIdx >= 0 && letterIdx < Math.max(2, opts.length || 4)) {
+            answerIndex = letterIdx;
+          } else if (/^false$/i.test(val)) {
+            answerIndex = 1;
+          }
+          continue;
+        }
+        if (/^(?:Explanation|Giải thích)[:\s]+/i.test(bl)) {
+          explanation = bl.replace(/^(?:Explanation|Giải thích)[:\s]+/i, '').trim();
+        }
+      }
+
+      if (opts.length === 0 && /true\s*\/\s*false|\(T\/F\)/i.test(block)) {
+        opts.push('True', 'False');
+      }
+
+      quizCount += 1;
+      const finalOpts = opts.length > 0 ? opts : ['True', 'False'];
+      const safeAnsIdx = Math.min(answerIndex, Math.max(0, finalOpts.length - 1));
+      const letter = String.fromCharCode(65 + safeAnsIdx);
+      const optSpoken = finalOpts
+        .slice(0, 4)
+        .map((o, i) => `${String.fromCharCode(65 + i)}, ${o}`)
+        .join('. ');
+      const leadIn =
+        quizCount === 1
+          ? "Now let's test your understanding! ... Question one:"
+          : `Question ${quizCount}: ...`;
+      const questionSpeech = sanitizeTtsSpeech(
+        `${leadIn} ${question} ... ${optSpoken}. Take five seconds to think.`,
+      );
+      const answerSpeech = sanitizeTtsSpeech(
+        `Time is up! The correct answer is ${letter}, ${finalOpts[safeAnsIdx]}.${explanation ? ` ${explanation}` : ''}`,
+      );
+
+      const snippetContext = pickConciseQuizExcerpt(
+        readingSentences,
+        question,
+        finalOpts[safeAnsIdx] || '',
+        readingChunk,
+      );
+
+      cards.push({
+        id: makeCardId(cards.length),
+        type: 'quiz',
+        badge: `QUIZ #${quizCount}`,
+        title: `Quiz Question ${quizCount}`,
+        content: question,
+        contextExcerpt: snippetContext,
+        options: finalOpts,
+        answerIndex: safeAnsIdx,
+        thinkSec: 5,
+        explanation: explanation || locale.defaultExplanation(letter, finalOpts[safeAnsIdx]),
+        ttsText: questionSpeech,
+        ttsAnswerText: answerSpeech,
+        durationSec: Number(
+          (estimateCardSpeechDuration(questionSpeech) + 5 + estimateCardSpeechDuration(answerSpeech)).toFixed(2),
+        ),
+        visual: snippetContext
+          ? {
+              variant: 'css-browser-mockup',
+              title: docTitle,
+              formula: locale.contextPassageTitle,
+              speechText: snippetContext,
+              sceneIcon: 'book',
+            }
+          : {
+              variant: 'bs-accordion-faq',
+              title: 'QUIZ CHALLENGE (5s)',
+              speechText: question,
+              sceneIcon: 'brain',
+            },
+      });
+    }
+  }
+
+  // Fallback sentences if cards still only has intro
+  if (cards.length <= 1) {
+    const cleanBodyLines = lines
+      .filter((l, idx) => !(idx === 0 && l.replace(/^#+\s*/, '').trim().toLowerCase() === docTitle.toLowerCase()))
+      .map((l) => l.replace(/^#+\s*/, '').replace(/^\d+[.)]\s*/, '').trim())
+      .filter((l) => l.length >= 6 && !isMetadataNoiseLine(l));
+    const sentences = cleanBodyLines
+      .join(' ')
+      .split(/(?<=[.!?])\s+/)
+      .map((s) => s.trim())
+      .filter((s) => s.length >= 8 && !isMetadataNoiseLine(s));
+
+    for (const s of sentences.slice(0, 10)) {
+      const cleanSpoken = sanitizeTtsSpeech(s);
+      if (!cleanSpoken) continue;
+      const notes = extractVocabAndGrammarNote(s, options?.targetLang);
+      const combinedNote = [notes.vocabNote, notes.grammarNote].filter(Boolean).join('\n') || undefined;
+      cards.push({
+        id: makeCardId(cards.length),
+        type: 'vocab',
+        badge: `${locale.readingBadgePrefix} #${cards.length}`,
+        title: `${locale.sentenceTitlePrefix} ${cards.length} · ${docTitle}`,
+        content: s,
+        translation: combinedNote,
+        grammarNote: notes.grammarNote,
+        ttsText: cleanSpoken,
+        durationSec: estimateCardSpeechDuration(cleanSpoken),
+      });
+    }
+  }
+
+  const outroSpeech = `Great job! Today you practiced ${spokenTitle}. Review the key vocabulary and practice reading aloud every day. See you in the next lesson!`;
+  cards.push({
+    id: makeCardId(cards.length),
+    type: 'outro',
+    badge: locale.outroBadge,
+    title: locale.outroTitle,
+    content: `${locale.outroContentPrefix} ${docTitle}`,
+    translation: locale.code !== 'none' ? locale.outroTranslation : undefined,
+    ttsText: outroSpeech,
+    durationSec: estimateCardSpeechDuration(outroSpeech),
+    visual: {
+      variant: 'css-bento-stats',
+      title: 'Speak Fluently!',
+      labels: locale.outroLabels,
+      sceneIcon: 'sparkles',
+    },
+  });
+
+  // Ensure every card has a lively visual config
+  const enrichedCards = cards.map((card, idx) => ({
+    ...card,
+    visual: defaultVisualForCard(card, idx, cards.length, options?.targetLang),
+  }));
+
+  return { title: docTitle, mode, cards: enrichedCards };
+}
+
+export const TYPOGRAPHY_MOBILE_READABILITY_PROMPT_BLOCK = `## TYPOGRAPHY & MOBILE READABILITY
+
+**1. Nguyên tắc bắt buộc**
+- Tất cả nội dung quan trọng trên visual phải đọc được rõ ràng trên điện thoại ở chế độ toàn màn hình 9:16.
+- Không được hiển thị từ vựng, cụm từ chính hoặc thông điệp quan trọng bằng chữ quá nhỏ.
+- Không tự động thu nhỏ font để nhét nhiều nội dung vào một component.
+
+**2. Kích thước chữ đề xuất**
+| Thành phần | Font size |
+| --- | --- |
+| Tiêu đề chính | 44–56 |
+| Nội dung nổi bật | 36–44 |
+| Labels / Callouts | 32–40 |
+| Nội dung phụ | 28–32 |
+| Chú thích nhỏ | Không dưới 24 |
+
+**3. Quy định riêng cho \`labels\`**
+- \`labels\` phải được hiển thị như các nội dung nổi bật (prominent callouts), không phải micro badges.
+- Font đậm, độ tương phản cao, khoảng cách đủ rộng.
+- Nếu có 3 labels, bố trí thành 3 vùng rõ ràng, không ép cả 3 vào một hàng với chữ nhỏ.
+- Có thể xuống dòng tối đa 2 dòng nếu cần.
+
+**4. Quy định cho \`customPrimitives\`**
+- Mọi primitive \`text\` phải khai báo \`fontSize\` rõ ràng.
+- Text chính nên dùng 36–48.
+- Không sử dụng fontSize 16–24 cho từ vựng hoặc thông tin quan trọng.
+- Không hy sinh khả năng đọc để trang trí.`;
+
+export function buildEnglishReelsWebAiPrompt(params: {
+  sourceText: string;
+  sourceUrl?: string;
+  title?: string;
+  mode: ReelMode;
+  targetLang: string;
+  style?: PromptVideoStyle;
+  compositionId?: LayoutCompositionId | 'ai-decide';
+}): string {
+  const locale = getReelLocaleStrings(params.targetLang);
+
+  const modeInstruction =
+    params.mode === 'auto'
+      ? 'Tự động nhận diện dạng bài phù hợp nhất trong 3 dạng: "reading", "quiz", hoặc "vocab" (nếu bài có cả đoạn đọc + câu hỏi quiz thì giữ ĐẦY ĐỦ cả phần đọc lẫn phần quiz 5s!).'
+      : `Bắt buộc xử lý theo dạng bài: "${params.mode}".`;
+
+  const { variantsListText, sceneIconsListText } = getCatalogSummaryForPrompt();
+
+  const exampleTimelinePromptHint =
+    params.compositionId && params.compositionId !== 'ai-decide'
+      ? `Ưu tiên bố cục "${params.compositionId}" nhưng VẪN giữ đầy đủ các thẻ UI minh họa & Quiz 5s cho từng card.`
+      : 'Chọn component minh họa (`visual.variant` + tùy biến `title`, `subtitle`, `labels`, `value`, `sceneIcon`) khớp từng đoạn bài học.';
+
+  const targetLangConstraint =
+    locale.code === 'none'
+      ? 'KHÔNG viết tiếng Việt hay bản dịch thừa trong `badge`, `translation`, `explanation`, `visual.subtitle`, `visual.labels` — toàn bộ text hiển thị trên thẻ phải viết bằng English ngắn gọn, rõ nghĩa.'
+      : `BẮT BUỘC viết toàn bộ \`badge\`, \`translation\`, \`explanation\`, \`visual.subtitle\`, \`visual.labels\` (nếu là nhãn giải thích) bằng ngôn ngữ mục tiêu: **${locale.targetLanguageLabel}**. Không trộn lẫn ngôn ngữ khác!`;
+
+  return [
+    '# VAI TRÒ',
+    'Bạn là giáo viên tiếng Anh bản ngữ & đạo diễn kịch bản video bài giảng dọc 9:16 (TikTok / Reels / Shorts), tương thích chuẩn JSON cố định của English Reels Studio + KineticSub Studio.',
+    '',
+    '# CẤU TRÚC BÀI GIẢNG BẮT BUỘC (KHÔNG ĐƯỢC CHỈ XUẤT SUBTITLE TRƠN)',
+    'Video bài học PHẢI sinh động, có lộ trình rõ ràng gồm 4 phần:',
+    '1. **Mở đầu (`type: "intro"`)**: Giới thiệu rõ **mục tiêu bài học** (VD: "Welcome to today\'s lesson on ..."). Chọn `visual.variant: "bs-card-header"` hoặc `"css-roadmap-steps"`.',
+    '2. **Nội dung bài đọc / Từ vựng (`type: "vocab"`)**:',
+    '   - **KHÔNG** nhồi nhét phiên âm `/IPA/` rườm rà trừ khi thật sự cần cho từ cực khó.',
+    `   - Ở trường \`"translation"\`, giải thích ngắn gọn từ khó & ngữ pháp bằng **${locale.targetLanguageLabel}** (tránh văn bản dài dòng khiến chữ bị tràn hoặc cắt mất).`,
+    '   - Nếu có nhiều câu trong bài đọc, tách câu hợp lý (1–2 ý ngắn gọn trên mỗi card) để màn hình 9:16 hiển thị ĐẦY ĐỦ không bị mất chữ.',
+    '3. **Thử thách Quiz tương tác (`type: "quiz"`)**:',
+    '   - Giữ số câu hỏi vừa phải (**tối đa 2–4 câu** chất lượng cao, KHÔNG nhồi quá nhiều).',
+    '   - Giữ câu hỏi (`"content"`) và các đáp án (`"options"`) súc tích, đầy đủ nghĩa (KHÔNG tự cắt lửng, tránh mỗi option dài lê thê 20+ từ).',
+    '   - **QUAN TRỌNG**: Nếu Quiz hỏi về bài đọc trước đó, chỉ trích **1–2 câu bằng chứng trực tiếp liên quan nhất** vào `"contextExcerpt"` (tối đa ~200 ký tự, câu hoàn chỉnh) để vừa vặn, dễ đọc rõ nét trên điện thoại trong 5 giây suy nghĩ!',
+    '   - Lời đọc `"ttsText"` PHẢI có **lời dẫn mở Quiz + khoảng nghỉ** trước khi đọc câu hỏi (VD: `"Now let\'s test your understanding! ... Question one: ..."`), rồi đọc các phương án A, B..., cuối cùng nói `"Take five seconds to think."`.',
+    '   - Đặt `"thinkSec": 5` để hệ thống đếm ngược 5s im lặng trước khi đọc `"ttsAnswerText"` công bố đáp án.',
+    '4. **Tổng kết (`type: "outro"`)**: Bắt buộc có lời đọc `"ttsText"` tổng kết bài học qua component `"css-bento-stats"` hoặc `"bs-list-group"`.',
+    '',
+    TYPOGRAPHY_MOBILE_READABILITY_PROMPT_BLOCK,
+    '',
+    '# TÙY BIẾN UI COMPONENT & TỰ VẼ SÁNG TẠO (BOOTSTRAP 5 / MODERN CSS + `customPrimitives`)',
+    'Trên MỖI thẻ trong `cards`, hãy điền object `"visual"` để chọn & **tùy biến trực tiếp nội dung/nhãn** trên 50+ UI component Bootstrap 5 / Modern CSS / Vector sẵn có trong hệ thống:',
+    variantsListText,
+    `- Icon hợp lệ cho \`visual.sceneIcon\`: ${sceneIconsListText}`,
+    '- **Cách 1 — Tùy biến tham số trên component sẵn có**: Đặt `"variant"` đúng mã ở trên (VD `"bs-card-header"`, `"css-sticky-note"`, `"bs-badge-cluster"`, `"css-magnifying-word"`, `"bs-modal-quiz"`, `"css-flashcard-flip"`, `"css-grammar-equation"`, `"bs-alert-tip"`, `"bs-pricing-tier"`, `"css-bento-stats"`, `"hotel-desk"`, `"shopping-price"`...) kèm `"title"`, `"subtitle"`, `"labels"` (mảng 2–3 cụm callout rõ nghĩa), `"value"` (0..1), `"formula"`, `"highlightWord"`, `"sceneIcon"`.',
+    '- **Cách 2 — Tự thiết kế component UI mới hoàn toàn qua `visual.customPrimitives[]`**:',
+    '  + Hệ tọa độ quanh tâm `(0, 0)`, vùng an toàn `x: -380..380`, `y: -145..145`.',
+    '  + Các hình hỗ trợ: `rect`, `pill`, `circle`, `ellipse`, `line`/`arrow`, `polygon`, `icon`, `text` (mọi `text` BẮT BUỘC có `"fontSize"` >= 24, text chính 36–48).',
+    '',
+    '# LUẬT KHÔNG ĐỤNG HÀNG (ĐA DẠNG COMPONENT)',
+    '- **KHÔNG lặp lại `visual.variant`** trên 2 thẻ liên tiếp trong cùng 1 video.',
+    '- Khi thẻ Quiz có `contextExcerpt`, ưu tiên `"variant": "css-browser-mockup"` với `speechText` chứa 1–2 câu bằng chứng trực tiếp.',
+    '',
+    '# NHIỆM VỤ XỬ LÝ NGUỒN DỮ LIỆU',
+    params.sourceUrl ? `- URL nguồn: ${params.sourceUrl}` : '',
+    params.title ? `- Tiêu đề gợi ý: ${params.title}` : '',
+    '1. Lọc bỏ hoàn toàn tiêu đề khung bài tập/worksheet (VD: `"## Practice Reading English Exercises for Beginner – Plans"`, `"English Reading Exercises for Beginner"`, `"## Exercise 1"`, `"Part 1"`, menu web, markdown). Không bao giờ đưa chúng vào `cards` hay `ttsText`!',
+    `2. ${modeInstruction}`,
+    `3. ${targetLangConstraint}`,
+    `4. ${exampleTimelinePromptHint}`,
+    '',
+    '# QUY TẮC VÀNG CHO GIỌNG ĐỌC TTS ("ttsText" & "ttsAnswerText")',
+    '- "ttsText" và "ttsAnswerText" PHẢI là 100% tiếng Anh tự nhiên để máy đọc thành giọng giáo viên.',
+    '- TUYỆT ĐỐI KHÔNG đưa ký tự `&` (viết thành `and`), IPA `/.../`, emoji, URL, hay ký hiệu markdown vào `ttsText` / `ttsAnswerText`.',
+    '- Riêng thẻ `quiz`: `"ttsText"` bắt đầu bằng lời dẫn Quiz (`"Now let\'s test your understanding! ... Question 1: ..."`), rồi đọc lựa chọn + `"Take five seconds to think."`.',
+    '',
+    `# ĐỊNH DẠNG JSON CỐ ĐỊNH BẮT BUỘC TRẢ VỀ (MINH HỌA THEO NGÔN NGỮ: ${locale.targetLanguageLabel})`,
+    '```json',
+    '{',
+    '  "title": "Outside the Comfort Zone",',
+    '  "mode": "reading | quiz | vocab",',
+    '  "cards": [',
+    '    {',
+    '      "type": "intro",',
+    `      "badge": ${JSON.stringify(locale.promptExampleBadge)},`,
+    '      "title": "Outside the Comfort Zone",',
+    `      "content": ${JSON.stringify(locale.promptExampleIntroContent)},`,
+    `      "translation": ${JSON.stringify(locale.promptExampleTranslation)},`,
+    '      "ttsText": "Welcome to today\'s English lesson on Outside the Comfort Zone. Listen to the story, learn useful vocabulary and grammar, then answer a short quiz.",',
+    '      "visual": {',
+    '        "variant": "bs-card-header",',
+    '        "formula": "TODAY LESSON GOAL",',
+    '        "title": "Outside the Comfort Zone",',
+    `        "subtitle": ${JSON.stringify(locale.introVisualSubtitle)},`,
+    '        "sceneIcon": "graduation"',
+    '      }',
+    '    },',
+    '    {',
+    '      "type": "vocab",',
+    `      "badge": ${JSON.stringify(`${locale.readingBadgePrefix} #1`)},`,
+    '      "title": "Mountain Challenge",',
+    '      "content": "In this exciting new TV programme, ten people go and live in the mountains for ten days.",',
+    `      "translation": ${JSON.stringify(locale.promptExampleVocabTranslation)},`,
+    '      "ttsText": "In this exciting new TV programme, ten people go and live in the mountains for ten days.",',
+    '      "visual": {',
+    '        "variant": "css-sticky-note",',
+    '        "title": "KEY VOCAB & GRAMMAR",',
+    `        "labels": ${JSON.stringify(locale.promptExampleStickyLabels)},`,
+    '        "sceneIcon": "book"',
+    '      }',
+    '    },',
+    '    {',
+    '      "type": "quiz",',
+    '      "badge": "QUIZ #1",',
+    '      "title": "Check Understanding",',
+    '      "contextExcerpt": "In this exciting new TV programme, ten people go and live in the mountains for ten days.",',
+    '      "content": "How long do the ten people live in the mountains?",',
+    '      "translation": "How long do they live in the mountains?",',
+    '      "options": ["Five days", "Ten days", "Two weeks"],',
+    '      "answerIndex": 1,',
+    '      "thinkSec": 5,',
+    `      "explanation": ${JSON.stringify(locale.promptExampleExplanation)},`,
+    '      "ttsText": "Now let\'s test your understanding! ... Question one: How long do the ten people live in the mountains? ... A, Five days. B, Ten days. C, Two weeks. Take five seconds to think.",',
+    '      "ttsAnswerText": "Time is up! The correct answer is B, Ten days. The text says they live in the mountains for ten days.",',
+    '      "visual": {',
+    '        "variant": "css-browser-mockup",',
+    `        "title": ${JSON.stringify(locale.promptExampleContextTitle)},`,
+    '        "speechText": "In this exciting new TV programme, ten people go and live in the mountains for ten days.",',
+    '        "sceneIcon": "book"',
+    '      }',
+    '    },',
+    '    {',
+    '      "type": "outro",',
+    `      "badge": ${JSON.stringify(locale.outroBadge)},`,
+    '      "title": "Key Takeaways",',
+    `      "content": ${JSON.stringify(locale.promptExampleOutroContent)},`,
+    `      "translation": ${JSON.stringify(locale.promptExampleOutroTranslation)},`,
+    '      "ttsText": "Great job! Today you practiced Outside the Comfort Zone. Review the new words and keep speaking English every day.",',
+    '      "visual": {',
+    '        "variant": "css-bento-stats",',
+    '        "title": "Lesson Complete!",',
+    `        "labels": ${JSON.stringify(locale.promptExampleOutroLabels)},`,
+    '        "sceneIcon": "sparkles"',
+    '      }',
+    '    }',
+    '  ]',
+    '}',
+    '```',
+    '',
+    '# NỘI DUNG GỐC CẦN CHUYỂN HÓA',
+    '"""',
+    params.sourceText.trim().slice(0, 14000),
+    '"""',
+  ]
+    .filter(Boolean)
+    .join('\n');
+}
+
+export function buildAiCreatorWebAiPrompt(params: {
+  topicHint?: string;
+  learningLanguage?: LearningLanguageId;
+  level?: string;
+  durationMinutes?: number;
+  audience?: string;
+  targetDuration?: string;
+  itemCount?: number;
+  targetLang: string;
+  formatPreference?: CreatorFormatCategory;
+  compositionId?: LayoutCompositionId | 'ai-decide';
+  aspectRatio?: ExportAspectRatioId;
+  includeExplanationSpeech?: boolean;
+  splitAudioByRole?: boolean;
+}): string {
+  const locale = getReelLocaleStrings(params.targetLang);
+  const { variantsListText, sceneIconsListText } = getCatalogSummaryForPrompt();
+  const learningLang: LearningLanguageId = params.learningLanguage || 'en';
+  const langOption =
+    LEARNING_LANGUAGE_OPTIONS.find((item) => item.id === learningLang) || LEARNING_LANGUAGE_OPTIONS[0];
+  const levelOptions = getLevelsForLearningLanguage(learningLang);
+  const chosenLevel =
+    params.level?.trim() ||
+    (params.audience?.trim() ? params.audience.trim() : levelOptions[0]?.id || langOption.defaultLevel);
+  const levelDesc =
+    levelOptions.find((l) => l.id === chosenLevel)?.description || `Difficulty level: ${chosenLevel}`;
+
+  const durationMinutes =
+    typeof params.durationMinutes === 'number' && Number.isFinite(params.durationMinutes) && params.durationMinutes > 0
+      ? Math.max(0.5, Math.min(30, params.durationMinutes))
+      : undefined;
+  const includeExplanationSpeech = params.includeExplanationSpeech !== false;
+  const splitAudioByRole = Boolean(params.splitAudioByRole && includeExplanationSpeech && locale.code !== 'none');
+  const defaultCount = durationMinutes
+    ? recommendCreatorItemCount(durationMinutes, includeExplanationSpeech)
+    : 8;
+  const count = Math.max(4, Math.min(30, Math.round(params.itemCount ?? defaultCount)));
+  const countPadded = String(count).padStart(2, '0');
+  const durationLabel = durationMinutes
+    ? `${durationMinutes} phút (~${Math.round(durationMinutes * 60)} giây, khoảng ${Math.round(durationMinutes * 125)} từ lời đọc tổng cộng)`
+    : params.targetDuration?.trim() || '30–60s';
+  const topicHint = params.topicHint?.trim();
+  const aspectLabel =
+    params.aspectRatio === '16:9'
+      ? '16:9 Landscape Widescreen (1920×1080 — visual left, key card right)'
+      : '9:16 Vertical Short (1080×1920 — TikTok / Reels / Shorts)';
+
+  const formatLabels: Record<CreatorFormatCategory, string> = {
+    auto: 'Tự chọn dạng cuốn hút nhất trong 7 nhóm A–G bên dưới (KHÔNG mặc định bài đọc comprehension)',
+    vocab: 'A. Vocabulary Lists (từ vựng nâng cấp / từ hay dùng để nói tự nhiên, sang hơn)',
+    phrases: 'B. Natural Phrases (ngưng nói câu sách giáo khoa, thay bằng cụm tự nhiên của người bản xứ)',
+    phrasal_verbs: 'C. Phrasal Verbs / Verb Patterns (cụm động từ & mẫu động từ thực tế kèm ngữ cảnh dễ nhớ)',
+    mistakes: "D. Common Mistakes (Don't say X → Say Y instead, sửa lỗi người học hay mắc)",
+    grammar: 'E. Grammar in Context (phân biệt cấu trúc dễ nhầm trực quan qua tình huống)',
+    comparisons: 'F. Vocabulary Comparisons (đối chiếu 2–3 từ gần nghĩa)',
+    real_life: 'G. Real-life Conversations (mẫu câu giao tiếp thực tế tại quán cafe, sân bay, công sở, du lịch)',
+  };
+  const chosenFormatInstruction = formatLabels[params.formatPreference ?? 'auto'];
+
+  const explainLangName =
+    locale.code === 'none' ? 'English' : locale.targetLanguageLabel;
+  const translationRule =
+    locale.code === 'none'
+      ? 'Write short, crisp English explanations in `meaning` and keep `translation` concise in English.'
+      : `Write \`meaning\` / \`translation\` / \`visual.subtitle\` / \`visual.labels\` clearly in **${locale.targetLanguageLabel}** tailored for level **${chosenLevel}**.`;
+
+  const compHint =
+    params.compositionId && params.compositionId !== 'ai-decide'
+      ? `Prioritize layout style "${params.compositionId}" when appropriate while still varying individual card visuals.`
+      : 'Intelligently rotate visual components across cards.';
+
+  const scriptPurityHint =
+    learningLang === 'zh'
+      ? 'Put **100% pure Simplified Chinese Hanzi (汉字)** inside `"speech"` (NO Pinyin inside `"speech"`; put Pinyin inside `"phonetic"` only!).'
+      : learningLang === 'ja'
+        ? 'Put **100% pure natural Japanese (漢字 + かな)** inside `"speech"` (put Romaji/furigana inside `"phonetic"` only!).'
+        : learningLang === 'ko'
+          ? 'Put **100% pure Korean Hangul (한국어)** inside `"speech"` (put Romanization inside `"phonetic"` only!).'
+          : `Put **100% pure ${langOption.nativeName}** inside \`"speech"\`.`;
+
+  const dualTtsRules = splitAudioByRole
+    ? [
+        `- **CRITICAL ROLE-SEPARATED DUAL-TTS RULE**: Our studio separates audio strictly by card role across **2 TTS VOICES**:`,
+        `  + **Target Learning Voice (${langOption.nativeName})** ONLY reads core teaching items (\`type: "vocab"\` — the target word, phrase, grammar pattern, or sample sentence in \`"speech"\`). ${scriptPurityHint}`,
+        `  + **Explanation Voice (${explainLangName})** reads ALL framing & explanations: \`type: "title"\` (intro hook), \`"explanationSpeech"\` on every \`"vocab"\` card (meaning, grammar rule, usage tip), and \`type: "outro"\` (closing).`,
+        `  + On \`type: "title"\` and \`type: "outro"\` cards, set \`"speech": ""\` and put the full spoken script in \`"explanationSpeech"\` in pure **${explainLangName}**!`,
+        '  + NEVER mix two languages in the same string so neither TTS voice ever mispronounces another language!',
+      ]
+    : includeExplanationSpeech
+      ? [
+          `- **CRITICAL DUAL-TTS SEPARATION RULE**: Our studio uses **2 SEPARATE TTS VOICES** (Voice 1: **${langOption.nativeName}** voice, Voice 2: **${explainLangName}** voice).`,
+          `  + \`"speech"\` MUST be **100% pure ${langOption.nativeName}** ONLY (spoken word/phrase + natural example sentence). ${scriptPurityHint} NEVER mix ${explainLangName} inside \`"speech"\`!`,
+          `  + \`"explanationSpeech"\` MUST be **100% pure ${explainLangName}** ONLY (1–2 natural spoken sentences explaining meaning, usage tip, or nuance so learners understand just by listening).`,
+          '  + Keep each part crystal clear and free of mixed foreign words so neither TTS voice ever mispronounces another language!',
+        ]
+      : [
+          `- \`"speech"\` MUST be **100% pure natural ${langOption.nativeName}** ready for TTS. ${scriptPurityHint}`,
+        ];
+
+  const exIntroSpeech = splitAudioByRole
+    ? ''
+    : learningLang === 'ja'
+      ? '今日は毎日使える大切な日本語を学びましょう。'
+      : learningLang === 'zh'
+        ? `今天我们来学习${count}个超实用的中文表达。`
+        : learningLang === 'ko'
+          ? `오늘은 매일 쓸 수 있는 핵심 한국어 표현 ${count}가지를 배워볼게요.`
+          : learningLang === 'fr'
+            ? `Aujourd'hui, découvrons ${count} expressions françaises indispensables.`
+            : learningLang === 'es'
+              ? `Hoy vamos a aprender ${count} expresiones esenciales en español.`
+              : `Stop using the same basic words every day. Here are ${count} expressions at level ${chosenLevel}.`;
+
+  const exOutroSpeech = splitAudioByRole
+    ? ''
+    : learningLang === 'ja'
+      ? '今日学んだ表現をぜひ使ってみてください。'
+      : learningLang === 'zh'
+        ? '记得收藏这节课，每天开口练习吧。'
+        : learningLang === 'ko'
+          ? '오늘 배운 표현을 저장하고 꼭 연습해 보세요.'
+          : learningLang === 'fr'
+            ? "Enregistrez cette leçon et pratiquez ces expressions dès aujourd'hui."
+            : learningLang === 'es'
+              ? 'Guarda esta lección y practica estas expresiones hoy mismo.'
+              : 'Save this lesson and use two of these expressions today.';
+
+  const exampleBlocks =
+    learningLang === 'zh'
+      ? [
+          '    {',
+          '      "type": "title",',
+          `      "kicker": "${chosenLevel} CHINESE LESSON",`,
+          `      "title": "${chosenLevel}: ${count} Mẫu Câu Tiếng Trung Thực Tế",`,
+          `      "speech": ${JSON.stringify(exIntroSpeech)},`,
+          ...(includeExplanationSpeech
+            ? [
+                `      "explanationSpeech": ${JSON.stringify(
+                  locale.code === 'none'
+                    ? `Welcome to this ${chosenLevel} Mandarin Chinese lesson with ${count} high-frequency expressions.`
+                    : `Chào mừng bạn đến với bài học tiếng Trung trình độ ${chosenLevel}, gồm ${count} từ và mẫu câu giao tiếp dùng ngay hàng ngày.`,
+                )},`,
+              ]
+            : []),
+          '      "visual": {',
+          '        "variant": "bs-card-header",',
+          `        "formula": "${chosenLevel}",`,
+          `        "title": "${count} Mẫu Câu ${chosenLevel}",`,
+          `        "subtitle": ${JSON.stringify(locale.introVisualSubtitle)},`,
+          '        "sceneIcon": "sparkles"',
+          '      }',
+          '    },',
+          '    {',
+          '      "type": "vocab",',
+          `      "indexLabel": "01 / ${countPadded}",`,
+          '      "word": "不好意思",',
+          '      "phonetic": "bù hǎo yì si",',
+          '      "meaning": "Xin lỗi / Ngại quá (lịch sự khi làm phiền hoặc nhờ vả)",',
+          '      "example": "不好意思，请问洗手间在哪里？",',
+          '      "speech": "不好意思。不好意思，请问洗手间在哪里？",',
+          ...(includeExplanationSpeech
+            ? [
+                `      "explanationSpeech": ${JSON.stringify(
+                  locale.code === 'none'
+                    ? 'Use this polite phrase before asking a stranger a question or apologizing lightly.'
+                    : 'Dùng khi muốn mở lời nhờ vả hoặc xin lỗi nhẹ nhàng rất lịch sự. Câu ví dụ nghĩa là: Xin lỗi, cho hỏi nhà vệ sinh ở đâu ạ?',
+                )},`,
+              ]
+            : []),
+          `      "translation": ${JSON.stringify(locale.code === 'none' ? 'Excuse me / Sorry to bother you' : 'Xin lỗi / Ngại quá (hỏi đường, nhờ vả)')},`,
+          '      "visual": {',
+          '        "variant": "css-magnifying-word",',
+          '        "title": "不好意思",',
+          `        "subtitle": ${JSON.stringify(locale.code === 'none' ? 'Polite opener in daily Mandarin' : 'Mở lời lịch sự trong giao tiếp')},`,
+          '        "labels": ["bù hǎo yì si", "Mở lời lịch sự"],',
+          '        "highlightWord": "不好意思",',
+          '        "sceneIcon": "chat"',
+          '      }',
+          '    },',
+        ]
+      : learningLang === 'ja'
+        ? [
+            '    {',
+            '      "type": "title",',
+            `      "kicker": "JLPT ${chosenLevel} DAILY LESSON",`,
+            `      "title": "JLPT ${chosenLevel}: ${count} Essential Expressions",`,
+            `      "speech": ${JSON.stringify(exIntroSpeech)},`,
+            ...(includeExplanationSpeech
+              ? [
+                  `      "explanationSpeech": ${JSON.stringify(
+                    locale.code === 'none'
+                      ? `Welcome to this ${chosenLevel} Japanese lesson with ${count} practical expressions.`
+                      : `Chào mừng bạn đến với bài học tiếng Nhật trình độ ${chosenLevel}, gồm ${count} mẫu câu thực tế dễ nhớ.`,
+                  )},`,
+                ]
+              : []),
+            '      "visual": {',
+            '        "variant": "bs-card-header",',
+            `        "formula": "JLPT ${chosenLevel}",`,
+            `        "title": "${count} Mẫu Câu ${chosenLevel}",`,
+            `        "subtitle": ${JSON.stringify(locale.introVisualSubtitle)},`,
+            '        "sceneIcon": "sparkles"',
+            '      }',
+            '    },',
+            '    {',
+            '      "type": "vocab",',
+            `      "indexLabel": "01 / ${countPadded}",`,
+            '      "word": "お願いします",',
+            '      "phonetic": "おねがいします · onegaishimasu",',
+            '      "meaning": "Please / Requesting politely",',
+            '      "example": "お水をお願いします。",',
+            '      "speech": "お願いします。お水をお願いします。",',
+            ...(includeExplanationSpeech
+              ? [
+                  `      "explanationSpeech": ${JSON.stringify(
+                    locale.code === 'none'
+                      ? 'Use this polite phrase whenever ordering food or asking a favor. The example means water, please.'
+                      : 'Dùng để nhờ vả hoặc gọi món một cách lịch sự. Ví dụ: Cho tôi một cốc nước ạ.',
+                  )},`,
+                ]
+              : []),
+            `      "translation": ${JSON.stringify(locale.code === 'none' ? 'Please (polite request)' : 'Làm ơn / Xin vui lòng (lịch sự)')},`,
+            '      "visual": {',
+            '        "variant": "css-magnifying-word",',
+            '        "title": "お願いします",',
+            '        "subtitle": "Gọi món & nhờ vả lịch sự",',
+            '        "labels": ["onegaishimasu", "Lịch sự hàng ngày"],',
+            '        "highlightWord": "お願いします",',
+            '        "sceneIcon": "cup"',
+            '      }',
+            '    },',
+          ]
+        : learningLang === 'ko'
+          ? [
+              '    {',
+              '      "type": "title",',
+              `      "kicker": "${chosenLevel} KOREAN LESSON",`,
+              `      "title": "${chosenLevel}: ${count} Mẫu Câu Tiếng Hàn Tự Nhiên",`,
+              `      "speech": ${JSON.stringify(exIntroSpeech)},`,
+              ...(includeExplanationSpeech
+                ? [
+                    `      "explanationSpeech": ${JSON.stringify(
+                      locale.code === 'none'
+                        ? `Welcome to this ${chosenLevel} Korean lesson with ${count} essential phrases.`
+                        : `Chào mừng bạn đến với bài học tiếng Hàn trình độ ${chosenLevel} gồm ${count} mẫu câu giao tiếp thực tế.`,
+                    )},`,
+                  ]
+                : []),
+              '      "visual": {',
+              '        "variant": "bs-card-header",',
+              `        "formula": "${chosenLevel}",`,
+              `        "title": "${count} Mẫu Câu ${chosenLevel}",`,
+              `        "subtitle": ${JSON.stringify(locale.introVisualSubtitle)},`,
+              '        "sceneIcon": "sparkles"',
+              '      }',
+              '    },',
+              '    {',
+              '      "type": "vocab",',
+              `      "indexLabel": "01 / ${countPadded}",`,
+              '      "word": "잠시만요",',
+              '      "phonetic": "jam-si-man-yo",',
+              '      "meaning": "Xin lỗi chờ chút / Cho tôi đi nhờ chút",',
+              '      "example": "잠시만요, 메뉴판 좀 주시겠어요?",',
+              '      "speech": "잠시만요. 잠시만요, 메뉴판 좀 주시겠어요?",',
+              ...(includeExplanationSpeech
+                ? [
+                    `      "explanationSpeech": ${JSON.stringify(
+                      locale.code === 'none'
+                        ? 'Use this when calling a server or asking someone to wait a moment.'
+                        : 'Dùng để gọi nhân viên quán hoặc xin nhường đường rất tự nhiên. Ví dụ: Xin lỗi một chút, cho tôi xem thực đơn được không ạ?',
+                    )},`,
+                  ]
+                : []),
+              `      "translation": ${JSON.stringify(locale.code === 'none' ? 'Excuse me / Just a moment' : 'Xin chờ một chút / Xin phép gọi nhân viên')},`,
+              '      "visual": {',
+              '        "variant": "css-magnifying-word",',
+              '        "title": "잠시만요",',
+              '        "subtitle": "Gọi phục vụ & xin nhường đường",',
+              '        "labels": ["jam-si-man-yo", "Lịch sự tự nhiên"],',
+              '        "highlightWord": "잠시만요",',
+              '        "sceneIcon": "chat"',
+              '      }',
+              '    },',
+            ]
+          : [
+              '    {',
+              '      "type": "title",',
+              `      "kicker": "LEVEL ${chosenLevel} UPGRADE",`,
+              `      "title": "${count} Words to Sound Smarter in Every Sentence",`,
+              `      "speech": ${JSON.stringify(exIntroSpeech)},`,
+              ...(includeExplanationSpeech
+                ? [
+                    `      "explanationSpeech": ${JSON.stringify(
+                      locale.code === 'none'
+                        ? `Today we will master ${count} natural expressions calibrated for level ${chosenLevel}.`
+                        : `Hôm nay chúng ta cùng học ${count} từ và mẫu câu chuẩn trình độ ${chosenLevel}, dùng được ngay trong giao tiếp.`,
+                    )},`,
+                  ]
+                : []),
+              '      "visual": {',
+              '        "variant": "bs-card-header",',
+              `        "formula": "LEVEL ${chosenLevel}",`,
+              `        "title": "${count} Smart Upgrades",`,
+              `        "subtitle": ${JSON.stringify(locale.introVisualSubtitle)},`,
+              '        "sceneIcon": "sparkles"',
+              '      }',
+              '    },',
+              '    {',
+              '      "type": "vocab",',
+              `      "indexLabel": "01 / ${countPadded}",`,
+              '      "word": "articulate",',
+              '      "meaning": "able to express ideas clearly and effectively",',
+              '      "example": "She is remarkably articulate during team meetings.",',
+              '      "speech": "Number one: articulate. She is remarkably articulate during team meetings.",',
+              ...(includeExplanationSpeech
+                ? [
+                    `      "explanationSpeech": ${JSON.stringify(
+                      locale.code === 'none'
+                        ? 'Articulate describes someone who explains complex thoughts clearly and persuasively.'
+                        : 'Nghĩa là diễn đạt mạch lạc, rõ ràng và thuyết phục. Ví dụ: Cô ấy trình bày rất mạch lạc trong các buổi họp nhóm.',
+                    )},`,
+                  ]
+                : []),
+              `      "translation": ${JSON.stringify(locale.code === 'none' ? 'clear and well-spoken' : 'diễn đạt mạch lạc, rõ ràng')},`,
+              '      "visual": {',
+              '        "variant": "css-magnifying-word",',
+              '        "title": "articulate",',
+              '        "subtitle": "Clear & persuasive speaker",',
+              '        "labels": ["Basic: clear", "Smart: articulate"],',
+              '        "highlightWord": "articulate",',
+              '        "sceneIcon": "mic"',
+              '      }',
+              '    },',
+            ];
+
+  return [
+    `# ROLE: AUTONOMOUS ${langOption.nativeName.toUpperCase()} EDUCATIONAL CONTENT DIRECTOR`,
+    `You are an expert ${langOption.nativeName} teacher, educational content strategist, video scriptwriter, and curriculum designer.`,
+    '',
+    'Your task is NOT to convert an existing reading passage into a video.',
+    `Your task is to independently CREATE an engaging, save-worthy ${langOption.nativeName} learning video concept from scratch — even when NO source text and NO URL are given.`,
+    '',
+    '## 1. LEARNING LANGUAGE, LEVEL & DURATION TARGET',
+    `- **Target Language Being Taught**: **${langOption.label}**`,
+    `- **Proficiency Level (${langOption.systemName})**: **${chosenLevel}** (${levelDesc})`,
+    `- **Explanation Language**: **${explainLangName}**`,
+    `- **Target Video Duration**: **${durationLabel}** with **${count} core teaching items**`,
+    `- **Video Frame Aspect**: ${aspectLabel}`,
+    topicHint
+      ? `- User topic / category direction: "${topicHint}". Craft the sharpest, most practical angle around this topic.`
+      : '- User provided NO specific topic. Brainstorm at least 5 practical video ideas internally, pick the single highest-value concept calibrated strictly to level ' +
+        chosenLevel +
+        ', and output ONLY the final JSON (never output the brainstorming list).',
+    '',
+    '## 2. FORMAT & CONTENT DIVERSITY (7 FORMATS)',
+    `- Format preference: ${chosenFormatInstruction}`,
+    '- NEVER default to a dry reading passage + multiple-choice comprehension worksheet.',
+    '- Formats to draw from: **A. Vocabulary Lists** · **B. Natural Phrases** · **C. Phrasal Verbs** · **D. Common Mistakes** · **E. Grammar in Context** · **F. Vocabulary Comparisons** · **G. Real-life Conversations**.',
+    '',
+    '## 3. VIDEO PACING & STRUCTURE',
+    `1. **Hook Card (\`type: "title"\`)**: Scroll-stopping \`kicker\`, punchy \`title\`, ${splitAudioByRole ? 'empty `speech: ""` with `explanationSpeech` in ' + explainLangName : 'spoken `speech`' + (includeExplanationSpeech ? ' + `explanationSpeech`' : '')}, and \`visual\`.`,
+    `2. **Core Teaching Cards (\`${count}\` cards, \`type: "vocab"\`)**:`,
+    `   - Ordered cleanly with \`"indexLabel": "01 / ${countPadded}"\` through \`"${countPadded} / ${countPadded}"\`.`,
+    `   - Scale detail richness across all ${count} cards so total audio fits **${durationLabel}** naturally (do NOT rush or bloat beyond target minutes).`,
+    '   - If level is a progression (`N5→N1`, `A1→C2`, `HSK 1→6`, `TOPIK 1→6`), progress clearly from elementary (`01`) to advanced (`' + countPadded + '`).',
+    `3. **Recap Outro Card (\`type: "outro"\`)**: ${splitAudioByRole ? 'Empty `speech: ""` with encouraging closing in `explanationSpeech`' : 'Encouraging closing in `speech`' + (includeExplanationSpeech ? ' + `explanationSpeech`' : '')} + summary visual.`,
+    '',
+    '## 4. VOICEOVER / TTS QUALITY RULES (`speech` & `explanationSpeech`)',
+    ...dualTtsRules,
+    '- NEVER put `/IPA/` symbols, `&`, markdown (`**`, `#`), URLs, or emojis inside `speech` or `explanationSpeech`.',
+    `- ${translationRule}`,
+    '',
+    TYPOGRAPHY_MOBILE_READABILITY_PROMPT_BLOCK,
+    '',
+    '## 5. COMPONENT VARIETY & ANTI-REPETITION',
+    `- ${compHint}`,
+    '- **STRICT ANTI-REPETITION RULE**: NEVER assign the same `visual.variant` to two consecutive cards!',
+    variantsListText,
+    `- Valid \`visual.sceneIcon\` names (NEVER invent outside this list): ${sceneIconsListText}`,
+    '',
+    '## 6. STRICT JSON OUTPUT FORMAT (RETURN ONLY 1 VALID JSON OBJECT)',
+    '```json',
+    '{',
+    '  "mode": "vocab | phrases | phrasal_verbs | mistakes | grammar | comparisons | real_life",',
+    `  "learningLang": "${learningLang}",`,
+    `  "level": "${chosenLevel}",`,
+    `  "title": "${count} Essential ${langOption.nativeName} Expressions (${chosenLevel})",`,
+    '  "cards": [',
+    ...exampleBlocks,
+    '    {',
+    '      "type": "outro",',
+    '      "title": "Save & Practice Today",',
+    `      "translation": ${JSON.stringify(locale.promptExampleOutroTranslation)},`,
+    `      "speech": ${JSON.stringify(exOutroSpeech)},`,
+    ...(includeExplanationSpeech
+      ? [
+          `      "explanationSpeech": ${JSON.stringify(
+            locale.code === 'none'
+              ? 'Save this video and review these expressions again tomorrow!'
+              : 'Hãy lưu lại bài học này và luyện đọc to mỗi ngày nhé!',
+          )},`,
+        ]
+      : []),
+    '      "visual": {',
+    '        "variant": "css-bento-stats",',
+    '        "title": "Ready to Use!",',
+    `        "labels": ${JSON.stringify(locale.promptExampleOutroLabels)},`,
+    '        "sceneIcon": "sparkles"',
+    '      }',
+    '    }',
+    '  ]',
+    '}',
+    '```',
+  ].join('\n');
+}
+
+export const STARTER_SAMPLE_TITLE_PREFIX = 'Mẫu bài học:';
+
+export function buildStarterLessonForLanguage(
+  learningLang: LearningLanguageId,
+  targetLang = 'Tiếng Việt',
+  level?: string,
+): { title: string; mode: ReelMode; cards: ReelCard[] } {
+  const locale = getReelLocaleStrings(targetLang);
+  const langMeta =
+    LEARNING_LANGUAGE_OPTIONS.find((l) => l.id === learningLang) || LEARNING_LANGUAGE_OPTIONS[0];
+  const chosenLevel = level || langMeta.defaultLevel;
+
+  if (learningLang === 'zh') {
+    const title = `${STARTER_SAMPLE_TITLE_PREFIX} Giao tiếp Tiếng Trung (${chosenLevel})`;
+    const cards: ReelCard[] = [
+      {
+        id: 'starter-zh-intro',
+        type: 'intro',
+        badge: `${chosenLevel} TIẾNG TRUNG`,
+        kicker: `${chosenLevel} MANDARIN`,
+        title,
+        content: '4 mẫu câu tiếng Trung dùng ngay hàng ngày',
+        translation: locale.code === 'none' ? 'Practical daily Mandarin expressions' : 'Chào mừng bạn đến với bài học tiếng Trung thực tế',
+        ttsText: '今天我们来学习四个实用的中文表达。',
+        explanationSpeech:
+          locale.code === 'none'
+            ? 'Today we practice four essential Mandarin expressions.'
+            : 'Hôm nay chúng ta cùng học bốn mẫu câu tiếng Trung giao tiếp dùng được ngay hàng ngày.',
+        learningLang: 'zh',
+        durationSec: 4.2,
+        visual: {
+          variant: 'bs-card-header',
+          formula: chosenLevel,
+          title: '4 Mẫu Câu Tiếng Trung',
+          subtitle: 'Nghe · Đọc theo · Hiểu ngữ cảnh',
+          sceneIcon: 'sparkles',
+        },
+      },
+      {
+        id: 'starter-zh-1',
+        type: 'vocab',
+        badge: '01 / 04',
+        indexLabel: '01 / 04',
+        title: '不好意思',
+        content: '不好意思，请问洗手间在哪里？',
+        phonetic: 'bù hǎo yì si · qǐng wèn xǐ shǒu jiān zài nǎ lǐ',
+        translation:
+          locale.code === 'none'
+            ? 'Excuse me, where is the restroom?'
+            : 'Xin lỗi, cho hỏi nhà vệ sinh ở đâu ạ?',
+        ttsText: '不好意思。不好意思，请问洗手间在哪里？',
+        explanationSpeech:
+          locale.code === 'none'
+            ? 'Use Bu Hao Yi Si to politely get attention before asking a question.'
+            : 'Dùng Bù hǎo yì si khi muốn mở lời nhờ vả hoặc hỏi đường một cách lịch sự. Câu ví dụ nghĩa là: Xin lỗi, cho hỏi nhà vệ sinh ở đâu ạ?',
+        learningLang: 'zh',
+        durationSec: 5.5,
+        visual: {
+          variant: 'css-magnifying-word',
+          title: '不好意思',
+          subtitle: 'Mở lời lịch sự · Xin phép nhẹ nhàng',
+          labels: ['bù hǎo yì si', 'Hỏi đường & nhờ vả'],
+          highlightWord: '不好意思',
+          sceneIcon: 'chat',
+        },
+      },
+      {
+        id: 'starter-zh-2',
+        type: 'vocab',
+        badge: '02 / 04',
+        indexLabel: '02 / 04',
+        title: '麻烦您了',
+        content: '麻烦您帮我拿一杯水。',
+        phonetic: 'má fan nín bāng wǒ ná yì bēi shuǐ',
+        translation:
+          locale.code === 'none'
+            ? 'Sorry to trouble you, please bring me a glass of water.'
+            : 'Làm phiền anh chị lấy giúp tôi một cốc nước.',
+        ttsText: '麻烦您了。麻烦您帮我拿一杯水。',
+        explanationSpeech:
+          locale.code === 'none'
+            ? 'Ma fan nin le expresses warm politeness when asking someone for a favor.'
+            : 'Má fan nín le có nghĩa là làm phiền bạn rồi, rất hay dùng khi nhờ người khác giúp đỡ lịch sự.',
+        learningLang: 'zh',
+        durationSec: 5.2,
+        visual: {
+          variant: 'contrast-pair-cards',
+          title: 'Nhờ vả tự nhiên',
+          subtitle: 'Tránh ra lệnh trực tiếp',
+          labels: ['Cứng: 给我水', 'Lịch sự: 麻烦您了'],
+          sceneIcon: 'cup',
+        },
+      },
+      {
+        id: 'starter-zh-3',
+        type: 'vocab',
+        badge: '03 / 04',
+        indexLabel: '03 / 04',
+        title: '没关系',
+        content: '没关系，我们慢慢来。',
+        phonetic: 'méi guān xi · wǒ men màn màn lái',
+        translation:
+          locale.code === 'none'
+            ? 'No problem, let us take our time.'
+            : 'Không sao đâu, chúng ta cứ từ từ làm.',
+        ttsText: '没关系。没关系，我们慢慢来。',
+        explanationSpeech:
+          locale.code === 'none'
+            ? 'Mei guan xi means it does not matter or no worries.'
+            : 'Méi guān xi nghĩa là không sao đâu, dùng để trấn an người đối diện khi họ xin lỗi hoặc vội vàng.',
+        learningLang: 'zh',
+        durationSec: 4.8,
+        visual: {
+          variant: 'css-sticky-note',
+          title: '没关系',
+          subtitle: 'Không sao đâu · Trấn an nhẹ nhàng',
+          labels: ['méi guān xi', 'Phản hồi thân thiện'],
+          sceneIcon: 'heart',
+        },
+      },
+      {
+        id: 'starter-zh-outro',
+        type: 'outro',
+        badge: 'OUTRO',
+        title: 'Lưu lại & Luyện nói ngay',
+        content: 'Hãy luyện đọc to 3 mẫu câu này mỗi ngày!',
+        translation: locale.promptExampleOutroTranslation,
+        ttsText: '记得收藏这节课，每天开口练习吧。',
+        explanationSpeech:
+          locale.code === 'none'
+            ? 'Save this lesson and practice speaking aloud every day!'
+            : 'Hãy lưu lại bài học này và luyện đọc to mỗi ngày nhé!',
+        learningLang: 'zh',
+        durationSec: 3.6,
+        visual: {
+          variant: 'css-bento-stats',
+          title: 'Hoàn thành bài học!',
+          labels: locale.promptExampleOutroLabels,
+          sceneIcon: 'sparkles',
+        },
+      },
+    ];
+    return { title, mode: 'vocab', cards };
+  }
+
+  if (learningLang === 'ja') {
+    const title = `${STARTER_SAMPLE_TITLE_PREFIX} Tiếng Nhật Giao Tiếp (${chosenLevel})`;
+    const cards: ReelCard[] = [
+      {
+        id: 'starter-ja-intro',
+        type: 'intro',
+        badge: `JLPT ${chosenLevel}`,
+        kicker: `JLPT ${chosenLevel}`,
+        title,
+        content: '3 mẫu câu tiếng Nhật dùng ngay trong quán ăn & công sở',
+        translation: locale.introVisualSubtitle,
+        ttsText: '今日は毎日使える大切な日本語を学びましょう。',
+        explanationSpeech:
+          locale.code === 'none'
+            ? 'Welcome to this practical Japanese mini lesson.'
+            : 'Chào mừng bạn đến với bài học tiếng Nhật thực tế, gồm các mẫu câu giao tiếp dùng ngay hàng ngày.',
+        learningLang: 'ja',
+        durationSec: 4.2,
+        visual: {
+          variant: 'bs-card-header',
+          formula: chosenLevel,
+          title: '3 Mẫu Câu Tiếng Nhật',
+          subtitle: 'Nghe chuẩn · Hiểu ngay ngữ cảnh',
+          sceneIcon: 'sparkles',
+        },
+      },
+      {
+        id: 'starter-ja-1',
+        type: 'vocab',
+        badge: '01 / 03',
+        indexLabel: '01 / 03',
+        title: 'お願いします',
+        content: 'お水をお願いします。',
+        phonetic: 'おねがいします · onegaishimasu',
+        translation: locale.code === 'none' ? 'Water, please.' : 'Cho tôi một cốc nước ạ.',
+        ttsText: 'お願いします。お水をお願いします。',
+        explanationSpeech:
+          locale.code === 'none'
+            ? 'Use onegaishimasu whenever ordering or making a polite request.'
+            : 'Onegaishimasu dùng để gọi món hoặc nhờ vả lịch sự trong mọi tình huống.',
+        learningLang: 'ja',
+        durationSec: 5.0,
+        visual: {
+          variant: 'css-magnifying-word',
+          title: 'お願いします',
+          subtitle: 'Gọi món & nhờ vả lịch sự',
+          labels: ['onegaishimasu', 'Dùng hàng ngày'],
+          highlightWord: 'お願いします',
+          sceneIcon: 'cup',
+        },
+      },
+      {
+        id: 'starter-ja-2',
+        type: 'vocab',
+        badge: '02 / 03',
+        indexLabel: '02 / 03',
+        title: 'すみません',
+        content: 'すみません、駅はどこですか。',
+        phonetic: 'sumimasen · eki wa doko desu ka',
+        translation: locale.code === 'none' ? 'Excuse me, where is the station?' : 'Xin lỗi, nhà ga ở đâu vậy ạ?',
+        ttsText: 'すみません。すみません、駅はどこですか。',
+        explanationSpeech:
+          locale.code === 'none'
+            ? 'Sumimasen politely opens a conversation or apologizes lightly.'
+            : 'Sumimasen vừa mang nghĩa xin lỗi nhẹ nhàng, vừa dùng để gọi nhân viên hoặc hỏi đường.',
+        learningLang: 'ja',
+        durationSec: 5.0,
+        visual: {
+          variant: 'css-sticky-note',
+          title: 'すみません',
+          subtitle: 'Xin lỗi · Mở lời hỏi đường',
+          labels: ['sumimasen', 'Giao tiếp cơ bản'],
+          sceneIcon: 'map-pin',
+        },
+      },
+      {
+        id: 'starter-ja-outro',
+        type: 'outro',
+        badge: 'OUTRO',
+        title: 'Lưu lại & Luyện nói ngay',
+        content: 'Luyện đọc to cùng giọng mẫu mỗi ngày!',
+        translation: locale.promptExampleOutroTranslation,
+        ttsText: '今日学んだ表現をぜひ使ってみてください。',
+        explanationSpeech:
+          locale.code === 'none'
+            ? 'Save this lesson and review it again tomorrow!'
+            : 'Hãy lưu lại bài học này và luyện đọc to mỗi ngày nhé!',
+        learningLang: 'ja',
+        durationSec: 3.6,
+        visual: {
+          variant: 'css-bento-stats',
+          title: 'Hoàn thành bài học!',
+          labels: locale.promptExampleOutroLabels,
+          sceneIcon: 'sparkles',
+        },
+      },
+    ];
+    return { title, mode: 'vocab', cards };
+  }
+
+  if (learningLang === 'ko') {
+    const title = `${STARTER_SAMPLE_TITLE_PREFIX} Tiếng Hàn Giao Tiếp (${chosenLevel})`;
+    const cards: ReelCard[] = [
+      {
+        id: 'starter-ko-intro',
+        type: 'intro',
+        badge: chosenLevel,
+        title,
+        content: '3 mẫu câu tiếng Hàn giao tiếp tự nhiên',
+        translation: locale.introVisualSubtitle,
+        ttsText: '오늘은 매일 쓸 수 있는 핵심 한국어 표현을 배워볼게요.',
+        explanationSpeech:
+          locale.code === 'none'
+            ? 'Today we practice essential Korean expressions.'
+            : 'Hôm nay chúng ta cùng học những mẫu câu tiếng Hàn dùng ngay trong đời sống.',
+        learningLang: 'ko',
+        durationSec: 4.0,
+        visual: {
+          variant: 'bs-card-header',
+          formula: chosenLevel,
+          title: '3 Mẫu Câu Tiếng Hàn',
+          subtitle: 'Phát âm chuẩn · Giải thích dễ hiểu',
+          sceneIcon: 'sparkles',
+        },
+      },
+      {
+        id: 'starter-ko-1',
+        type: 'vocab',
+        badge: '01 / 02',
+        indexLabel: '01 / 02',
+        title: '잠시만요',
+        content: '잠시만요, 메뉴판 좀 주시겠어요?',
+        phonetic: 'jam-si-man-yo',
+        translation: locale.code === 'none' ? 'Excuse me, could I see the menu?' : 'Xin lỗi một chút, cho tôi xem thực đơn được không ạ?',
+        ttsText: '잠시만요. 잠시만요, 메뉴판 좀 주시겠어요?',
+        explanationSpeech:
+          locale.code === 'none'
+            ? 'Use jamsimanyo to call a server politely.'
+            : 'Jamsimanyo dùng để gọi phục vụ hoặc xin chờ một lát cực kỳ tự nhiên.',
+        learningLang: 'ko',
+        durationSec: 4.8,
+        visual: {
+          variant: 'css-magnifying-word',
+          title: '잠시만요',
+          subtitle: 'Gọi nhân viên · Xin chờ chút',
+          labels: ['jam-si-man-yo', 'Nhà hàng & Cafe'],
+          highlightWord: '잠시만요',
+          sceneIcon: 'chat',
+        },
+      },
+      {
+        id: 'starter-ko-outro',
+        type: 'outro',
+        badge: 'OUTRO',
+        title: 'Lưu lại & Luyện tập',
+        content: 'Hãy luyện nói to mỗi ngày!',
+        translation: locale.promptExampleOutroTranslation,
+        ttsText: '오늘 배운 표현을 저장하고 꼭 연습해 보세요.',
+        explanationSpeech:
+          locale.code === 'none'
+            ? 'Save this video and practice every day!'
+            : 'Hãy lưu lại bài học này và luyện đọc to mỗi ngày nhé!',
+        learningLang: 'ko',
+        durationSec: 3.5,
+        visual: {
+          variant: 'css-bento-stats',
+          title: 'Hoàn thành!',
+          labels: locale.promptExampleOutroLabels,
+          sceneIcon: 'sparkles',
+        },
+      },
+    ];
+    return { title, mode: 'vocab', cards };
+  }
+
+  if (learningLang === 'fr' || learningLang === 'es') {
+    const isFr = learningLang === 'fr';
+    const title = `${STARTER_SAMPLE_TITLE_PREFIX} ${isFr ? 'Tiếng Pháp' : 'Tiếng Tây Ban Nha'} (${chosenLevel})`;
+    const cards: ReelCard[] = [
+      {
+        id: `starter-${learningLang}-intro`,
+        type: 'intro',
+        badge: chosenLevel,
+        title,
+        content: isFr ? 'Phrases polies du quotidien' : 'Frases esenciales para cada día',
+        translation: locale.introVisualSubtitle,
+        ttsText: isFr
+          ? "Aujourd'hui, apprenons des expressions françaises naturelles."
+          : 'Hoy vamos a aprender expresiones naturales en español.',
+        explanationSpeech:
+          locale.code === 'none'
+            ? 'Let us learn natural everyday phrases.'
+            : `Hôm nay chúng ta học mẫu câu giao tiếp ${isFr ? 'tiếng Pháp' : 'tiếng Tây Ban Nha'} tự nhiên.`,
+        learningLang,
+        durationSec: 4.0,
+        visual: {
+          variant: 'bs-card-header',
+          formula: chosenLevel,
+          title: isFr ? 'Tiếng Pháp Thực Tế' : 'Tiếng Tây Ban Nha Thực Tế',
+          subtitle: 'Nghe chuẩn · Giải thích rõ',
+          sceneIcon: 'sparkles',
+        },
+      },
+      {
+        id: `starter-${learningLang}-1`,
+        type: 'vocab',
+        badge: '01 / 02',
+        indexLabel: '01 / 02',
+        title: isFr ? "S'il vous plaît" : 'Por favor',
+        content: isFr ? "Un café, s'il vous plaît." : 'Un café, por favor.',
+        translation: locale.code === 'none' ? 'A coffee, please.' : 'Cho tôi một ly cà phê ạ.',
+        ttsText: isFr ? "S'il vous plaît. Un café, s'il vous plaît." : 'Por favor. Un café, por favor.',
+        explanationSpeech:
+          locale.code === 'none'
+            ? 'Always add please when ordering.'
+            : 'Mẫu câu lịch sự kinh điển khi gọi đồ uống tại quán.',
+        learningLang,
+        durationSec: 4.4,
+        visual: {
+          variant: 'css-magnifying-word',
+          title: isFr ? "S'il vous plaît" : 'Por favor',
+          subtitle: 'Gọi món lịch sự',
+          labels: [isFr ? 'Lịch sự' : 'Tự nhiên', 'Quán cà phê'],
+          sceneIcon: 'cup',
+        },
+      },
+      {
+        id: `starter-${learningLang}-outro`,
+        type: 'outro',
+        badge: 'OUTRO',
+        title: 'Lưu lại & Luyện nói ngay',
+        content: 'Luyện đọc to mỗi ngày!',
+        translation: locale.promptExampleOutroTranslation,
+        ttsText: isFr ? 'Enregistrez cette leçon pour pratiquer.' : 'Guarda esta lección para practicar.',
+        explanationSpeech:
+          locale.code === 'none'
+            ? 'Save this lesson and practice daily!'
+            : 'Hãy lưu lại bài học này và luyện đọc to mỗi ngày nhé!',
+        learningLang,
+        durationSec: 3.4,
+        visual: {
+          variant: 'css-bento-stats',
+          title: 'Hoàn thành!',
+          labels: locale.promptExampleOutroLabels,
+          sceneIcon: 'sparkles',
+        },
+      },
+    ];
+    return { title, mode: 'vocab', cards };
+  }
+
+  // English starter
+  const title = `${STARTER_SAMPLE_TITLE_PREFIX} Smart Upgrades (${chosenLevel})`;
+  const cards: ReelCard[] = [
+    {
+      id: 'starter-en-intro',
+      type: 'intro',
+      badge: `LEVEL ${chosenLevel}`,
+      kicker: `LEVEL ${chosenLevel} UPGRADE`,
+      title,
+      content: 'Stop using basic words — speak naturally at work & in daily life',
+      translation: locale.introVisualSubtitle,
+      ttsText: 'Stop using the same basic words every day. Here are two smart upgrades.',
+      explanationSpeech:
+        locale.code === 'none'
+          ? 'Today we upgrade everyday words for clearer communication.'
+          : 'Hôm nay chúng ta nâng cấp cách diễn đạt tiếng Anh tự nhiên và chuyên nghiệp hơn.',
+      learningLang: 'en',
+      durationSec: 4.5,
+      visual: {
+        variant: 'bs-card-header',
+        formula: chosenLevel,
+        title: 'Smart Upgrades',
+        subtitle: 'Nghe chuẩn · Nói tự nhiên',
+        sceneIcon: 'sparkles',
+      },
+    },
+    {
+      id: 'starter-en-1',
+      type: 'vocab',
+      badge: '01 / 02',
+      indexLabel: '01 / 02',
+      title: 'articulate',
+      content: 'She is remarkably articulate during team meetings.',
+      phonetic: '/ɑːrˈtɪk.jə.lət/',
+      translation: locale.code === 'none' ? 'able to express ideas clearly' : 'diễn đạt mạch lạc, rõ ràng',
+      ttsText: 'Number one: articulate. She is remarkably articulate during team meetings.',
+      explanationSpeech:
+        locale.code === 'none'
+          ? 'Articulate means speaking clearly and persuasively.'
+          : 'Nghĩa là diễn đạt mạch lạc và thuyết phục. Ví dụ: Cô ấy trình bày rất mạch lạc trong các buổi họp.',
+      learningLang: 'en',
+      durationSec: 5.2,
+      visual: {
+        variant: 'css-magnifying-word',
+        title: 'articulate',
+        subtitle: 'Clear & persuasive speaker',
+        labels: ['Basic: clear', 'Smart: articulate'],
+        highlightWord: 'articulate',
+        sceneIcon: 'mic',
+      },
+    },
+    {
+      id: 'starter-en-outro',
+      type: 'outro',
+      badge: 'OUTRO',
+      title: 'Save & Practice Today',
+      content: 'Use these words in your next conversation!',
+      translation: locale.promptExampleOutroTranslation,
+      ttsText: 'Save this lesson and use these expressions today.',
+      explanationSpeech:
+        locale.code === 'none'
+          ? 'Save this video and review it tomorrow!'
+          : 'Hãy lưu lại bài học này và luyện đọc to mỗi ngày nhé!',
+      learningLang: 'en',
+      durationSec: 3.5,
+      visual: {
+        variant: 'css-bento-stats',
+        title: 'Ready to Use!',
+        labels: locale.promptExampleOutroLabels,
+        sceneIcon: 'sparkles',
+      },
+    },
+  ];
+  return { title, mode: 'vocab', cards };
+}
+
+function stripJsonCodeFences(raw: string): string {
+  const trimmed = raw.trim();
+  const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
+  if (fenced && fenced[1]) return fenced[1].trim();
+  const firstBrace = trimmed.indexOf('{');
+  const lastBrace = trimmed.lastIndexOf('}');
+  if (firstBrace >= 0 && lastBrace > firstBrace) {
+    return trimmed.slice(firstBrace, lastBrace + 1);
+  }
+  return trimmed;
+}
+
+function parseCardVisualConfig(rawVisual: unknown): ReelCardVisualConfig | undefined {
+  if (!rawVisual || typeof rawVisual !== 'object') return undefined;
+  const v = rawVisual as Record<string, unknown>;
+  const variant =
+    typeof v.variant === 'string' && isKnownIllustrationVariant(v.variant.trim())
+      ? (v.variant.trim() as IllustrationVariant)
+      : undefined;
+
+  const labels = Array.isArray(v.labels)
+    ? v.labels.map((s) => String(s).trim()).filter(Boolean).slice(0, 4)
+    : undefined;
+
+  let customPrimitives: VectorPrimitive[] | undefined;
+  if (Array.isArray(v.customPrimitives) && v.customPrimitives.length > 0) {
+    const normalized = normalizeCustomComponent({
+      variant: variant || 'custom-inline',
+      label: String(v.title || 'Custom'),
+      primitives: v.customPrimitives,
+    });
+    if (normalized && normalized.primitives.length > 0) {
+      customPrimitives = normalized.primitives;
+    }
+  }
+
+  const out: ReelCardVisualConfig = {
+    variant,
+    title: typeof v.title === 'string' && v.title.trim() ? v.title.trim() : undefined,
+    subtitle: typeof v.subtitle === 'string' && v.subtitle.trim() ? v.subtitle.trim() : undefined,
+    labels: labels && labels.length > 0 ? labels : undefined,
+    value: typeof v.value === 'number' && Number.isFinite(v.value) ? Math.max(0, Math.min(1, v.value)) : undefined,
+    formula: typeof v.formula === 'string' && v.formula.trim() ? v.formula.trim() : undefined,
+    highlightWord:
+      typeof v.highlightWord === 'string' && v.highlightWord.trim() ? v.highlightWord.trim() : undefined,
+    sceneIcon:
+      typeof v.sceneIcon === 'string' && v.sceneIcon.trim()
+        ? (v.sceneIcon.trim() as IllustrationSceneIcon)
+        : undefined,
+    speechText: typeof v.speechText === 'string' && v.speechText.trim() ? v.speechText.trim() : undefined,
+    customPrimitives,
+  };
+
+  if (
+    !out.variant &&
+    !out.title &&
+    !out.subtitle &&
+    !out.labels &&
+    out.value === undefined &&
+    !out.formula &&
+    !out.highlightWord &&
+    !out.sceneIcon &&
+    !out.speechText &&
+    !out.customPrimitives
+  ) {
+    return undefined;
+  }
+  return out;
+}
+
+export function parseEnglishReelsAiJson(
+  rawText: string,
+  options?: { targetLang?: string },
+): ParsedEnglishReelsResponse | null {
+  if (!rawText || !rawText.trim()) return null;
+  const cleaned = stripJsonCodeFences(rawText);
+  let parsed: Record<string, unknown>;
+  try {
+    parsed = JSON.parse(cleaned) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+
+  // Case 1: Fixed English Reels or AI Creator schema (`cards` array)
+  if (Array.isArray(parsed.cards) && parsed.cards.length > 0) {
+    const rawMode = String(parsed.mode || 'reading').toLowerCase();
+    const creatorSubModes = new Set([
+      'phrases',
+      'phrasal_verbs',
+      'grammar',
+      'mistakes',
+      'comparisons',
+      'real_life',
+    ]);
+    const creatorSubMode = creatorSubModes.has(rawMode) ? rawMode : undefined;
+    const mode: Exclude<ReelMode, 'auto'> =
+      rawMode === 'quiz'
+        ? 'quiz'
+        : rawMode === 'vocab' || creatorSubModes.has(rawMode)
+          ? 'vocab'
+          : 'reading';
+
+    const cards: ReelCard[] = [];
+    const rawCards = parsed.cards;
+    let quizSeq = 0;
+
+    for (let idx = 0; idx < rawCards.length; idx++) {
+      const rawCard = rawCards[idx];
+      if (!rawCard || typeof rawCard !== 'object') continue;
+      const c = rawCard as Record<string, unknown>;
+      const rawType = String(c.type || '').toLowerCase().trim();
+
+      // Merge adjacent `question` + `answer` Creator pair cleanly into 1 interactive 5s quiz card
+      const nextRaw =
+        rawType === 'question' && idx + 1 < rawCards.length && rawCards[idx + 1] && typeof rawCards[idx + 1] === 'object'
+          ? (rawCards[idx + 1] as Record<string, unknown>)
+          : null;
+      const isMergedQuestionAnswer =
+        rawType === 'question' && nextRaw && String(nextRaw.type || '').toLowerCase().trim() === 'answer';
+
+      let type: ReelCardType;
+      if (rawType === 'intro' || rawType === 'title' || rawType === 'hook') {
+        type = 'intro';
+      } else if (rawType === 'quiz' || rawType === 'question') {
+        type = 'quiz';
+      } else if (rawType === 'outro' || rawType === 'recap') {
+        type = 'outro';
+      } else if (rawType === 'vocab' || rawType === 'reading' || rawType === 'item' || rawType === 'phrase' || rawType === 'answer') {
+        type = 'vocab';
+      } else {
+        type = mode === 'quiz' ? 'quiz' : 'vocab';
+      }
+
+      const wordVal = typeof c.word === 'string' && c.word.trim() ? c.word.trim() : '';
+      const meaningVal = typeof c.meaning === 'string' && c.meaning.trim() ? c.meaning.trim() : '';
+      const exampleVal = typeof c.example === 'string' && c.example.trim() ? c.example.trim() : '';
+      const kickerVal = typeof c.kicker === 'string' && c.kicker.trim() ? c.kicker.trim() : '';
+      const indexLabelVal =
+        typeof c.indexLabel === 'string' && c.indexLabel.trim() ? c.indexLabel.trim() : '';
+      const speechVal = typeof c.speech === 'string' && c.speech.trim() ? c.speech.trim() : '';
+      const translationRaw =
+        typeof c.translation === 'string' && c.translation.trim() ? c.translation.trim() : '';
+      const grammarNote =
+        typeof c.grammarNote === 'string' && c.grammarNote.trim()
+          ? c.grammarNote.trim()
+          : undefined;
+
+      const rawTitleField = typeof c.title === 'string' && c.title.trim() ? c.title.trim() : '';
+      const rawContentField = String(c.content || c.text || '').trim();
+
+      const content =
+        type === 'intro'
+          ? rawContentField || meaningVal || rawTitleField || String(parsed.title || '').trim()
+          : type === 'outro'
+            ? rawContentField || speechVal || rawTitleField || 'Save & Practice Today'
+            : rawContentField || exampleVal || meaningVal || wordVal || rawTitleField;
+
+      const title =
+        type === 'intro'
+          ? rawTitleField || String(parsed.title || content || 'English Lesson').trim()
+          : wordVal || rawTitleField || content || `Card ${idx + 1}`;
+
+      if (!content && !title) continue;
+      if (isMetadataNoiseLine(content) && !wordVal) continue;
+
+      const contextExcerpt =
+        typeof c.contextExcerpt === 'string' && c.contextExcerpt.trim()
+          ? c.contextExcerpt.trim()
+          : undefined;
+
+      const defaultSpokenFromCreator =
+        wordVal && exampleVal
+          ? `${wordVal}. ${exampleVal}`
+          : wordVal && meaningVal
+            ? `${wordVal}. ${meaningVal}`
+            : content || title;
+      const ttsText =
+        sanitizeTtsSpeech(String(c.ttsText || speechVal || defaultSpokenFromCreator)) ||
+        sanitizeTtsSpeech(content || title);
+
+      // Build clean translation/subtext line avoiding duplication
+      const translationParts: string[] = [];
+      if (meaningVal && meaningVal.toLowerCase() !== content.toLowerCase()) {
+        translationParts.push(meaningVal);
+      }
+      if (
+        translationRaw &&
+        translationRaw.toLowerCase() !== meaningVal.toLowerCase() &&
+        translationRaw.toLowerCase() !== content.toLowerCase()
+      ) {
+        translationParts.push(translationRaw);
+      }
+      const mergedTranslation =
+        translationParts.join(' · ') || grammarNote || (translationRaw || undefined);
+
+      let optionsArr = Array.isArray(c.options)
+        ? c.options.map((o) => String(o).trim()).filter(Boolean)
+        : undefined;
+      let answerIndex = typeof c.answerIndex === 'number' ? Math.max(0, c.answerIndex) : undefined;
+      let explanation =
+        typeof c.explanation === 'string' && c.explanation.trim() ? c.explanation.trim() : undefined;
+      let rawAnsText =
+        typeof c.ttsAnswerText === 'string' && c.ttsAnswerText.trim()
+          ? sanitizeTtsSpeech(c.ttsAnswerText)
+          : undefined;
+
+      if (isMergedQuestionAnswer && nextRaw) {
+        const nextAnsTitle = String(nextRaw.title || nextRaw.word || nextRaw.content || nextRaw.answer || '').trim();
+        const nextAnsSpeech = String(nextRaw.speech || nextRaw.ttsText || nextAnsTitle).trim();
+        const nextExpl = String(nextRaw.explanation || nextRaw.translation || nextRaw.meaning || '').trim();
+        if (!optionsArr?.length && nextAnsTitle) {
+          optionsArr = [nextAnsTitle];
+          answerIndex = 0;
+        }
+        if (!explanation && nextExpl) explanation = nextExpl;
+        if (!rawAnsText && nextAnsSpeech) rawAnsText = sanitizeTtsSpeech(nextAnsSpeech);
+      }
+
+      const thinkSec =
+        type === 'quiz'
+          ? typeof c.thinkSec === 'number' && Number.isFinite(c.thinkSec)
+            ? Math.max(0, Math.min(10, c.thinkSec))
+            : isMergedQuestionAnswer
+              ? 3
+              : 5
+          : undefined;
+
+      const resolvedBadge =
+        String(
+          indexLabelVal ||
+            c.badge ||
+            (rawType === 'answer' ? 'ANSWER' : type === 'intro' && kickerVal ? kickerVal : type.toUpperCase()),
+        ).trim();
+
+      const explanationSpeechRaw =
+        typeof c.explanationSpeech === 'string' && c.explanationSpeech.trim()
+          ? sanitizeTtsSpeech(c.explanationSpeech)
+          : typeof c.explainSpeech === 'string' && c.explainSpeech.trim()
+            ? sanitizeTtsSpeech(c.explainSpeech)
+            : undefined;
+      const topLearningLang =
+        typeof parsed.learningLang === 'string' && parsed.learningLang.trim()
+          ? (parsed.learningLang.trim().toLowerCase() as LearningLanguageId)
+          : undefined;
+      const cardLearningLang =
+        typeof c.learningLang === 'string' && c.learningLang.trim()
+          ? (c.learningLang.trim().toLowerCase() as LearningLanguageId)
+          : topLearningLang;
+
+      const cardObj: ReelCard = {
+        id: makeCardId(cards.length),
+        type,
+        badge: resolvedBadge,
+        indexLabel: indexLabelVal || undefined,
+        kicker: kickerVal || undefined,
+        title,
+        content: content || title,
+        example: exampleVal || undefined,
+        phonetic: typeof c.phonetic === 'string' && c.phonetic.trim() ? c.phonetic.trim() : undefined,
+        translation: mergedTranslation,
+        explanationSpeech: explanationSpeechRaw,
+        learningLang: cardLearningLang,
+        grammarNote,
+        contextExcerpt,
+        ttsText,
+        ttsAnswerText: rawAnsText,
+        thinkSec,
+        options: optionsArr && optionsArr.length > 0 ? optionsArr : undefined,
+        answerIndex,
+        explanation,
+        visual: parseCardVisualConfig(c.visual),
+      };
+
+      if (cardObj.type === 'quiz') quizSeq += 1;
+      const quizParts = getQuizCardSpeechParts(cardObj, quizSeq || 1);
+      if (cardObj.type === 'quiz' && cardObj.options?.length) {
+        cardObj.ttsText = quizParts.questionSpeech || cardObj.ttsText;
+        cardObj.ttsAnswerText = quizParts.answerSpeech || cardObj.ttsAnswerText;
+        cardObj.durationSec = Number(
+          (
+            estimateCardSpeechDuration(quizParts.questionSpeech) +
+            quizParts.thinkSec +
+            (quizParts.answerSpeech ? estimateCardSpeechDuration(quizParts.answerSpeech) : 0)
+          ).toFixed(2),
+        );
+      } else {
+        cardObj.durationSec = estimateCardSpeechDuration(ttsText);
+      }
+
+      const prevVariant = cards.length > 0 ? cards[cards.length - 1].visual?.variant : null;
+      cardObj.visual = defaultVisualForCard(
+        cardObj,
+        cards.length,
+        rawCards.length,
+        options?.targetLang,
+        prevVariant,
+      );
+      cards.push(cardObj);
+
+      if (isMergedQuestionAnswer) {
+        idx += 1;
+      }
+    }
+
+    if (cards.length === 0) return null;
+
+    let sceneJson: FlexibleSceneDocument | null = null;
+    if (parsed.sceneJson && typeof parsed.sceneJson === 'object') {
+      sceneJson = parseScenePlanJson(JSON.stringify(parsed.sceneJson));
+    }
+
+    return {
+      title: String(parsed.title || cards[0]?.title || 'English Reels Project').trim(),
+      mode,
+      creatorSubMode,
+      cards,
+      sceneJson,
+    };
+  }
+
+  // Case 2: KineticSub direct ScenePlan JSON pasted here
+  const scenePlan = parseScenePlanJson(cleaned);
+  if (scenePlan && scenePlan.scenes.length > 0) {
+    const cards: ReelCard[] = [];
+    for (const sc of scenePlan.scenes) {
+      for (const el of sc.elements || []) {
+        const elType = ('type' in el && el.type) || ('kind' in el && el.kind) || '';
+        const elText = el.text || ('content' in el && el.content) || '';
+        if (
+          elText &&
+          (elType === 'sentence_card' ||
+            elType === 'sentence-card' ||
+            elType === 'text' ||
+            elType === 'topic_pill' ||
+            elType === 'pill')
+        ) {
+          cards.push({
+            id: makeCardId(cards.length),
+            type: cards.length === 0 ? 'intro' : 'vocab',
+            badge: String(elType || 'CARD').toUpperCase(),
+            title: elText,
+            content: elText,
+            translation: el.subtext || undefined,
+            ttsText: elText,
+            durationSec: estimateCardSpeechDuration(elText),
+          });
+        }
+      }
+    }
+    if (cards.length > 0) {
+      return {
+        title: scenePlan.title || 'KineticSub Imported Lesson',
+        mode: 'reading',
+        cards,
+        sceneJson: scenePlan,
+      };
+    }
+  }
+
+  return null;
+}
+
+function resolveVisualPayloadForReelCard(
+  card: ReelCard,
+  idx: number,
+  total: number,
+  compositionId?: LayoutCompositionId,
+  targetLang?: string,
+): { variant: IllustrationVariant; data: IllustrationPropData } {
+  const fallback = defaultVisualForCard(card, idx, total, targetLang);
+  const custom = card.visual;
+  const ctxFallback = resolveContextualVisualForCue(
+    `${card.title} ${card.content} ${card.translation || ''}`,
+    card.title,
+  );
+
+  // Respect explicit card custom visual in default 'story-scenes' or 'custom',
+  // but when user explicitly picks another Bố cục KineticSub layout, re-compose visibly!
+  let chosenVariant: IllustrationVariant =
+    custom?.variant || fallback.variant || ctxFallback.variant || 'bs-card-header';
+
+  if (card.type !== 'quiz' && compositionId && compositionId !== 'story-scenes' && compositionId !== 'custom') {
+    if (compositionId === 'flow-steps') chosenVariant = 'flow-diagram';
+    else if (compositionId === 'gauge-tone') chosenVariant = 'gauge-arc';
+    else if (compositionId === 'checklist-cards') chosenVariant = 'checklist-card';
+    else if (compositionId === 'dialogue-upgrade') chosenVariant = 'dialogue-upgrade';
+    else if (compositionId === 'timeline-track') chosenVariant = 'timeline-track';
+    else if (compositionId === 'spatial-contrast') chosenVariant = 'spatial-boxes';
+    else if (compositionId === 'avatar-dialogue') chosenVariant = 'avatar-speech';
+    else if (compositionId === 'clock-spotlight') chosenVariant = 'clock-face';
+    else if (compositionId === 'phrase-icon-split') chosenVariant = 'phrase-icon-split';
+  }
+
+  const baseLabels = custom?.labels || fallback.labels;
+  const baseTitle = custom?.title || fallback.title || card.title;
+  const baseSubtitle =
+    custom?.subtitle ||
+    fallback.subtitle ||
+    [card.phonetic, card.translation].filter(Boolean).join(' · ') ||
+    card.content;
+
+  const data: IllustrationPropData = {
+    ...ctxFallback.data,
+    title: baseTitle,
+    subtitle: baseSubtitle,
+    labels: baseLabels,
+    value: custom?.value ?? fallback.value,
+    formula: custom?.formula || fallback.formula,
+    speechText: custom?.speechText || fallback.speechText || card.content,
+    sceneIcon: custom?.sceneIcon || fallback.sceneIcon || ctxFallback.sceneIcon,
+    customPrimitives: custom?.customPrimitives,
+  };
+
+  // Populate structured sub-fields for composition-specific illustration renderers
+  if (chosenVariant === 'flow-diagram' && (!data.nodes || data.nodes.length === 0)) {
+    const srcLabels = baseLabels && baseLabels.length >= 2 ? baseLabels : [baseTitle, 'Focus', 'Practice'];
+    const cols = ['#2563EB', '#16A34A', '#7C3AED'];
+    const icons: Array<'chat' | 'check' | 'star'> = ['chat', 'check', 'star'];
+    data.nodes = srcLabels.slice(0, 3).map((lbl, i) => ({
+      label: lbl,
+      icon: icons[i % icons.length],
+      color: cols[i % cols.length],
+    }));
+    data.value = (idx + 1) / Math.max(1, total);
+  } else if (chosenVariant === 'checklist-card' && (!data.checklist || data.checklist.length === 0)) {
+    const items =
+      baseLabels && baseLabels.length > 0
+        ? baseLabels.slice(0, 3).map((lbl) => ({ text: lbl, ok: true }))
+        : [{ text: card.title, ok: true }, ...(card.translation ? [{ text: card.translation.split('\n')[0], ok: true }] : [])];
+    data.checklist = items;
+  } else if (chosenVariant === 'dialogue-upgrade' && (!data.upgrades || data.upgrades.length === 0)) {
+    data.upgrades = [
+      { prompt: card.title, upgrade: (baseLabels && baseLabels[0]) || 'Key Point', badgeColor: '#2563EB' },
+      ...(baseLabels && baseLabels[1] ? [{ prompt: baseSubtitle.slice(0, 28), upgrade: baseLabels[1], badgeColor: '#16A34A' }] : []),
+    ];
+  } else if (chosenVariant === 'spatial-boxes' && (!data.boxes || data.boxes.length === 0)) {
+    const srcLabels = baseLabels && baseLabels.length >= 2 ? baseLabels : [card.badge || card.type.toUpperCase(), card.title];
+    const icons: Array<'dot' | 'surface' | 'cube'> = ['dot', 'surface', 'cube'];
+    const accents = ['#2563EB', '#16A34A', '#7C3AED'];
+    data.boxes = srcLabels.slice(0, 3).map((lbl, i) => ({
+      title: lbl,
+      subtitle: i === 0 ? card.badge : undefined,
+      icon: icons[i % icons.length],
+      accent: accents[i % accents.length],
+    }));
+  } else if (chosenVariant === 'phrase-icon-split' && (!data.nodes || data.nodes.length === 0)) {
+    const words = card.content.split(/\s+/).filter(Boolean);
+    const splitIdx = Math.max(1, words.length - 1);
+    data.speechText = words.slice(0, splitIdx).join(' ');
+    data.highlightWord = custom?.highlightWord || words[splitIdx] || card.title;
+    data.nodes = (baseLabels && baseLabels.length > 0 ? baseLabels : [card.badge || card.title, 'Natural Use']).slice(0, 3).map((lbl, i) => ({
+      label: lbl,
+      color: i === 0 ? '#64748B' : '#4F46E5',
+    }));
+  } else if (chosenVariant === 'contrast-pair-cards' && (!data.nodes || data.nodes.length < 2)) {
+    const vsSplit = (baseTitle || card.title).split(/\s+(?:vs\.?|→|->|\/)\s+/i).filter(Boolean);
+    const leftLbl = (baseLabels && baseLabels[0]) || vsSplit[0] || 'Basic';
+    const rightLbl = (baseLabels && baseLabels[1]) || vsSplit[1] || card.title;
+    data.labels = [leftLbl, rightLbl];
+    data.nodes = [
+      { label: leftLbl, sublabel: 'Standard', color: '#64748B' },
+      { label: rightLbl, sublabel: 'Smart Upgrade', color: '#2563EB' },
+    ];
+  } else if (chosenVariant === 'trio-icon-cards' && (!data.nodes || data.nodes.length < 2)) {
+    const srcLabels =
+      baseLabels && baseLabels.length >= 2
+        ? baseLabels.slice(0, 3)
+        : [card.title, card.indexLabel || 'Meaning', 'Example'];
+    const cols = ['#2563EB', '#059669', '#D97706'];
+    const icons: IllustrationSceneIcon[] = ['book', 'sparkles', 'mic'];
+    data.nodes = srcLabels.map((lbl, i) => ({
+      label: lbl,
+      sublabel: i === 0 ? 'Focus' : i === 1 ? 'Nuance' : 'Speak',
+      color: cols[i % cols.length],
+      sceneIcon: icons[i % icons.length],
+    }));
+  }
+
+  return { variant: chosenVariant, data };
+}
+
+export function reelCardsToLessonProject(
+  cards: ReelCard[],
+  options?: {
+    title?: string;
+    subtitle?: string;
+    theme?: CanvasThemeId;
+    compositionId?: LayoutCompositionId;
+    aspectRatio?: ExportAspectRatioId;
+    targetLang?: string;
+    backgroundImage?: BackgroundImageConfig;
+    cardDurationsSec?: number[];
+    cardTimings?: ReelCardTimingMeta[];
+    audioFileName?: string;
+    sceneJsonOverride?: FlexibleSceneDocument | null;
+    watermark?: WatermarkOutroConfig;
+  },
+): LessonProject {
+  const safeCards =
+    cards.length > 0 ? cards : buildReelCardsRuleBased('Practice English daily.').cards;
+  const cues: TranscriptCue[] = [];
+  const cardWindows: Array<{
+    start: number;
+    end: number;
+    questionEnd: number;
+    thinkStart: number;
+    thinkEnd: number;
+    answerStart: number;
+    thinkSec: number;
+    questionCue: TranscriptCue;
+    answerCue?: TranscriptCue;
+  }> = [];
+
+  let cursor = 0;
+  let quizOrderCounter = 0;
+
+  safeCards.forEach((card, idx) => {
+    const start = Number(cursor.toFixed(3));
+    const timingOverride = options?.cardTimings?.[idx];
+    const durOverride = options?.cardDurationsSec?.[idx];
+
+    if (card.type === 'quiz' && card.options && card.options.length > 0) {
+      quizOrderCounter += 1;
+      const { questionSpeech, answerSpeech, thinkSec: baseThink } = getQuizCardSpeechParts(
+        card,
+        quizOrderCounter,
+      );
+      const qSpeech = questionSpeech || sanitizeTtsSpeech(card.content || card.title) || 'Quiz question.';
+      const thinkSec = timingOverride?.thinkSec ?? baseThink;
+
+      let qDur = timingOverride?.questionSec ?? estimateCardSpeechDuration(qSpeech);
+      let aDur =
+        timingOverride?.answerSec ??
+        (answerSpeech ? estimateCardSpeechDuration(answerSpeech) : 2.6);
+
+      if (!timingOverride && typeof durOverride === 'number' && Number.isFinite(durOverride) && durOverride > 1) {
+        // Scale question/answer around exact thinkSec if single total duration supplied
+        const remaining = Math.max(2.2, durOverride - Math.min(thinkSec, Math.max(0, durOverride - 2.2)));
+        const qShare = qDur / Math.max(0.5, qDur + aDur);
+        qDur = Number((remaining * qShare).toFixed(3));
+        aDur = Number((remaining - qDur).toFixed(3));
+      }
+
+      const questionEnd = Number((start + qDur).toFixed(3));
+      const thinkStart = questionEnd;
+      const thinkEnd = Number((thinkStart + thinkSec).toFixed(3));
+      const answerStart = thinkEnd;
+      const end = Number((answerStart + aDur).toFixed(3));
+
+      const questionCue: TranscriptCue = {
+        id: `${card.id || `reel-cue-${idx + 1}`}-q`,
+        start,
+        end: questionEnd,
+        text: qSpeech,
+        words: interpolateWordTimings(qSpeech, start, questionEnd),
+      };
+      cues.push(questionCue);
+
+      let answerCue: TranscriptCue | undefined;
+      if (answerSpeech) {
+        answerCue = {
+          id: `${card.id || `reel-cue-${idx + 1}`}-a`,
+          start: answerStart,
+          end,
+          text: answerSpeech,
+          words: interpolateWordTimings(answerSpeech, answerStart, end),
+        };
+        cues.push(answerCue);
+      }
+
+      cardWindows.push({
+        start,
+        end,
+        questionEnd,
+        thinkStart,
+        thinkEnd,
+        answerStart,
+        thinkSec,
+        questionCue,
+        answerCue,
+      });
+      cursor = end + 0.08;
+    } else {
+      const speech = (card.ttsText || card.content || card.title || 'Next').trim();
+      const dur =
+        timingOverride?.totalSec ??
+        (typeof durOverride === 'number' && Number.isFinite(durOverride) && durOverride > 0.25
+          ? durOverride
+          : card.durationSec && card.durationSec > 0.5
+            ? card.durationSec
+            : estimateCardSpeechDuration(speech));
+
+      const end = Number((start + dur).toFixed(3));
+      const cue: TranscriptCue = {
+        id: card.id || `reel-cue-${idx + 1}`,
+        start,
+        end,
+        text: speech,
+        words: interpolateWordTimings(speech, start, end),
+      };
+      cues.push(cue);
+      cardWindows.push({
+        start,
+        end,
+        questionEnd: end,
+        thinkStart: end,
+        thinkEnd: end,
+        answerStart: end,
+        thinkSec: 0,
+        questionCue: cue,
+      });
+      cursor = end + 0.08;
+    }
+  });
+
+  const baseTotalDuration = Number(Math.max(3, cursor).toFixed(2));
+  const hasActiveOutro = Boolean(
+    options?.watermark &&
+      options.watermark.outroSeconds > 0 &&
+      (options.watermark.outroLine1.trim() || options.watermark.outroLine2.trim()),
+  );
+  const outroExtraSec = hasActiveOutro ? Math.max(0, Number(options?.watermark?.outroSeconds || 0)) : 0;
+  const totalDuration = Number((baseTotalDuration + outroExtraSec).toFixed(2));
+  const theme: CanvasThemeId = options?.theme ?? 'pastel-sunrise';
+  const isDark = isDarkCanvasTheme(theme);
+
+  const locale = getReelLocaleStrings(options?.targetLang);
+
+  if (options?.sceneJsonOverride && !options.compositionId) {
+    const words = cues.flatMap((c) => c.words);
+    const built = scenePlanToProject(words, options.sceneJsonOverride, {
+      title: options.title || options.sceneJsonOverride.title || 'English Reels Studio',
+      theme,
+      audioFileName: options.audioFileName,
+      cuesOverride: cues,
+    });
+    return {
+      ...built,
+      duration: Number((built.duration + outroExtraSec).toFixed(2)),
+      backgroundImage: options?.backgroundImage,
+      watermark: options?.watermark,
+    };
+  }
+
+  const hasQuiz = safeCards.some((c) => c.type === 'quiz');
+  const stageSteps = hasQuiz ? locale.stageStepsQuiz : locale.stageStepsSimple;
+  const compId = options?.compositionId || 'story-scenes';
+
+  const compLayoutProfile: Record<
+    string,
+    {
+      showStrip: boolean;
+      stripY: number;
+      pillY: number;
+      illY: number;
+      cardY: number;
+      pillBg?: string;
+      pillColor?: string;
+      cardBg?: string;
+      cardText?: string;
+      emphasisColor?: string;
+    }
+  > = {
+    'story-scenes': { showStrip: true, stripY: 170, pillY: 295, illY: 545, cardY: 975 },
+    'flow-steps': {
+      showStrip: true,
+      stripY: 170,
+      pillY: 295,
+      illY: 545,
+      cardY: 975,
+      pillBg: '#E0E7FF',
+      pillColor: '#3730A3',
+      cardBg: '#EEF2FF',
+      cardText: '#1E1B4B',
+      emphasisColor: '#4F46E5',
+    },
+    'gauge-tone': {
+      showStrip: false,
+      stripY: 170,
+      pillY: 205,
+      illY: 500,
+      cardY: 955,
+      pillBg: '#DCFCE7',
+      pillColor: '#065F46',
+      emphasisColor: '#059669',
+    },
+    'checklist-cards': {
+      showStrip: false,
+      stripY: 170,
+      pillY: 205,
+      illY: 515,
+      cardY: 975,
+      pillBg: '#F3E8FF',
+      pillColor: '#6B21A8',
+      emphasisColor: '#7C3AED',
+    },
+    'dialogue-upgrade': {
+      showStrip: false,
+      stripY: 170,
+      pillY: 205,
+      illY: 525,
+      cardY: 985,
+      pillBg: '#FEF3C7',
+      pillColor: '#92400E',
+      cardBg: '#FFFBEB',
+      cardText: '#451A03',
+      emphasisColor: '#D97706',
+    },
+    'timeline-track': {
+      showStrip: true,
+      stripY: 170,
+      pillY: 295,
+      illY: 545,
+      cardY: 975,
+      pillBg: '#CCFBF1',
+      pillColor: '#0F766E',
+      cardBg: '#F0FDFA',
+      cardText: '#134E4A',
+      emphasisColor: '#0D9488',
+    },
+    'spatial-contrast': {
+      showStrip: true,
+      stripY: 170,
+      pillY: 295,
+      illY: 545,
+      cardY: 975,
+      pillBg: '#1E293B',
+      pillColor: '#F8FAFC',
+      cardBg: '#FEFCE8',
+      cardText: '#1C1917',
+      emphasisColor: '#CA8A04',
+    },
+    'avatar-dialogue': {
+      showStrip: false,
+      stripY: 170,
+      pillY: 205,
+      illY: 520,
+      cardY: 975,
+      pillBg: '#FFE4E6',
+      pillColor: '#BE123C',
+      cardBg: '#FFF1F2',
+      cardText: '#1F2937',
+      emphasisColor: '#E11D48',
+    },
+    'clock-spotlight': {
+      showStrip: false,
+      stripY: 170,
+      pillY: 205,
+      illY: 520,
+      cardY: 975,
+      pillBg: '#FDE68A',
+      pillColor: '#78350F',
+      cardBg: '#FFFBEB',
+      cardText: '#1C1917',
+      emphasisColor: '#B45309',
+    },
+    'phrase-icon-split': {
+      showStrip: true,
+      stripY: 170,
+      pillY: 295,
+      illY: 585,
+      cardY: 1020,
+    },
+  };
+  const activeProfile = compLayoutProfile[compId] ?? compLayoutProfile['story-scenes'];
+
+  const elements: LessonProject['elements'] = [];
+
+  safeCards.forEach((card, idx) => {
+    const win = cardWindows[idx];
+    const { start, end } = win;
+    const visualSpec = resolveVisualPayloadForReelCard(
+      card,
+      idx,
+      safeCards.length,
+      options?.compositionId,
+      options?.targetLang,
+    );
+
+    const activeStepIdx =
+      card.type === 'intro'
+        ? 0
+        : card.type === 'outro'
+          ? stageSteps.length - 1
+          : card.type === 'quiz' && hasQuiz
+            ? 2
+            : 1;
+
+    // ── QUIZ CARD WITH 3-PHASE INTERACTIVE CHOREOGRAPHY ───────────────────────
+    if (card.type === 'quiz' && card.options && card.options.length > 0) {
+      const safeAnsIdx = Math.min(card.answerIndex ?? 0, card.options.length - 1);
+      const ansLetter = String.fromCharCode(65 + safeAnsIdx);
+      const ansOpt = card.options[safeAnsIdx];
+
+      // Top Lesson Roadmap Strip (Quiz Step Highlighted)
+      elements.push({
+        id: `reel-stage-${idx}`,
+        type: 'comparison-strip',
+        label: `${locale.roadmapLabel} #${idx + 1}`,
+        startTime: start,
+        endTime: end,
+        enterAnimation: 'fade-scale',
+        exitAnimation: 'fade-out',
+        layout: { x: 540, y: 170, width: 920, scale: 1, zIndex: 12 },
+        props: {
+          kind: 'comparison-strip',
+          items: stageSteps.map((sLbl, sIdx) => ({
+            label: sLbl,
+            activateAt: sIdx === activeStepIdx ? start : end + 9,
+            accentColor: '#D97706',
+          })),
+        },
+      });
+
+      // Phase 1 Pill: Question asking
+      if (win.questionEnd - start > 0.15) {
+        elements.push({
+          id: `reel-q-pill-ask-${idx}`,
+          type: 'topic-pill',
+          label: `Quiz #${idx + 1}`,
+          startTime: start,
+          endTime: win.questionEnd,
+          enterAnimation: 'pop-up',
+          exitAnimation: 'fade-out',
+          layout: { x: 540, y: 295, width: 640, scale: 1, zIndex: 16 },
+          props: {
+            kind: 'topic-pill',
+            text: `${card.badge || 'QUIZ'} · ${locale.quizAskTag}`,
+            bgColor: '#FEF3C7',
+            textColor: '#B45309',
+          },
+        });
+      }
+
+      const hasContextExcerpt = Boolean(card.contextExcerpt?.trim());
+
+      // Phase 2 Countdown Pills + Animated Progress Bar
+      if (win.thinkSec >= 1) {
+        const wholeSecs = Math.max(1, Math.round(win.thinkSec));
+        const sliceDur = (win.thinkEnd - win.thinkStart) / wholeSecs;
+        for (let s = 0; s < wholeSecs; s++) {
+          const remain = wholeSecs - s;
+          const t0 = Number((win.thinkStart + s * sliceDur).toFixed(3));
+          const t1 = Number((win.thinkStart + (s + 1) * sliceDur).toFixed(3));
+          if (t1 - t0 <= 0.08) continue;
+
+          elements.push({
+            id: `reel-q-countdown-pill-${idx}-${s}`,
+            type: 'topic-pill',
+            label: `Countdown ${remain}s`,
+            startTime: t0,
+            endTime: t1,
+            enterAnimation: 'pop-up',
+            exitAnimation: 'fade-out',
+            layout: { x: 540, y: 295, width: 640, scale: 1, zIndex: 18 },
+            props: {
+              kind: 'topic-pill',
+              text: locale.thinkCountdown(remain),
+              bgColor: remain <= 2 ? '#FEE2E2' : '#FEF3C7',
+              textColor: remain <= 2 ? '#B91C1C' : '#B45309',
+            },
+          });
+
+          elements.push({
+            id: `reel-q-countdown-meter-${idx}-${s}`,
+            type: 'illustration-prop',
+            label: `Timer ${remain}s`,
+            startTime: t0,
+            endTime: t1,
+            enterAnimation: 'fade-scale',
+            exitAnimation: 'fade-out',
+            layout: {
+              x: 540,
+              y: hasContextExcerpt ? 1315 : 500,
+              width: hasContextExcerpt ? 780 : 840,
+              scale: hasContextExcerpt ? 0.72 : 0.94,
+              zIndex: 10,
+            },
+            props: {
+              kind: 'illustration-prop',
+              variant: 'bs-progress-meter',
+              data: {
+                title: locale.chooseAnswerTitle(remain),
+                subtitle: locale.chooseAnswerSubtitle,
+                value: Number(((s + 1) / wholeSecs).toFixed(2)),
+                sceneIcon: 'clock',
+              },
+            },
+          });
+        }
+      }
+
+      // Phase 3 Pill: Answer Reveal! (NEVER truncated mid-word)
+      if (end - win.answerStart > 0.15) {
+        elements.push({
+          id: `reel-q-pill-ans-${idx}`,
+          type: 'topic-pill',
+          label: `${locale.correctBadge} #${idx + 1}`,
+          startTime: win.answerStart,
+          endTime: end,
+          enterAnimation: 'pop-up',
+          exitAnimation: 'fade-out',
+          layout: { x: 540, y: 295, width: 880, scale: 1, zIndex: 18 },
+          props: {
+            kind: 'topic-pill',
+            text: locale.correctAnswerPill(ansLetter, ansOpt),
+            bgColor: '#DCFCE7',
+            textColor: '#15803D',
+          },
+        });
+
+        elements.push({
+          id: `reel-q-ans-prop-${idx}`,
+          type: 'illustration-prop',
+          label: `Answer Card #${idx + 1}`,
+          startTime: win.answerStart,
+          endTime: end,
+          enterAnimation: 'pop-up',
+          exitAnimation: 'fade-out',
+          layout: { x: 540, y: 515, width: 840, scale: 0.96, zIndex: 11 },
+          props: {
+            kind: 'illustration-prop',
+            variant: 'bs-alert-tip',
+            data: {
+              title: locale.correctAnswerCardTitle(ansLetter, ansOpt),
+              speechText: card.explanation || locale.defaultExplanation(ansLetter, ansOpt),
+              highlightWord: locale.correctBadge,
+              sceneIcon: 'sparkles',
+            },
+          },
+        });
+      }
+
+      // Passage Context Card (concise direct-evidence excerpt kept visible throughout Question + Think countdown)
+      if (card.contextExcerpt?.trim()) {
+        const preRevealEnd = Math.max(start + 0.1, win.answerStart);
+        elements.push({
+          id: `reel-q-context-${idx}`,
+          type: 'illustration-prop',
+          label: `${locale.contextPassageTitle} #${idx + 1}`,
+          startTime: start,
+          endTime: preRevealEnd,
+          enterAnimation: 'fade-scale',
+          exitAnimation: 'fade-out',
+          layout: { x: 540, y: 525, width: 880, scale: 0.94, zIndex: 9 },
+          props: {
+            kind: 'illustration-prop',
+            variant: 'css-browser-mockup',
+            data: {
+              title: options?.title || locale.contextPassageTitle,
+              formula: locale.contextPassageUrl,
+              speechText: card.contextExcerpt.trim(),
+              sceneIcon: 'book',
+            },
+          },
+        });
+      } else if (win.questionEnd - start > 0.15) {
+        elements.push({
+          id: `reel-q-ask-prop-${idx}`,
+          type: 'illustration-prop',
+          label: `Quiz Visual #${idx + 1}`,
+          startTime: start,
+          endTime: win.questionEnd,
+          enterAnimation: 'fade-scale',
+          exitAnimation: 'fade-out',
+          layout: { x: 540, y: 500, width: 840, scale: 0.96, zIndex: 9 },
+          props: {
+            kind: 'illustration-prop',
+            variant: visualSpec.variant,
+            data: visualSpec.data,
+          },
+        });
+      }
+
+      // Question Sentence Card
+      const preRevealEnd = Math.max(start + 0.1, win.answerStart);
+      if (preRevealEnd - start > 0.1) {
+        elements.push({
+          id: `reel-qcard-pre-${idx}`,
+          type: 'sentence-card',
+          label: `Quiz Q #${idx + 1}`,
+          startTime: start,
+          endTime: preRevealEnd,
+          enterAnimation: 'pop-up',
+          exitAnimation: 'fade-out',
+          layout: { x: 540, y: hasContextExcerpt ? 840 : 830, width: 880, scale: 1, zIndex: 20 },
+          props: {
+            kind: 'sentence-card',
+            text: card.content,
+            subtext: card.translation || locale.listenChooseSubtext,
+            badge: 'question',
+            emphasisColor: '#D97706',
+            bgColor: isDark ? 'rgba(15, 23, 42, 0.94)' : '#FFFFFF',
+            textColor: isDark ? '#F8FAFC' : '#0F172A',
+          },
+        });
+      }
+
+      if (end - win.answerStart > 0.1) {
+        elements.push({
+          id: `reel-qcard-post-${idx}`,
+          type: 'sentence-card',
+          label: `Quiz Answer #${idx + 1}`,
+          startTime: win.answerStart,
+          endTime: end,
+          enterAnimation: 'pop-up',
+          exitAnimation: 'fade-out',
+          layout: { x: 540, y: 830, width: 880, scale: 1, zIndex: 22 },
+          props: {
+            kind: 'sentence-card',
+            text: `${ansLetter}. ${ansOpt}`,
+            subtext: card.explanation ? card.content : card.translation || card.content,
+            badge: 'check',
+            stampText: locale.correctStamp,
+            stampColor: '#16A34A',
+            emphasisColor: '#16A34A',
+            bgColor: isDark ? 'rgba(6, 78, 59, 0.94)' : '#ECFDF5',
+            textColor: isDark ? '#ECFDF5' : '#064E3B',
+          },
+        });
+      }
+
+      // Options Strip: FULL option text (never truncated mid-word!)
+      elements.push({
+        id: `reel-quiz-opts-${idx}`,
+        type: 'comparison-strip',
+        label: `Options #${idx + 1}`,
+        startTime: start,
+        endTime: end,
+        enterAnimation: 'slide-up',
+        exitAnimation: 'fade-out',
+        layout: { x: 540, y: hasContextExcerpt ? 1085 : 1175, width: 920, scale: 1, zIndex: 20 },
+        props: {
+          kind: 'comparison-strip',
+          items: card.options.slice(0, 4).map((opt, oIdx) => ({
+            label: `${String.fromCharCode(65 + oIdx)}. ${opt}`,
+            sublabel: oIdx === safeAnsIdx ? locale.correctOptionSublabel : undefined,
+            activateAt: oIdx === safeAnsIdx ? win.answerStart : end + 9,
+            accentColor: oIdx === safeAnsIdx ? '#16A34A' : '#64748B',
+          })),
+        },
+      });
+
+      // Bottom Karaoke Subtitles
+      elements.push({
+        id: `reel-karaoke-q-${idx}`,
+        type: 'karaoke-card',
+        label: `Sub Q #${idx + 1}`,
+        startTime: start,
+        endTime: Math.max(win.thinkEnd, win.questionEnd),
+        enterAnimation: 'slide-up',
+        exitAnimation: 'fade-out',
+        layout: { x: 540, y: 1585, width: 900, scale: 1, zIndex: 35 },
+        props: {
+          kind: 'karaoke-card',
+          cueId: win.questionCue.id,
+          words: win.questionCue.words,
+          variant: isDark ? 'dark-bar' : 'white-card',
+          activeColor: isDark ? '#FACC15' : '#D97706',
+          inactiveColor: isDark ? '#CBD5E1' : '#9CA3AF',
+          spokenColor: isDark ? '#FFFFFF' : '#111827',
+        },
+      });
+
+      if (win.answerCue && end - win.answerStart > 0.1) {
+        elements.push({
+          id: `reel-karaoke-a-${idx}`,
+          type: 'karaoke-card',
+          label: `Sub A #${idx + 1}`,
+          startTime: win.answerStart,
+          endTime: end,
+          enterAnimation: 'pop-up',
+          exitAnimation: 'fade-out',
+          layout: { x: 540, y: 1585, width: 900, scale: 1, zIndex: 36 },
+          props: {
+            kind: 'karaoke-card',
+            cueId: win.answerCue.id,
+            words: win.answerCue.words,
+            variant: isDark ? 'dark-bar' : 'white-card',
+            activeColor: '#16A34A',
+            inactiveColor: isDark ? '#CBD5E1' : '#9CA3AF',
+            spokenColor: isDark ? '#FFFFFF' : '#064E3B',
+          },
+        });
+      }
+      return;
+    }
+
+    // ── INTRO / READING / VOCAB / OUTRO LESSON SLIDE ──────────────────────────
+    const displayHeadline =
+      card.type === 'vocab' &&
+      card.title &&
+      card.title !== card.content &&
+      !card.title.startsWith('Reading Point') &&
+      !card.title.startsWith('Lesson Point') &&
+      !card.title.startsWith('Câu ') &&
+      !card.title.startsWith('Line ') &&
+      !card.title.startsWith('文 ')
+        ? `${card.title}${card.phonetic ? ` ${card.phonetic}` : ''}`
+        : card.content;
+    const displaySub =
+      card.type === 'vocab' &&
+      card.title &&
+      card.title !== card.content &&
+      !card.title.startsWith('Reading Point') &&
+      !card.title.startsWith('Lesson Point') &&
+      !card.title.startsWith('Câu ') &&
+      !card.title.startsWith('Line ') &&
+      !card.title.startsWith('文 ')
+        ? `${card.content}${card.translation ? ` — ${card.translation}` : ''}`
+        : [card.phonetic, card.translation].filter(Boolean).join(' · ') || undefined;
+
+    if (compId === 'word-reveal') {
+      // @xun52000 Bold Typography Layout: clean top badge pill + large focal sentence card (no cluttered prop)
+      elements.push({
+        id: `reel-pill-${idx}`,
+        type: 'topic-pill',
+        label: `${card.badge || card.type}`,
+        startTime: start,
+        endTime: end,
+        enterAnimation: 'pop-up',
+        exitAnimation: 'fade-out',
+        layout: { x: 540, y: 245, width: 640, scale: 1, zIndex: 14 },
+        props: {
+          kind: 'topic-pill',
+          text: card.badge || card.type.toUpperCase(),
+          bgColor: isDark ? '#334155' : '#E0E7FF',
+          textColor: isDark ? '#FACC15' : '#3730A3',
+        },
+      });
+
+      elements.push({
+        id: `reel-card-${idx}`,
+        type: 'sentence-card',
+        label: `Word Reveal #${idx + 1}: ${card.title.slice(0, 28)}`,
+        startTime: start,
+        endTime: end,
+        enterAnimation: 'fade-scale',
+        exitAnimation: 'fade-out',
+        layout: { x: 540, y: 740, width: 900, scale: 1, zIndex: 20 },
+        props: {
+          kind: 'sentence-card',
+          text: displayHeadline,
+          subtext: displaySub,
+          badge: card.type === 'outro' ? 'check' : 'none',
+          emphasisWord: card.type === 'vocab' ? card.title : undefined,
+          emphasisColor: isDark ? '#FACC15' : '#4F46E5',
+          bgColor: isDark ? 'rgba(30, 41, 59, 0.95)' : '#FFFFFF',
+          textColor: isDark ? '#F8FAFC' : '#0F172A',
+        },
+      });
+    } else if (compId === '3d-shapes') {
+      // 3D Shapes Layout: 3D pill + extruded 3D headline card + staircase or detail card
+      elements.push({
+        id: `reel-3d-pill-${idx}`,
+        type: 'shape-3d',
+        label: `3D Pill #${idx + 1}`,
+        startTime: start,
+        endTime: end,
+        enterAnimation: 'drop-in',
+        exitAnimation: 'fade-out',
+        layout: { x: 540, y: 225, width: 580, height: 108, scale: 1, zIndex: 16 },
+        props: {
+          kind: 'shape-3d',
+          shapeType: 'pill_3d',
+          fill: isDark ? '#334155' : '#EEF2FF',
+          shadow: true,
+          highlight: true,
+          depth: 8,
+          cornerRadius: 54,
+          textContent: card.badge || card.type.toUpperCase(),
+          textColor: isDark ? '#FACC15' : '#4338CA',
+          textSize: 'body',
+          textWeight: 'bold',
+        },
+      });
+
+      elements.push({
+        id: `reel-3d-card-${idx}`,
+        type: 'shape-3d',
+        label: `3D Card #${idx + 1}`,
+        startTime: start,
+        endTime: end,
+        enterAnimation: 'pop-up',
+        exitAnimation: 'fade-out',
+        layout: { x: 540, y: 520, width: 860, height: 290, scale: 1, zIndex: 18 },
+        props: {
+          kind: 'shape-3d',
+          shapeType: 'card_3d',
+          fill:
+            card.type === 'outro'
+              ? '#10B981'
+              : card.type === 'intro'
+                ? '#4F46E5'
+                : idx % 2 === 0
+                  ? '#0EA5E9'
+                  : '#6366F1',
+          shadow: true,
+          highlight: true,
+          depth: 14,
+          cornerRadius: 30,
+          textContent: displayHeadline,
+          textColor: '#FFFFFF',
+          textSize: displayHeadline.length > 96 ? 'body' : 'headline',
+          textWeight: 'bold',
+        },
+      });
+
+      if (visualSpec.data.labels && visualSpec.data.labels.length >= 2) {
+        elements.push({
+          id: `reel-3d-staircase-${idx}`,
+          type: 'shape-3d',
+          label: `3D Steps #${idx + 1}`,
+          startTime: start,
+          endTime: end,
+          enterAnimation: 'pop-up',
+          exitAnimation: 'fade-out',
+          layout: { x: 540, y: 980, width: 860, height: 320, scale: 1, zIndex: 16 },
+          props: {
+            kind: 'shape-3d',
+            shapeType: 'staircase_3d',
+            fill: '#F59E0B',
+            shadow: true,
+            highlight: true,
+            depth: 12,
+            cornerRadius: 20,
+            textColor: '#FFFFFF',
+            stepLabels: visualSpec.data.labels.slice(0, 3),
+          },
+        });
+      } else if (displaySub) {
+        elements.push({
+          id: `reel-card-${idx}`,
+          type: 'sentence-card',
+          label: `Note #${idx + 1}`,
+          startTime: start,
+          endTime: end,
+          enterAnimation: 'pop-up',
+          exitAnimation: 'fade-out',
+          layout: { x: 540, y: 960, width: 880, scale: 1, zIndex: 20 },
+          props: {
+            kind: 'sentence-card',
+            text: displaySub,
+            badge: card.type === 'outro' ? 'check' : 'none',
+            bgColor: isDark ? 'rgba(15, 23, 42, 0.94)' : '#FFFFFF',
+            textColor: isDark ? '#F8FAFC' : '#0F172A',
+          },
+        });
+      }
+    } else {
+      if (activeProfile.showStrip) {
+        elements.push({
+          id: `reel-stage-${idx}`,
+          type: 'comparison-strip',
+          label: `${locale.roadmapLabel} #${idx + 1}`,
+          startTime: start,
+          endTime: end,
+          enterAnimation: 'fade-scale',
+          exitAnimation: 'fade-out',
+          layout: { x: 540, y: activeProfile.stripY, width: 920, scale: 1, zIndex: 12 },
+          props: {
+            kind: 'comparison-strip',
+            items: stageSteps.map((sLbl, sIdx) => ({
+              label: sLbl,
+              activateAt: sIdx === activeStepIdx ? start : end + 9,
+              accentColor:
+                card.type === 'intro' ? '#4F46E5' : card.type === 'outro' ? '#16A34A' : '#2563EB',
+            })),
+          },
+        });
+      }
+
+      const pillLabel =
+        card.indexLabel && !card.badge.includes(card.indexLabel)
+          ? `${card.indexLabel} · ${card.badge}`
+          : card.badge || card.type.toUpperCase();
+
+      elements.push({
+        id: `reel-pill-${idx}`,
+        type: 'topic-pill',
+        label: pillLabel,
+        startTime: start,
+        endTime: end,
+        enterAnimation: 'pop-up',
+        exitAnimation: 'fade-out',
+        layout: { x: 540, y: activeProfile.pillY, width: 640, scale: 1, zIndex: 14 },
+        props: {
+          kind: 'topic-pill',
+          text: pillLabel,
+          bgColor:
+            activeProfile.pillBg ??
+            (card.type === 'intro'
+              ? '#E0E7FF'
+              : card.type === 'outro'
+                ? '#DCFCE7'
+                : '#DBEAFE'),
+          textColor:
+            activeProfile.pillColor ??
+            (card.type === 'intro'
+              ? '#3730A3'
+              : card.type === 'outro'
+                ? '#15803D'
+                : '#1D4ED8'),
+        },
+      });
+
+      elements.push({
+        id: `reel-prop-${idx}`,
+        type: 'illustration-prop',
+        label: `Visual #${idx + 1}`,
+        startTime: start,
+        endTime: end,
+        enterAnimation: 'fade-scale',
+        exitAnimation: 'fade-out',
+        layout: { x: 540, y: activeProfile.illY, width: 860, scale: 0.96, zIndex: 10 },
+        props: {
+          kind: 'illustration-prop',
+          variant: visualSpec.variant,
+          data: visualSpec.data,
+        },
+      });
+
+      elements.push({
+        id: `reel-card-${idx}`,
+        type: 'sentence-card',
+        label: `Card #${idx + 1}: ${card.title.slice(0, 28)}`,
+        startTime: start,
+        endTime: end,
+        enterAnimation: 'pop-up',
+        exitAnimation: 'fade-out',
+        layout: { x: 540, y: activeProfile.cardY, width: 880, scale: 1, zIndex: 20 },
+        props: {
+          kind: 'sentence-card',
+          text: displayHeadline,
+          subtext: displaySub,
+          badge: card.type === 'outro' ? 'check' : 'none',
+          emphasisWord: card.type === 'vocab' && !card.title.startsWith('Reading') ? card.title : undefined,
+          emphasisColor: activeProfile.emphasisColor ?? (card.type === 'outro' ? '#16A34A' : '#2563EB'),
+          bgColor: isDark ? 'rgba(15, 23, 42, 0.94)' : (activeProfile.cardBg ?? '#FFFFFF'),
+          textColor: isDark ? '#F8FAFC' : (activeProfile.cardText ?? '#0F172A'),
+        },
+      });
+    }
+
+    elements.push({
+      id: `reel-karaoke-${idx}`,
+      type: 'karaoke-card',
+      label: `Karaoke #${idx + 1}`,
+      startTime: start,
+      endTime: end,
+      enterAnimation: 'slide-up',
+      exitAnimation: 'fade-out',
+      layout: { x: 540, y: 1585, width: 900, scale: 1, zIndex: 35 },
+      props: {
+        kind: 'karaoke-card',
+        cueId: win.questionCue.id,
+        words: win.questionCue.words,
+        variant: isDark ? 'dark-bar' : 'white-card',
+        activeColor: isDark ? '#FACC15' : '#2563EB',
+        inactiveColor: isDark ? '#CBD5E1' : '#9CA3AF',
+        spokenColor: isDark ? '#FFFFFF' : '#111827',
+      },
+    });
+  });
+
+  const resolvedElements = resolveProjectOverlaps(elements);
+  const aspectRatio: ExportAspectRatioId = options?.aspectRatio || '9:16';
+
+  return {
+    id: `reels-${Date.now().toString(36)}`,
+    title: options?.title || safeCards[0]?.title || 'English Reels Studio Video',
+    subtitle: options?.subtitle || `English Reels Studio × KineticSub ${aspectRatio}`,
+    theme,
+    compositionId: compId,
+    aspectRatio,
+    backgroundImage: options?.backgroundImage,
+    duration: totalDuration,
+    fps: 30,
+    audioFileName: options?.audioFileName,
+    cues,
+    elements: resolvedElements,
+    watermark: options?.watermark,
+  };
+}
+
+export function buildReelPromptBundleForSubtitles(
+  cues: TranscriptCue[],
+  title: string,
+  style: PromptVideoStyle = 'tiktok-cards',
+): string {
+  return buildSceneGenerationPrompt(cues, { title, style });
+}

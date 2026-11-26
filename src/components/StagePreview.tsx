@@ -1,0 +1,865 @@
+import React, { useEffect, useRef, useState } from 'react';
+import { Download, FolderOpen, Image as ImageIcon, Pause, Play, RotateCcw, Shuffle, Stamp, Square, Trash2 } from 'lucide-react';
+import {
+  ensureProjectAssetsLoaded,
+  getStageDimensionsForAspect,
+  hitTestElementLayout,
+  renderProjectFrame,
+  subscribeBgImageLoaded,
+} from '../engine/canvasRenderer';
+import { subscribeCustomComponents } from '../engine/customComponentStore';
+import { LAYOUT_COMPOSITIONS } from '../engine/illustrationLayouts';
+import {
+  ASPECT_RATIO_OPTIONS,
+  ExportAspectRatioId,
+  FPS_OPTIONS,
+  Mp4ExportSettings,
+  QUALITY_OPTIONS,
+  RESOLUTION_OPTIONS,
+  resolveDimensionsForAspect,
+  resolveMp4EncodingParams,
+} from '../engine/mp4Config';
+import {
+  BackgroundFitMode,
+  BackgroundImageConfig,
+  CANVAS_THEMES,
+  CanvasThemeId,
+  CustomComponentPresetConfig,
+  IllustrationSceneIcon,
+  IllustrationVariant,
+  LayoutCompositionId,
+  LessonProject,
+  WatermarkCorner,
+  WatermarkOutroConfig,
+} from '../engine/types';
+import { getEffectiveVectorCatalog, SCENE_ICON_KEYWORDS } from '../engine/vectorComponentDb';
+import { resizeImageFileToStageDataUrl } from '../utils/imageResize';
+
+const DEFAULT_WATERMARK_CONFIG: WatermarkOutroConfig = {
+  watermarkEnabled: false,
+  watermarkText: '@KineticSub',
+  watermarkCorner: 'bottom-right',
+  watermarkOpacity: 0.7,
+  outroSeconds: 0,
+  outroLine1: 'Thanks for watching!',
+  outroLine2: 'Subscribe & Practice daily',
+};
+
+interface StagePreviewProps {
+  project: LessonProject;
+  currentTime: number;
+  isPlaying: boolean;
+  isExportingVideo: boolean;
+  exportProgress: number;
+  exportStageLabel?: string;
+  lastExportSummary?: {
+    fileName: string;
+    savedPath?: string;
+    outputCount: number;
+    outputDir?: string;
+  } | null;
+  selectedElementId: string | null;
+  mp4Settings: Mp4ExportSettings;
+  customCompositionConfig?: CustomComponentPresetConfig;
+  onChangeMp4Settings: (next: Mp4ExportSettings) => void;
+  onChangeComposition: (compositionId: LayoutCompositionId) => void;
+  onRandomizeComposition: () => void;
+  onChangeCustomComposition?: (next: CustomComponentPresetConfig) => void;
+  onApplyCustomComposition?: (config: CustomComponentPresetConfig, scope?: 'all' | 'active-cue') => void;
+  onTogglePlay: () => void;
+  onRestart: () => void;
+  onSeek: (time: number) => void;
+  onChangeTheme: (theme: CanvasThemeId) => void;
+  onChangeBackgroundImage: (bg?: BackgroundImageConfig) => void;
+  onChangeWatermark?: (wm: WatermarkOutroConfig) => void;
+  onSelectElement: (id: string | null) => void;
+  onMoveElement: (id: string, x: number, y: number) => void;
+  onExportVideo: () => void;
+  onCancelExportVideo?: () => void;
+  onOpenOutputFolder?: () => void;
+}
+
+export const StagePreview: React.FC<StagePreviewProps> = ({
+  project,
+  currentTime,
+  isPlaying,
+  isExportingVideo,
+  exportProgress,
+  exportStageLabel,
+  lastExportSummary,
+  selectedElementId,
+  mp4Settings,
+  customCompositionConfig,
+  onChangeMp4Settings,
+  onChangeComposition,
+  onRandomizeComposition,
+  onChangeCustomComposition,
+  onApplyCustomComposition,
+  onTogglePlay,
+  onRestart,
+  onSeek,
+  onChangeTheme,
+  onChangeBackgroundImage,
+  onChangeWatermark,
+  onSelectElement,
+  onMoveElement,
+  onExportVideo,
+  onCancelExportVideo,
+  onOpenOutputFolder,
+}) => {
+  const effectiveAspect: ExportAspectRatioId = project.aspectRatio || mp4Settings.aspectRatio || '9:16';
+  const stageDims = getStageDimensionsForAspect(effectiveAspect);
+  const resolved = resolveMp4EncodingParams({ ...mp4Settings, aspectRatio: effectiveAspect });
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const bgInputRef = useRef<HTMLInputElement>(null);
+  const [assetVersion, setAssetVersion] = useState(0);
+  const [dbVersion, setDbVersion] = useState(0);
+  const [isProcessingBg, setIsProcessingBg] = useState(false);
+  const [bgUploadError, setBgUploadError] = useState<string | null>(null);
+  const [isWatermarkOpen, setIsWatermarkOpen] = useState(false);
+  const dragStateRef = useRef<{
+    id: string;
+    offsetX: number;
+    offsetY: number;
+  } | null>(null);
+
+  useEffect(() => {
+    return subscribeCustomComponents(() => setDbVersion((v) => v + 1));
+  }, []);
+
+  useEffect(() => {
+    return subscribeBgImageLoaded(() => setAssetVersion((v) => v + 1));
+  }, []);
+
+  void dbVersion;
+  const vectorCatalog = getEffectiveVectorCatalog();
+
+  const wmConfig = project.watermark ?? DEFAULT_WATERMARK_CONFIG;
+
+  useEffect(() => {
+    let active = true;
+    if (project.backgroundImage?.dataUrl) {
+      void ensureProjectAssetsLoaded(project).then(() => {
+        if (active) setAssetVersion((v) => v + 1);
+      });
+    }
+    return () => {
+      active = false;
+    };
+  }, [project.backgroundImage?.dataUrl]);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    renderProjectFrame(
+      ctx,
+      project,
+      currentTime,
+      isPlaying || isExportingVideo ? null : selectedElementId,
+    );
+  }, [project, currentTime, selectedElementId, isPlaying, isExportingVideo, assetVersion]);
+
+  const handleUploadBgImage = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const inputEl = e.currentTarget;
+    const file = inputEl.files?.[0];
+    if (!file) return;
+    setBgUploadError(null);
+    setIsProcessingBg(true);
+    try {
+      const config = await resizeImageFileToStageDataUrl(file, {
+        fit: project.backgroundImage?.fit ?? 'cover',
+        scrimOpacity: project.backgroundImage?.scrimOpacity ?? 0.22,
+        aspectRatio: effectiveAspect,
+      });
+      onChangeBackgroundImage(config);
+    } catch (err) {
+      setBgUploadError(
+        err instanceof Error
+          ? err.message
+          : 'Không thể đọc file ảnh nền. Hãy thử file PNG, JPG hoặc WebP.',
+      );
+    } finally {
+      inputEl.value = '';
+      setIsProcessingBg(false);
+    }
+  };
+
+  const toCanvasCoords = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return { x: 0, y: 0 };
+    const rect = canvas.getBoundingClientRect();
+    return {
+      x: ((e.clientX - rect.left) / rect.width) * stageDims.width,
+      y: ((e.clientY - rect.top) / rect.height) * stageDims.height,
+    };
+  };
+
+  const handlePointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    if (isPlaying || isExportingVideo) return;
+    const { x, y } = toCanvasCoords(e);
+    const hit = hitTestElementLayout(project.elements, x, y, currentTime, effectiveAspect);
+    if (hit) {
+      onSelectElement(hit.element.id);
+      dragStateRef.current = {
+        id: hit.element.id,
+        offsetX: hit.layout.x - x,
+        offsetY: hit.layout.y - y,
+      };
+      e.currentTarget.setPointerCapture(e.pointerId);
+    } else {
+      onSelectElement(null);
+    }
+  };
+
+  const handlePointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    const drag = dragStateRef.current;
+    if (!drag) return;
+    const { x, y } = toCanvasCoords(e);
+    const clampedX = Math.max(120, Math.min(stageDims.width - 120, Math.round(x + drag.offsetX)));
+    const clampedY = Math.max(120, Math.min(stageDims.height - 120, Math.round(y + drag.offsetY)));
+    onMoveElement(drag.id, clampedX, clampedY);
+  };
+
+  const handlePointerUp = () => {
+    dragStateRef.current = null;
+  };
+
+  const fmtTime = (sec: number) => {
+    const mins = Math.floor(sec / 60);
+    const secs = (sec % 60).toFixed(2).padStart(5, '0');
+    return `${String(mins).padStart(2, '0')}:${secs}`;
+  };
+
+  return (
+    <section className="flex flex-col items-center bg-white border border-slate-200 rounded-xl p-4 h-fit sticky top-4">
+      <div className="w-full flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-slate-100">
+        <div className="flex items-center gap-2 text-xs text-slate-500 whitespace-nowrap">
+          <span className="font-medium text-slate-800">Xem trước {effectiveAspect}</span>
+          <span aria-hidden="true">·</span>
+          <span className="tabular-nums">{resolved.width}×{resolved.height}</span>
+        </div>
+
+        <div className="flex items-center gap-2 flex-wrap">
+          <div
+            role="group"
+            aria-label="Tỉ lệ khung hình Studio"
+            className="inline-flex rounded-lg bg-slate-100 p-0.5 border border-slate-200"
+          >
+            {(['9:16', '16:9'] as ExportAspectRatioId[]).map((ratio) => (
+              <button
+                key={ratio}
+                type="button"
+                disabled={isExportingVideo}
+                onClick={() =>
+                  onChangeMp4Settings({
+                    ...mp4Settings,
+                    aspectRatio: ratio,
+                  })
+                }
+                className={`px-2 py-0.5 text-[11px] font-semibold rounded-md transition-colors whitespace-nowrap shrink-0 ${
+                  effectiveAspect === ratio
+                    ? 'bg-white text-indigo-700 shadow-xs'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                {ratio}
+              </button>
+            ))}
+          </div>
+          {Object.values(CANVAS_THEMES).map((theme) => (
+            <button
+              key={theme.id}
+              type="button"
+              onClick={() => onChangeTheme(theme.id)}
+              title={theme.name}
+              aria-label={`Chọn nền ${theme.name}`}
+              className={`w-5 h-5 rounded-md border transition-transform ${
+                project.theme === theme.id
+                  ? 'border-indigo-600 ring-2 ring-indigo-200 scale-110'
+                  : 'border-slate-300 hover:scale-105'
+              }`}
+              style={{
+                background: `linear-gradient(180deg, ${theme.bgTop} 0%, ${theme.bgBottom} 100%)`,
+              }}
+            />
+          ))}
+        </div>
+      </div>
+
+      {/* Unified Composition & Randomize Bar */}
+      <div className="w-full pt-2.5 flex items-center gap-2">
+        <select
+          aria-label="Kiểu phối minh họa & hiệu ứng"
+          disabled={isExportingVideo}
+          value={project.compositionId ?? 'story-scenes'}
+          onChange={(e) => onChangeComposition(e.target.value as LayoutCompositionId)}
+          className="flex-1 min-w-0 px-2.5 py-1.5 text-xs font-medium text-slate-700 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:opacity-50"
+        >
+          {LAYOUT_COMPOSITIONS.map((comp) => (
+            <option key={comp.id} value={comp.id}>
+              {comp.name}
+            </option>
+          ))}
+        </select>
+
+        <button
+          type="button"
+          disabled={isExportingVideo}
+          onClick={onRandomizeComposition}
+          aria-label="Phối ngẫu nhiên đúng ngữ cảnh"
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-indigo-700 bg-indigo-50 border border-indigo-200 rounded-lg hover:bg-indigo-100 disabled:opacity-50 transition-colors whitespace-nowrap shrink-0"
+        >
+          <Shuffle className="w-3.5 h-3.5" />
+          <span>Phối ngẫu nhiên</span>
+        </button>
+      </div>
+
+      {project.compositionId === 'custom' && customCompositionConfig && onChangeCustomComposition && onApplyCustomComposition && (
+        <div className="w-full mt-2 p-2.5 rounded-lg bg-indigo-50/60 border border-indigo-200 space-y-2 text-[11px]">
+          <div className="flex items-center justify-between gap-2">
+            <span className="font-semibold text-indigo-900">Tự sáng tạo Component từ Kho ({vectorCatalog.length})</span>
+            <div className="flex items-center gap-1.5">
+              <button
+                type="button"
+                onClick={() => onApplyCustomComposition(customCompositionConfig, 'active-cue')}
+                className="px-2 py-0.5 text-[10px] font-semibold bg-white border border-indigo-300 text-indigo-700 rounded hover:bg-indigo-100"
+              >
+                Áp dụng câu này
+              </button>
+              <button
+                type="button"
+                onClick={() => onApplyCustomComposition(customCompositionConfig, 'all')}
+                className="px-2 py-0.5 text-[10px] font-semibold bg-indigo-600 text-white rounded hover:bg-indigo-700"
+              >
+                Áp dụng cả bài
+              </button>
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-1.5">
+            <select
+              aria-label="Chọn component từ Kho cho Xem trước"
+              value={customCompositionConfig.variant}
+              onChange={(e) =>
+                onChangeCustomComposition({
+                  ...customCompositionConfig,
+                  variant: e.target.value as IllustrationVariant,
+                })
+              }
+              className="px-2 py-1 text-[11px] bg-white border border-slate-200 rounded"
+            >
+              {vectorCatalog.map((item) => (
+                <option key={item.variant} value={item.variant}>
+                  {item.label} ({item.category})
+                </option>
+              ))}
+            </select>
+            <select
+              aria-label="Chọn Icon minh họa cho Xem trước"
+              value={customCompositionConfig.sceneIcon || 'sparkles'}
+              onChange={(e) =>
+                onChangeCustomComposition({
+                  ...customCompositionConfig,
+                  sceneIcon: e.target.value as IllustrationSceneIcon,
+                })
+              }
+              className="px-2 py-1 text-[11px] bg-white border border-slate-200 rounded"
+            >
+              {SCENE_ICON_KEYWORDS.map((ic) => (
+                <option key={ic.icon} value={ic.icon}>
+                  {ic.label}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <input
+              type="text"
+              aria-label="Tiêu đề component tùy biến"
+              value={customCompositionConfig.title || ''}
+              onChange={(e) =>
+                onChangeCustomComposition({ ...customCompositionConfig, title: e.target.value })
+              }
+              placeholder="Tiêu đề thẻ..."
+              className="flex-1 min-w-0 px-2 py-1 text-[11px] bg-white border border-slate-200 rounded"
+            />
+            <input
+              type="text"
+              aria-label="Nội dung thẻ tùy biến"
+              value={customCompositionConfig.speechText || ''}
+              onChange={(e) =>
+                onChangeCustomComposition({ ...customCompositionConfig, speechText: e.target.value })
+              }
+              placeholder="Chữ nhấn / ghi chú..."
+              className="flex-1 min-w-0 px-2 py-1 text-[11px] bg-white border border-slate-200 rounded"
+            />
+            <input
+              type="color"
+              aria-label="Màu nhấn component tùy biến"
+              value={customCompositionConfig.accentColor || '#4F46E5'}
+              onChange={(e) =>
+                onChangeCustomComposition({ ...customCompositionConfig, accentColor: e.target.value })
+              }
+              className="w-7 h-6 p-0.5 bg-white border border-slate-200 rounded cursor-pointer shrink-0"
+            />
+          </div>
+        </div>
+      )}
+
+      {/* Background Image Upload (Auto-Resize 9:16) */}
+      <div className="w-full pt-2 flex flex-wrap items-center justify-between gap-2">
+        <input
+          ref={bgInputRef}
+          type="file"
+          accept="image/*"
+          className="hidden"
+          onChange={(e) => void handleUploadBgImage(e)}
+        />
+        <button
+          type="button"
+          disabled={isExportingVideo || isProcessingBg}
+          onClick={() => bgInputRef.current?.click()}
+          className="inline-flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-medium text-slate-700 bg-slate-50 border border-slate-200 rounded-lg hover:bg-slate-100 disabled:opacity-50"
+        >
+          <ImageIcon className="w-3.5 h-3.5 text-indigo-600" />
+          <span>
+            {isProcessingBg
+              ? `Đang resize ${effectiveAspect}...`
+              : project.backgroundImage
+                ? `Ảnh nền: ${project.backgroundImage.fileName || 'Đã nạp'}`
+                : `Upload ảnh nền (Tự resize ${effectiveAspect})`}
+          </span>
+        </button>
+
+        {project.backgroundImage && (
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() =>
+                onChangeBackgroundImage({
+                  ...project.backgroundImage!,
+                  fit: (project.backgroundImage!.fit === 'contain' ? 'cover' : 'contain') as BackgroundFitMode,
+                })
+              }
+              className="px-2 py-1 text-[10px] font-semibold bg-white border border-slate-200 rounded text-slate-700 hover:bg-slate-50"
+              title={`Đổi chế độ phủ khung ${effectiveAspect}`}
+            >
+              {project.backgroundImage.fit === 'contain' ? 'Vừa khung' : 'Phủ đầy'}
+            </button>
+            <input
+              type="range"
+              aria-label="Độ tối lớp phủ ảnh nền"
+              min={0}
+              max={0.7}
+              step={0.05}
+              value={project.backgroundImage.scrimOpacity ?? 0.22}
+              onChange={(e) =>
+                onChangeBackgroundImage({
+                  ...project.backgroundImage!,
+                  scrimOpacity: Number(e.target.value),
+                })
+              }
+              title="Làm dịu ảnh nền để chữ nổi rõ hơn"
+              className="w-16 accent-indigo-600 h-1"
+            />
+            <button
+              type="button"
+              onClick={() => {
+                setBgUploadError(null);
+                onChangeBackgroundImage(undefined);
+              }}
+              aria-label="Xóa ảnh nền"
+              className="p-1 text-slate-400 hover:text-red-600 rounded"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        )}
+      </div>
+      {bgUploadError && (
+        <p className="w-full mt-1.5 text-[11px] text-rose-700 bg-rose-50 border border-rose-200 rounded-lg px-2.5 py-1.5">
+          {bgUploadError}
+        </p>
+      )}
+
+      {/* Watermark & Outro (Tùy chọn) for Studio 9:16 */}
+      {onChangeWatermark && (
+        <div className="w-full pt-2">
+          <div className="rounded-lg border border-slate-200 bg-slate-50/70 px-2.5 py-1.5 space-y-2">
+            <div className="flex items-center justify-between gap-2">
+              <button
+                type="button"
+                onClick={() => setIsWatermarkOpen((o) => !o)}
+                className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-slate-700 hover:text-indigo-700"
+              >
+                <Stamp className="w-3.5 h-3.5 text-indigo-600" />
+                <span>Watermark &amp; Outro (Tùy chọn)</span>
+                {(wmConfig.watermarkEnabled || wmConfig.outroSeconds > 0) && (
+                  <span className="px-1.5 py-0.5 text-[9px] font-bold bg-emerald-100 text-emerald-700 rounded">
+                    Bật
+                  </span>
+                )}
+              </button>
+              <button
+                type="button"
+                onClick={() => setIsWatermarkOpen((o) => !o)}
+                className="text-[10px] font-medium text-indigo-600 hover:underline"
+              >
+                {isWatermarkOpen ? 'Thu gọn' : 'Chỉnh sửa'}
+              </button>
+            </div>
+
+            {isWatermarkOpen && (
+              <div className="pt-1.5 border-t border-slate-200/80 space-y-2 text-[11px]">
+                <div className="flex flex-wrap items-center gap-2">
+                  <label className="inline-flex items-center gap-1.5 font-medium text-slate-700 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={wmConfig.watermarkEnabled}
+                      onChange={(e) =>
+                        onChangeWatermark({
+                          ...wmConfig,
+                          watermarkEnabled: e.target.checked,
+                        })
+                      }
+                      className="rounded border-slate-300 text-indigo-600"
+                    />
+                    <span>Hiện Watermark</span>
+                  </label>
+                  <input
+                    type="text"
+                    aria-label="Nội dung Watermark"
+                    value={wmConfig.watermarkText}
+                    onChange={(e) =>
+                      onChangeWatermark({
+                        ...wmConfig,
+                        watermarkEnabled: true,
+                        watermarkText: e.target.value,
+                      })
+                    }
+                    placeholder="@TenKenh"
+                    className="flex-1 min-w-[100px] px-2 py-1 text-[11px] bg-white border border-slate-200 rounded"
+                  />
+                  <select
+                    aria-label="Góc Watermark"
+                    value={wmConfig.watermarkCorner}
+                    onChange={(e) =>
+                      onChangeWatermark({
+                        ...wmConfig,
+                        watermarkCorner: e.target.value as WatermarkCorner,
+                      })
+                    }
+                    className="px-2 py-1 text-[11px] bg-white border border-slate-200 rounded"
+                  >
+                    <option value="top-left">Trên Trái</option>
+                    <option value="top-right">Trên Phải</option>
+                    <option value="bottom-left">Dưới Trái</option>
+                    <option value="bottom-right">Dưới Phải</option>
+                  </select>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-slate-600 shrink-0">Độ mờ: {Math.round(wmConfig.watermarkOpacity * 100)}%</span>
+                  <input
+                    type="range"
+                    aria-label="Độ mờ Watermark"
+                    min={0.15}
+                    max={1}
+                    step={0.05}
+                    value={wmConfig.watermarkOpacity}
+                    onChange={(e) =>
+                      onChangeWatermark({
+                        ...wmConfig,
+                        watermarkOpacity: Number(e.target.value),
+                      })
+                    }
+                    className="w-20 accent-indigo-600 h-1"
+                  />
+                  <label className="text-slate-600 ml-auto shrink-0">Outro (s):</label>
+                  <input
+                    type="number"
+                    aria-label="Thời lượng Outro giây"
+                    min={0}
+                    max={10}
+                    step={0.5}
+                    value={wmConfig.outroSeconds}
+                    onChange={(e) =>
+                      onChangeWatermark({
+                        ...wmConfig,
+                        outroSeconds: Math.max(0, Math.min(10, Number(e.target.value) || 0)),
+                      })
+                    }
+                    className="w-14 px-1.5 py-0.5 text-[11px] bg-white border border-slate-200 rounded font-mono"
+                  />
+                </div>
+
+                {wmConfig.outroSeconds > 0 && (
+                  <div className="grid grid-cols-2 gap-1.5">
+                    <input
+                      type="text"
+                      aria-label="Outro dòng 1"
+                      value={wmConfig.outroLine1}
+                      onChange={(e) =>
+                        onChangeWatermark({
+                          ...wmConfig,
+                          outroLine1: e.target.value,
+                        })
+                      }
+                      placeholder="Outro dòng 1"
+                      className="px-2 py-1 text-[11px] bg-white border border-slate-200 rounded"
+                    />
+                    <input
+                      type="text"
+                      aria-label="Outro dòng 2"
+                      value={wmConfig.outroLine2}
+                      onChange={(e) =>
+                        onChangeWatermark({
+                          ...wmConfig,
+                          outroLine2: e.target.value,
+                        })
+                      }
+                      placeholder="Outro dòng 2"
+                      className="px-2 py-1 text-[11px] bg-white border border-slate-200 rounded"
+                    />
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Live Aspect-Adaptive Preview Canvas */}
+      <div className="my-3 flex items-center justify-center w-full">
+        <div
+          data-aspect-ratio={effectiveAspect}
+          className={`relative overflow-hidden border border-slate-200 shadow-sm bg-slate-100 ${
+            effectiveAspect === '16:9'
+              ? 'w-full max-w-[460px] aspect-video rounded-2xl'
+              : effectiveAspect === '1:1'
+                ? 'w-full max-w-[380px] aspect-square rounded-2xl'
+                : effectiveAspect === '4:5'
+                  ? 'w-full max-w-[330px] aspect-[4/5] rounded-2xl'
+                  : 'h-[515px] aspect-[9/16] rounded-[28px]'
+          }`}
+        >
+          <canvas
+            ref={canvasRef}
+            data-testid="kinetic-stage-canvas"
+            width={stageDims.width}
+            height={stageDims.height}
+            onPointerDown={handlePointerDown}
+            onPointerMove={handlePointerMove}
+            onPointerUp={handlePointerUp}
+            className="w-full h-full block cursor-grab active:cursor-grabbing touch-none"
+          />
+          {isExportingVideo && (
+            <div className="absolute inset-0 bg-slate-900/75 backdrop-blur-[2px] flex flex-col items-center justify-center text-white p-5 text-center">
+              <p className="text-sm font-semibold mb-2">
+                {exportStageLabel || 'Đang render Video MP4...'}
+              </p>
+              <div className="w-48 h-2 bg-white/25 rounded-full overflow-hidden mb-1.5">
+                <div
+                  className="h-full bg-indigo-400 transition-all duration-150"
+                  style={{ width: `${Math.round(exportProgress * 100)}%` }}
+                />
+              </div>
+              <span className="text-xs tabular-nums text-white/85 mb-4">
+                {Math.round(exportProgress * 100)}%
+              </span>
+              {onCancelExportVideo && (
+                <button
+                  type="button"
+                  onClick={onCancelExportVideo}
+                  className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold text-white bg-rose-600 hover:bg-rose-700 rounded-lg shadow-sm transition-colors"
+                >
+                  <Square className="w-3 h-3 fill-current" />
+                  <span>Hủy render</span>
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Transport & Scrubber */}
+      <div className="w-full pt-3 border-t border-slate-100 space-y-2.5">
+        <div className="flex items-center gap-3">
+          <input
+            type="range"
+            aria-label="Thanh tua thời gian"
+            min={0}
+            max={project.duration}
+            step={0.02}
+            value={currentTime}
+            onChange={(e) => onSeek(Number(e.target.value))}
+            className="flex-1 accent-indigo-600 h-1.5 bg-slate-200 rounded-lg cursor-pointer"
+          />
+          <span className="text-xs font-mono text-slate-600 tabular-nums shrink-0">
+            {fmtTime(currentTime)} / {fmtTime(project.duration)}
+          </span>
+        </div>
+
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
+          <select
+            aria-label="Khung hình xuất MP4"
+            disabled={isExportingVideo}
+            value={effectiveAspect}
+            onChange={(e) =>
+              onChangeMp4Settings({
+                ...mp4Settings,
+                aspectRatio: e.target.value as ExportAspectRatioId,
+              })
+            }
+            className="w-full px-2 py-1.5 text-[11px] font-medium text-slate-700 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:opacity-50"
+          >
+            {ASPECT_RATIO_OPTIONS.map((opt) => (
+              <option key={opt.id} value={opt.id}>
+                {opt.id}
+              </option>
+            ))}
+          </select>
+
+          <select
+            aria-label="Độ phân giải xuất MP4"
+            disabled={isExportingVideo}
+            value={mp4Settings.resolution}
+            onChange={(e) =>
+              onChangeMp4Settings({
+                ...mp4Settings,
+                resolution: e.target.value as Mp4ExportSettings['resolution'],
+              })
+            }
+            className="w-full px-2 py-1.5 text-[11px] font-medium text-slate-700 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:opacity-50"
+          >
+            {RESOLUTION_OPTIONS.map((opt) => {
+              const dims = resolveDimensionsForAspect(opt.width, opt.height, effectiveAspect);
+              return (
+                <option key={opt.id} value={opt.id}>
+                  {opt.id} ({dims.width}×{dims.height})
+                </option>
+              );
+            })}
+          </select>
+
+          <select
+            aria-label="Chất lượng xuất MP4"
+            disabled={isExportingVideo}
+            value={mp4Settings.quality}
+            onChange={(e) =>
+              onChangeMp4Settings({
+                ...mp4Settings,
+                quality: e.target.value as Mp4ExportSettings['quality'],
+              })
+            }
+            className="w-full px-2 py-1.5 text-[11px] font-medium text-slate-700 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:opacity-50"
+          >
+            {QUALITY_OPTIONS.map((opt) => (
+              <option key={opt.id} value={opt.id}>
+                {opt.label}
+              </option>
+            ))}
+          </select>
+
+          <select
+            aria-label="Tốc độ khung hình FPS xuất MP4"
+            disabled={isExportingVideo}
+            value={mp4Settings.fps}
+            onChange={(e) =>
+              onChangeMp4Settings({
+                ...mp4Settings,
+                fps: Number(e.target.value) as Mp4ExportSettings['fps'],
+              })
+            }
+            className="w-full px-2 py-1.5 text-[11px] font-medium text-slate-700 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:opacity-50"
+          >
+            {FPS_OPTIONS.map((fpsVal) => (
+              <option key={fpsVal} value={fpsVal}>
+                {fpsVal} fps
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={onTogglePlay}
+              disabled={isExportingVideo}
+              className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-slate-900 rounded-lg hover:bg-slate-800 disabled:opacity-50 transition-colors whitespace-nowrap"
+            >
+              {isPlaying ? (
+                <>
+                  <Pause className="w-3.5 h-3.5" />
+                  <span>Tạm dừng</span>
+                </>
+              ) : (
+                <>
+                  <Play className="w-3.5 h-3.5" />
+                  <span>Phát thử</span>
+                </>
+              )}
+            </button>
+            <button
+              type="button"
+              onClick={onRestart}
+              disabled={isExportingVideo}
+              aria-label="Phát lại từ đầu"
+              className="p-2 text-slate-600 hover:text-slate-900 border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors"
+            >
+              <RotateCcw className="w-3.5 h-3.5" />
+            </button>
+          </div>
+
+          {isExportingVideo && onCancelExportVideo ? (
+            <button
+              type="button"
+              onClick={onCancelExportVideo}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-white bg-rose-600 rounded-lg hover:bg-rose-700 transition-colors whitespace-nowrap"
+            >
+              <Square className="w-3.5 h-3.5 fill-current" />
+              <span>Hủy render</span>
+            </button>
+          ) : (
+            <button
+              type="button"
+              disabled={isExportingVideo}
+              onClick={onExportVideo}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-indigo-700 bg-indigo-50 border border-indigo-200 rounded-lg hover:bg-indigo-100 disabled:opacity-50 transition-colors whitespace-nowrap"
+            >
+              <Download className="w-3.5 h-3.5" />
+              <span>{isExportingVideo ? 'Đang render MP4...' : 'Render & Tải MP4'}</span>
+            </button>
+          )}
+        </div>
+
+        {lastExportSummary && !isExportingVideo && (
+          <div className="px-3 py-2 rounded-lg bg-emerald-50 border border-emerald-200 flex items-center justify-between gap-2 text-[11px] text-emerald-900">
+            <div className="min-w-0">
+              <div className="font-semibold truncate">
+                ✓ Đã xuất {lastExportSummary.fileName} ({lastExportSummary.outputCount} file trong Output)
+              </div>
+              {(lastExportSummary.savedPath || lastExportSummary.outputDir) && (
+                <div className="text-[10px] text-emerald-700 font-mono truncate">
+                  Lưu tại: {lastExportSummary.savedPath || lastExportSummary.outputDir}
+                </div>
+              )}
+            </div>
+            {onOpenOutputFolder && (
+              <button
+                type="button"
+                onClick={onOpenOutputFolder}
+                className="inline-flex items-center gap-1 px-2.5 py-1 text-[10px] font-semibold bg-white border border-emerald-300 text-emerald-800 rounded-md hover:bg-emerald-100 shrink-0"
+              >
+                <FolderOpen className="w-3 h-3" />
+                <span>Mở thư mục Output</span>
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+    </section>
+  );
+};
