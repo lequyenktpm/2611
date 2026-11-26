@@ -1,9 +1,60 @@
 export type ReadingCefrLevel = 'A1' | 'A2' | 'B1' | 'B2' | 'C1';
 export type ReadingLearningLang = 'en' | 'ja' | 'zh' | 'ko' | 'fr' | 'es';
+export type ReadingFormatCategory =
+  | 'auto'
+  | 'story'
+  | 'dialogue'
+  | 'mindset'
+  | 'culture'
+  | 'knowledge'
+  | 'podcast';
+
+export const READING_FORMAT_OPTIONS: Array<{
+  id: ReadingFormatCategory;
+  label: string;
+  promptHint: string;
+}> = [
+  {
+    id: 'auto',
+    label: 'Tự động luân phiên (Cuốn hút nhất)',
+    promptHint: 'Tự chọn thể loại hấp dẫn nhất (kể chuyện đời sống, bài học tư duy nhẹ nhàng, văn hóa hoặc hội thoại tự nhiên).',
+  },
+  {
+    id: 'story',
+    label: 'A. Short Story (Truyện ngắn & Kể chuyện)',
+    promptHint: 'Viết dưới dạng truyện ngắn có tình huống mở đầu tò mò, diễn biến mượt mà và cái kết đọng lại cảm xúc.',
+  },
+  {
+    id: 'dialogue',
+    label: 'B. Daily Life / Real Situations (Tình huống đời sống)',
+    promptHint: 'Tình huống thực tế hàng ngày (quán cà phê, sân bay, đi làm, du lịch) với ngôn ngữ tự nhiên như người bản xứ.',
+  },
+  {
+    id: 'mindset',
+    label: 'C. Mindset & Habits (Tư duy & Thói quen sống)',
+    promptHint: 'Bài chia sẻ truyền cảm hứng về thói quen buổi sáng, kỷ luật, tâm lý học hoặc phát triển bản thân.',
+  },
+  {
+    id: 'culture',
+    label: 'D. Culture & Travel (Văn hóa & Khám phá bản xứ)',
+    promptHint: 'Giới thiệu nét đẹp văn hóa, ẩm thực, phong tục hoặc trải nghiệm du lịch đặc sắc của quốc gia bản xứ.',
+  },
+  {
+    id: 'knowledge',
+    label: 'E. Mini Essay / Science (Kiến thức ngắn dễ hiểu)',
+    promptHint: 'Giải thích một hiện tượng thú vị trong cuộc sống, công nghệ hoặc khoa học thường thức bằng văn phong rõ ràng.',
+  },
+  {
+    id: 'podcast',
+    label: 'F. Calm Podcast / Monologue (Tự sự Podcast chậm rãi)',
+    promptHint: 'Giọng điệu tâm sự podcast nhẹ nhàng, ấm áp, nhịp câu êm ái cực hợp nghe thư giãn & đọc theo chữ.',
+  },
+];
 
 export interface ReadingWebPromptOptions {
   mode: 'web-url' | 'topic';
   learningLanguage?: ReadingLearningLang;
+  formatPreference?: ReadingFormatCategory;
   url?: string;
   sourceTitle?: string;
   sourceText?: string;
@@ -314,6 +365,10 @@ export function buildReadingWebAiPrompt(opts: ReadingWebPromptOptions): string {
   const cleanSource = (opts.sourceText || '').trim().slice(0, 8500);
   const cleanTopic = (opts.topic || '').trim();
 
+  const formatMeta =
+    READING_FORMAT_OPTIONS.find((f) => f.id === (opts.formatPreference || 'auto')) ||
+    READING_FORMAT_OPTIONS[0];
+
   const sourceBlock =
     opts.mode === 'web-url'
       ? cleanSource
@@ -336,6 +391,9 @@ Bạn là Chuyên gia thiết kế giáo trình luyện đọc ${meta.nameVi} (R
 
 # NHIỆM VỤ
 ${sourceBlock}
+
+# THỂ LOẠI & PHONG CÁCH BÀI ĐỌC
+- Định dạng ưu tiên: **${formatMeta.label}** — ${formatMeta.promptHint}
 
 # YÊU CẦU NGÔN NGỮ, TRÌNH ĐỘ & ĐỘ DÀI
 - Ngôn ngữ bài đọc: **${meta.nameVi}** (${meta.nativeName}).

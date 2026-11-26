@@ -990,12 +990,54 @@ export function spawnTrackedFfmpeg(
   });
 }
 
-export type StudioDefaultAudioPreset = 'lofi-calm' | 'soft-study' | 'soft-rain' | 'cafe-room';
+export type StudioDefaultAudioPreset =
+  | 'ocean-waves'
+  | 'forest-stream'
+  | 'gentle-piano'
+  | 'wind-chimes'
+  | 'sunset-ambient'
+  | 'lofi-calm'
+  | 'soft-study'
+  | 'soft-rain'
+  | 'cafe-room';
 
 const STUDIO_DEFAULT_AUDIO_SPECS: Record<
   StudioDefaultAudioPreset,
   { lavfi: string; af: string; duration: number }
 > = {
+  'ocean-waves': {
+    // Slow rolling surf wave swell over warm brown ocean noise
+    lavfi: 'anoisesrc=color=brown:r=44100:a=0.72',
+    af: 'lowpass=f=900,volume=0.52+0.48*sin(2*PI*0.14*t):eval=frame,afade=t=in:st=0:d=1.4,afade=t=out:st=22.4:d=1.6,volume=0.38',
+    duration: 24,
+  },
+  'forest-stream': {
+    // Gentle babbling brook & soft pine breeze
+    lavfi: 'anoisesrc=color=pink:r=44100:a=0.45',
+    af: 'highpass=f=280,lowpass=f=1900,volume=0.72+0.28*sin(2*PI*0.26*t):eval=frame,afade=t=in:st=0:d=1.2,afade=t=out:st=18.5:d=1.5,volume=0.22',
+    duration: 20,
+  },
+  'gentle-piano': {
+    // Soft bell-like Rhodes/piano Cmaj9 arpeggio with comma-free exponential swells
+    lavfi:
+      'aevalsrc=0.18*sin(2*PI*261.63*t)*exp(-2.6*(1-cos(2*PI*0.25*t)))+0.14*sin(2*PI*329.63*t)*exp(-2.6*(1-cos(2*PI*0.25*(t-1.0))))+0.12*sin(2*PI*392.00*t)*exp(-2.6*(1-cos(2*PI*0.25*(t-2.0))))+0.10*sin(2*PI*493.88*t)*exp(-2.6*(1-cos(2*PI*0.25*(t-3.0)))):s=44100',
+    af: 'lowpass=f=1350,aecho=0.8:0.75:260:0.4,afade=t=in:st=0:d=1.2,afade=t=out:st=22.4:d=1.6,volume=0.38',
+    duration: 24,
+  },
+  'wind-chimes': {
+    // Tranquil Zen pentatonic bamboo wind chimes with comma-free exponential swells
+    lavfi:
+      'aevalsrc=0.14*sin(2*PI*523.25*t)*exp(-3.4*(1-cos(2*PI*0.2*t)))+0.11*sin(2*PI*659.25*t)*exp(-3.4*(1-cos(2*PI*0.2*(t-1.3))))+0.10*sin(2*PI*783.99*t)*exp(-3.4*(1-cos(2*PI*0.2*(t-2.6))))+0.08*sin(2*PI*1046.5*t)*exp(-3.4*(1-cos(2*PI*0.2*(t-3.8)))):s=44100',
+    af: 'lowpass=f=2100,aecho=0.85:0.8:320:0.45,afade=t=in:st=0:d=1.2,afade=t=out:st=22.4:d=1.6,volume=0.30',
+    duration: 24,
+  },
+  'sunset-ambient': {
+    // Deep warm meditative sunset chord pad
+    lavfi:
+      'aevalsrc=0.16*sin(2*PI*174.61*t)+0.12*sin(2*PI*220*t)+0.10*sin(2*PI*261.63*t)+0.08*sin(2*PI*329.63*t)*(0.55+0.45*sin(2*PI*0.18*t)):s=44100',
+    af: 'lowpass=f=900,aecho=0.8:0.7:340:0.35,afade=t=in:st=0:d=1.4,afade=t=out:st=22.4:d=1.6,volume=0.34',
+    duration: 24,
+  },
   'lofi-calm': {
     // Gentle warm ambient pad cycling Cmaj7 / Fmaj7 overtones
     lavfi:

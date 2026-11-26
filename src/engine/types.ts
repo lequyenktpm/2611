@@ -13,6 +13,12 @@ export type BackgroundFitMode = 'cover' | 'contain';
 export type BackgroundMediaKind = 'image' | 'video' | 'preset';
 
 export type BackgroundPresetId =
+  | 'ocean-shore-waves'
+  | 'golden-sea-sunset'
+  | 'calm-mountain-lake'
+  | 'emerald-forest-stream'
+  | 'cherry-blossom-breeze'
+  | 'aurora-night-sky'
   | 'cozy-rain-cafe'
   | 'night-study-desk'
   | 'misty-forest-dusk'

@@ -64,7 +64,9 @@ import {
   cleanReadingWorksheetInput,
   computeReadingTargetLength,
   parseReadingWebAiResponse,
+  READING_FORMAT_OPTIONS,
   READING_STARTER_BY_LANG,
+  ReadingFormatCategory,
   ReadingLearningLang,
 } from '../engine/readingPromptBuilder';
 import {
@@ -907,11 +909,11 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
   const [kmPreviewTimeSec, setKmPreviewTimeSec] = useState(0);
   const [kmMusicFile, setKmMusicFile] = useState<File | null>(null);
   const [kmSfxFile, setKmSfxFile] = useState<File | null>(null);
-  const [kmMusicPreset, setKmMusicPreset] = useState<'soft-rain' | 'lofi-calm' | 'soft-study' | 'none'>(
-    () => initialEduSaved?.kmMusicPreset || 'soft-rain',
+  const [kmMusicPreset, setKmMusicPreset] = useState<StudioBgmPresetId>(
+    () => (initialEduSaved?.kmMusicPreset as StudioBgmPresetId) || 'soft-rain',
   );
-  const [kmSfxPreset, setKmSfxPreset] = useState<'soft-rain' | 'cafe-room' | 'none'>(
-    () => initialEduSaved?.kmSfxPreset || 'soft-rain',
+  const [kmSfxPreset, setKmSfxPreset] = useState<StudioBgmPresetId>(
+    () => (initialEduSaved?.kmSfxPreset as StudioBgmPresetId) || 'soft-rain',
   );
   const [kmVoiceFile, setKmVoiceFile] = useState<File | null>(null);
   const [kmVoiceUrl, setKmVoiceUrl] = useState<string | null>(null);
@@ -1332,6 +1334,7 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
       if (typeof s.kmSfxVol === 'number') setKmSfxVol(s.kmSfxVol);
       if (typeof s.kmVoiceVol === 'number') setKmVoiceVol(s.kmVoiceVol);
       if (s.readingLearningLang) setReadingLearningLang(s.readingLearningLang);
+      if (s.readingFormat) setReadingFormat(s.readingFormat);
       if (s.readingAiLevel) setReadingAiLevel(s.readingAiLevel);
       if (s.readingAiTopic !== undefined) setReadingAiTopic(s.readingAiTopic);
       if (s.readingPaletteId) setReadingPaletteId(s.readingPaletteId as ReadingBookPalette['id']);
@@ -1411,6 +1414,7 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
       setKmSfxVol(DEFAULT_BGM_VOLUME);
       setKmVoiceVol(1.0);
       setReadingLearningLang('en');
+      setReadingFormat('auto');
       setReadingAiLevel('B1');
       setReadingAiTopic('');
       setReadingPaletteId('Sunny Yellow');
@@ -1452,6 +1456,23 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
     };
   }, []);
 
+  const [readingFormat, setReadingFormat] = useState<ReadingFormatCategory>(
+    () => initialEduSaved?.readingFormat || 'auto',
+  );
+  const [readingAiTopic, setReadingAiTopic] = useState(() => initialEduSaved?.readingAiTopic ?? '');
+  const [readingAiLevel, setReadingAiLevel] = useState<string>(
+    () => initialEduSaved?.readingAiLevel || 'B1',
+  );
+  const [readingAiLength, setReadingAiLength] = useState<number>(() =>
+    computeReadingTargetLength(
+      (initialEduSaved?.readingLearningLang || 'en') as ReadingLearningLang,
+      typeof initialEduSaved?.readingDurationMinutes === 'number' &&
+        initialEduSaved.readingDurationMinutes > 0
+        ? initialEduSaved.readingDurationMinutes
+        : 1,
+    ).count,
+  );
+
   const hasMountedPersistRef = useRef(false);
   useEffect(() => {
     if (!hasMountedPersistRef.current) {
@@ -1478,6 +1499,7 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
         kmSfxVol,
         kmVoiceVol,
         readingLearningLang,
+        readingFormat,
         readingAiLevel,
         readingAiTopic,
         readingPaletteId,
@@ -1526,6 +1548,7 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
     kmSfxVol,
     kmVoiceVol,
     readingLearningLang,
+    readingFormat,
     readingAiLevel,
     readingAiTopic,
     readingPaletteId,
@@ -1560,23 +1583,10 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
     rawText: string;
   } | null>(null);
   const [readingWebPromptMode, setReadingWebPromptMode] = useState<'web-url' | 'topic'>('topic');
-  const [isWebPromptOpen, setIsWebPromptOpen] = useState<boolean>(false);
+  const [isWebPromptOpen, setIsWebPromptOpen] = useState<boolean>(true);
   const [copiedReadingPrompt, setCopiedReadingPrompt] = useState<boolean>(false);
   const [pastedReadingAiResponse, setPastedReadingAiResponse] = useState<string>('');
   const [pastedReadingAiError, setPastedReadingAiError] = useState<string | null>(null);
-  const [readingAiTopic, setReadingAiTopic] = useState(() => initialEduSaved?.readingAiTopic ?? '');
-  const [readingAiLevel, setReadingAiLevel] = useState<string>(
-    () => initialEduSaved?.readingAiLevel || 'B1',
-  );
-  const [readingAiLength, setReadingAiLength] = useState<number>(() =>
-    computeReadingTargetLength(
-      (initialEduSaved?.readingLearningLang || 'en') as ReadingLearningLang,
-      typeof initialEduSaved?.readingDurationMinutes === 'number' &&
-        initialEduSaved.readingDurationMinutes > 0
-        ? initialEduSaved.readingDurationMinutes
-        : 1,
-    ).count,
-  );
   const readingLevelOptions = useMemo(
     () => getLevelsForLearningLanguage(readingLearningLang),
     [readingLearningLang],
@@ -1806,6 +1816,7 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
       buildReadingWebAiPrompt({
         mode: readingWebPromptMode,
         learningLanguage: readingLearningLang as ReadingLearningLang,
+        formatPreference: readingFormat,
         url: readingUrl || scrapedWebSource?.url,
         sourceTitle: scrapedWebSource?.title,
         sourceText: scrapedWebSource?.rawText,
@@ -1817,6 +1828,7 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
     [
       readingWebPromptMode,
       readingLearningLang,
+      readingFormat,
       readingUrl,
       scrapedWebSource,
       readingAiTopic,
@@ -1897,7 +1909,12 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
 
     renderCurrent();
 
-    if (readingBackground && (readingBackground.kind === 'video' || readingBackground.dataUrl)) {
+    if (
+      readingBackground &&
+      (readingBackground.kind === 'video' ||
+        readingBackground.kind === 'preset' ||
+        readingBackground.dataUrl)
+    ) {
       void (async () => {
         await ensureProjectAssetsLoaded({
           id: 'reading-bg-loader',
@@ -2272,8 +2289,9 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
     setAlignError(null);
     setIsAligning(true);
     setReadingTtsProgress(5);
+    const effectiveAlignMode = readingText.trim() ? alignMode : 'whisper';
     setReadingTtsStageLabel(
-      alignMode === 'fast-forced'
+      effectiveAlignMode === 'fast-forced'
         ? 'Đang căn nhịp siêu tốc theo kịch bản (Fast Forced Align)...'
         : 'Đang tải model Whisper & căn chỉnh từng từ...',
     );
@@ -2284,14 +2302,14 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
           lang: alignLang,
           model: alignModel,
           referenceText: readingText,
-          alignMode,
+          alignMode: effectiveAlignMode,
         },
         (pct, label) => {
           setReadingTtsProgress(pct);
           setReadingTtsStageLabel(label);
         },
       );
-      if (alignMode === 'whisper' && data.text?.trim() && !readingText.trim()) {
+      if (data.text?.trim() && !readingText.trim()) {
         setReadingText(data.text.trim());
       }
       if (alignAudioRef.current && Number.isFinite(alignAudioRef.current.duration)) {
@@ -2506,6 +2524,7 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
           body: JSON.stringify({
             mode: 'adapt-url',
             learningLanguage: readingLearningLang,
+            formatPreference: readingFormat,
             level: readingAiLevel,
             wordCount: readingAiLength,
             durationMinutes: readingDurationMinutes,
@@ -2573,6 +2592,7 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
         body: JSON.stringify({
           mode: 'generate',
           learningLanguage: readingLearningLang,
+          formatPreference: readingFormat,
           topic: readingAiTopic.trim(),
           level: readingAiLevel,
           wordCount: readingAiLength,
@@ -3110,22 +3130,19 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                     <div className="space-y-1.5">
                       <label className="block text-[10px] font-semibold text-slate-600">
-                        Nhạc nền BGM mặc định {kmMusicFile ? '(Đang dùng file tải lên)' : ''}
+                        Nhạc nền BGM không bản quyền {kmMusicFile ? '(Đang dùng file tải lên)' : ''}
                       </label>
                       <select
                         disabled={Boolean(kmMusicFile)}
                         value={kmMusicPreset}
-                        onChange={(e) =>
-                          setKmMusicPreset(
-                            e.target.value as 'soft-rain' | 'lofi-calm' | 'soft-study' | 'none',
-                          )
-                        }
+                        onChange={(e) => setKmMusicPreset(e.target.value as StudioBgmPresetId)}
                         className="w-full px-2.5 py-1.5 text-xs bg-white border border-slate-200 rounded-lg disabled:opacity-50"
                       >
-                        <option value="soft-rain">Soft Rain Mặc định (Mưa êm dịu)</option>
-                        <option value="lofi-calm">Lo-fi Chill (Warm Pad)</option>
-                        <option value="soft-study">Soft Study Pad (Nhẹ nhàng)</option>
-                        <option value="none">Không dùng BGM mặc định</option>
+                        {STUDIO_BGM_PRESETS.map((p) => (
+                          <option key={p.id} value={p.id}>
+                            {p.label}
+                          </option>
+                        ))}
                       </select>
                       {!kmMusicFile && kmMusicPreset !== 'none' && (
                         <audio
@@ -3137,19 +3154,19 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
                     </div>
                     <div className="space-y-1.5">
                       <label className="block text-[10px] font-semibold text-slate-600">
-                        Ambient SFX mặc định {kmSfxFile ? '(Đang dùng file tải lên)' : ''}
+                        Âm thanh thiên nhiên / Ambient không bản quyền {kmSfxFile ? '(Đang dùng file tải lên)' : ''}
                       </label>
                       <select
                         disabled={Boolean(kmSfxFile)}
                         value={kmSfxPreset}
-                        onChange={(e) =>
-                          setKmSfxPreset(e.target.value as 'soft-rain' | 'cafe-room' | 'none')
-                        }
+                        onChange={(e) => setKmSfxPreset(e.target.value as StudioBgmPresetId)}
                         className="w-full px-2.5 py-1.5 text-xs bg-white border border-slate-200 rounded-lg disabled:opacity-50"
                       >
-                        <option value="soft-rain">Mưa nhẹ (Soft Rain)</option>
-                        <option value="cafe-room">Không gian quán cà phê (Cafe Room)</option>
-                        <option value="none">Không dùng SFX mặc định</option>
+                        {STUDIO_BGM_PRESETS.map((p) => (
+                          <option key={p.id} value={p.id}>
+                            {p.label}
+                          </option>
+                        ))}
                       </select>
                       {!kmSfxFile && kmSfxPreset !== 'none' && (
                         <audio
@@ -3726,12 +3743,12 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
                     compact
                   />
 
-                  {/* Topic Hint (Optional) + Language + Level + Duration + Target Length */}
+                  {/* Topic Hint (Optional) + Genre/Format + Language + Level */}
                   <div className="grid grid-cols-1 sm:grid-cols-12 gap-2.5 pt-2 border-t border-indigo-100">
                     <div className="sm:col-span-6">
                       <div className="flex items-center justify-between gap-2 mb-1">
                         <label htmlFor="reading-ai-topic" className="text-[11px] font-semibold text-slate-700">
-                          Chủ đề / Gợi ý (tùy chọn — bỏ trống AI tự chọn)
+                          Chủ đề / Gợi ý (bỏ trống AI tự chọn)
                         </label>
                         <PasteButton
                           size="sm"
@@ -3751,7 +3768,24 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
                         className="w-full px-2.5 py-1.5 text-xs bg-white border border-slate-200 rounded-lg"
                       />
                     </div>
-                    <div className="sm:col-span-3">
+                    <div className="sm:col-span-6">
+                      <label htmlFor="reading-format-select" className="block text-[11px] font-semibold text-slate-700 mb-1">
+                        Thể loại / Phong cách bài đọc (A–F)
+                      </label>
+                      <select
+                        id="reading-format-select"
+                        value={readingFormat}
+                        onChange={(e) => setReadingFormat(e.target.value as ReadingFormatCategory)}
+                        className="w-full px-2.5 py-1.5 text-xs bg-white border border-slate-200 rounded-lg font-medium"
+                      >
+                        {READING_FORMAT_OPTIONS.map((fmt) => (
+                          <option key={fmt.id} value={fmt.id}>
+                            {fmt.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="sm:col-span-6">
                       <label htmlFor="reading-learning-lang" className="block text-[11px] font-semibold text-slate-700 mb-1">
                         Ngôn ngữ đọc
                       </label>
@@ -3791,7 +3825,7 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
                         ))}
                       </select>
                     </div>
-                    <div className="sm:col-span-3">
+                    <div className="sm:col-span-6">
                       <label htmlFor="reading-ai-level" className="block text-[11px] font-semibold text-slate-700 mb-1">
                         Trình độ (Dễ → Khó)
                       </label>
@@ -3938,12 +3972,12 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
                     </div>
                   )}
 
-                  {/* External Web AI Prompt Builder & Paste Response Box */}
+                  {/* External Web AI Prompt Builder & Paste Response Box (Side-by-side like AI Creator) */}
                   {isWebPromptOpen && (
                     <div className="p-3 rounded-xl bg-white border border-indigo-200 space-y-2.5 text-xs">
                       <div className="flex flex-wrap items-center justify-between gap-2">
                         <div className="flex flex-wrap items-center gap-1.5">
-                          <span className="font-bold text-indigo-950">Prompt cho ChatGPT / Gemini / Claude Web:</span>
+                          <span className="font-bold text-indigo-950">Tạo bằng Web AI (ChatGPT / Gemini / Claude Web):</span>
                           <button
                             type="button"
                             onClick={() => setReadingWebPromptMode('topic')}
@@ -3953,7 +3987,7 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
                                 : 'bg-slate-50 border-slate-200 text-slate-600'
                             }`}
                           >
-                            Theo Chủ đề (Tự nghĩ / Theo gợi ý)
+                            Theo Chủ đề &amp; Thể loại
                           </button>
                           <button
                             type="button"
@@ -3977,50 +4011,60 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
                         </button>
                       </div>
 
-                      <textarea
-                        readOnly
-                        aria-label="Prompt tạo bài đọc cho Web AI"
-                        rows={5}
-                        value={readingWebAiPrompt}
-                        className="w-full p-2 text-[11px] font-mono bg-slate-50 border border-slate-200 rounded-lg text-slate-700"
-                      />
-
-                      <div className="space-y-1.5">
-                        <div className="flex items-center justify-between gap-2">
-                          <label htmlFor="paste-web-ai-reading" className="text-[11px] font-semibold text-slate-700">
-                            Dán kết quả JSON (hoặc đoạn văn) từ Web AI vào đây rồi bấm Áp dụng:
-                          </label>
-                          <PasteButton
-                            onPaste={(txt) => {
-                              setPastedReadingAiResponse(txt);
-                              setPastedReadingAiError(null);
-                            }}
-                            title="Dán nhanh kết quả JSON / đoạn văn"
+                      <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+                        <div className="space-y-1">
+                          <div className="flex items-center justify-between text-[11px] font-semibold text-slate-700">
+                            <span>1. Prompt tự động theo ngôn ngữ · trình độ · {readingDurationMinutes} phút</span>
+                            <span className="text-[10px] font-medium text-indigo-600">
+                              {READING_FORMAT_OPTIONS.find((f) => f.id === readingFormat)?.id.toUpperCase() || 'AUTO'}
+                            </span>
+                          </div>
+                          <textarea
+                            readOnly
+                            aria-label="Prompt tạo bài đọc cho Web AI"
+                            rows={6}
+                            value={readingWebAiPrompt}
+                            className="w-full p-2 text-[11px] font-mono bg-slate-50 border border-slate-200 rounded-lg text-slate-700"
                           />
                         </div>
-                        <textarea
-                          id="paste-web-ai-reading"
-                          rows={3}
-                          value={pastedReadingAiResponse}
-                          onChange={(e) => {
-                            setPastedReadingAiResponse(e.target.value);
-                            setPastedReadingAiError(null);
-                          }}
-                          placeholder='Dán {"title": "...", "topicBadge": "...", "text": "..."} hoặc đoạn văn bản bài đọc...'
-                          className="w-full p-2 text-[11px] font-mono bg-slate-50 border border-slate-200 rounded-lg"
-                        />
-                        {pastedReadingAiError && (
-                          <p className="text-[11px] text-rose-700">{pastedReadingAiError}</p>
-                        )}
-                        <div className="flex justify-end">
-                          <button
-                            type="button"
-                            onClick={handleApplyPastedReadingAi}
-                            className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-[11px] font-semibold text-white bg-emerald-600 rounded-lg hover:bg-emerald-700"
-                          >
-                            <CheckCircle2 className="w-3.5 h-3.5" />
-                            <span>Áp dụng vào Sách</span>
-                          </button>
+
+                        <div className="space-y-1.5 flex flex-col">
+                          <div className="flex items-center justify-between gap-2">
+                            <label htmlFor="paste-web-ai-reading" className="text-[11px] font-semibold text-slate-700">
+                              2. Dán kết quả JSON (hoặc đoạn văn) từ Web AI rồi bấm Áp dụng:
+                            </label>
+                            <PasteButton
+                              onPaste={(txt) => {
+                                setPastedReadingAiResponse(txt);
+                                setPastedReadingAiError(null);
+                              }}
+                              title="Dán nhanh kết quả JSON / đoạn văn"
+                            />
+                          </div>
+                          <textarea
+                            id="paste-web-ai-reading"
+                            rows={4}
+                            value={pastedReadingAiResponse}
+                            onChange={(e) => {
+                              setPastedReadingAiResponse(e.target.value);
+                              setPastedReadingAiError(null);
+                            }}
+                            placeholder='Dán {"title": "...", "topicBadge": "...", "text": "..."} hoặc đoạn văn bản bài đọc...'
+                            className="w-full flex-1 p-2 text-[11px] font-mono bg-slate-50 border border-slate-200 rounded-lg"
+                          />
+                          {pastedReadingAiError && (
+                            <p className="text-[11px] text-rose-700">{pastedReadingAiError}</p>
+                          )}
+                          <div className="flex justify-end">
+                            <button
+                              type="button"
+                              onClick={handleApplyPastedReadingAi}
+                              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-[11px] font-semibold text-white bg-emerald-600 rounded-lg hover:bg-emerald-700"
+                            >
+                              <CheckCircle2 className="w-3.5 h-3.5" />
+                              <span>Áp dụng vào Sách</span>
+                            </button>
+                          </div>
                         </div>
                       </div>
                     </div>
@@ -4254,7 +4298,7 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
                           </div>
                         </div>
 
-                        <div className="grid grid-cols-3 gap-1.5">
+                        <div className="grid grid-cols-3 gap-1.5 max-h-[168px] overflow-y-auto pr-1">
                           {BACKGROUND_PRESETS.map((preset) => {
                             const active =
                               readingBackground?.kind === 'preset' &&

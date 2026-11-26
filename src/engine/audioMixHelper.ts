@@ -1,15 +1,30 @@
 import { SceneElement, WordTiming } from './types';
 
-export type StudioBgmPresetId = 'none' | 'lofi-calm' | 'soft-study' | 'cafe-room' | 'soft-rain';
+export type StudioBgmPresetId =
+  | 'none'
+  | 'ocean-waves'
+  | 'forest-stream'
+  | 'gentle-piano'
+  | 'wind-chimes'
+  | 'sunset-ambient'
+  | 'soft-rain'
+  | 'lofi-calm'
+  | 'soft-study'
+  | 'cafe-room';
 
 export const DEFAULT_BGM_PRESET: StudioBgmPresetId = 'soft-rain';
 export const DEFAULT_BGM_VOLUME = 0.03;
 
 export const STUDIO_BGM_PRESETS: Array<{ id: StudioBgmPresetId; label: string }> = [
   { id: 'soft-rain', label: 'Soft Rain (Mưa êm dịu)' },
-  { id: 'lofi-calm', label: 'Lofi Calm (Nhẹ nhàng)' },
-  { id: 'soft-study', label: 'Soft Study (Tập trung)' },
-  { id: 'cafe-room', label: 'Cafe Ambience (Quán cà phê)' },
+  { id: 'ocean-waves', label: 'Ocean Waves (Sóng biển rì rào êm ả)' },
+  { id: 'forest-stream', label: 'Forest Stream (Suối rừng & gió nhẹ)' },
+  { id: 'gentle-piano', label: 'Gentle Piano (Piano nhẹ nhàng thư giãn)' },
+  { id: 'wind-chimes', label: 'Zen Wind Chimes (Chuông gió thiền tĩnh)' },
+  { id: 'sunset-ambient', label: 'Sunset Ambient (Âm nền hoàng hôn ấm)' },
+  { id: 'lofi-calm', label: 'Lofi Calm (Warm Pad nhẹ)' },
+  { id: 'soft-study', label: 'Soft Study (Tập trung đọc sách)' },
+  { id: 'cafe-room', label: 'Cafe Ambience (Quán cà phê êm)' },
   { id: 'none', label: 'Không nhạc nền' },
 ];
 

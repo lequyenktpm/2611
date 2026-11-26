@@ -6,6 +6,7 @@ import type {
   ReelCreationMode,
   ReelMode,
 } from '../engine/englishReelsEngine';
+import type { ReadingFormatCategory } from '../engine/readingPromptBuilder';
 import type {
   ExportAspectRatioId,
   ExportFpsOption,
@@ -179,8 +180,8 @@ export interface PersistedStudioSettings {
     kmSubSize?: 'Nhỏ' | 'Vừa' | 'Lớn';
     kmHighlightColor?: string;
     kmEffect?: string;
-    kmMusicPreset?: 'soft-rain' | 'lofi-calm' | 'soft-study' | 'none';
-    kmSfxPreset?: 'soft-rain' | 'cafe-room' | 'none';
+    kmMusicPreset?: StudioBgmPresetId;
+    kmSfxPreset?: StudioBgmPresetId;
     kmMuteOriginal?: boolean;
     kmRemoveDialogue?: boolean;
     kmVoicePriority?: boolean;
@@ -193,6 +194,7 @@ export interface PersistedStudioSettings {
     readingBookFrame?: string;
     readingPointerStyle?: string;
     readingLearningLang?: LearningLanguageId;
+    readingFormat?: ReadingFormatCategory;
     readingAiLevel?: string;
     readingAiTopic?: string;
     readingDurationMinutes?: number;

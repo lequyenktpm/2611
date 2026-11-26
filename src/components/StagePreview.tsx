@@ -216,7 +216,11 @@ export const StagePreview: React.FC<StagePreviewProps> = ({
 
   useEffect(() => {
     let active = true;
-    if (project.backgroundImage?.dataUrl || project.backgroundImage?.videoUrl) {
+    if (
+      project.backgroundImage?.dataUrl ||
+      project.backgroundImage?.videoUrl ||
+      project.backgroundImage?.kind === 'preset'
+    ) {
       void ensureProjectAssetsLoaded(project).then(() => {
         if (active) setAssetVersion((v) => v + 1);
       });
@@ -228,6 +232,7 @@ export const StagePreview: React.FC<StagePreviewProps> = ({
     project.backgroundImage?.dataUrl,
     project.backgroundImage?.videoUrl,
     project.backgroundImage?.kind,
+    project.backgroundImage?.presetId,
   ]);
 
   useEffect(() => {
@@ -577,7 +582,7 @@ export const StagePreview: React.FC<StagePreviewProps> = ({
             </div>
           </div>
 
-          <div className="flex flex-wrap items-center gap-1">
+          <div className="flex flex-wrap items-center gap-1 max-h-[112px] overflow-y-auto pr-1">
             <button
               type="button"
               onClick={() => onChangeBackgroundImage(undefined)}

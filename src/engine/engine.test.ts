@@ -120,8 +120,10 @@ import {
   cleanReadingWorksheetInput,
   computeReadingTargetLength,
   parseReadingWebAiResponse,
+  READING_FORMAT_OPTIONS,
   READING_STARTER_BY_LANG,
 } from './readingPromptBuilder';
+import { BACKGROUND_PRESETS } from './backgroundPresets';
 import {
   buildEstimatedReadingWords,
   computeReadingTimelineMetrics,
@@ -137,6 +139,7 @@ import {
   encodeStereoFloatChannelsToWavArrayBuffer,
   extractCountdownWindowsFromElements,
   shiftReadingWordsForIntro,
+  STUDIO_BGM_PRESETS,
 } from './audioMixHelper';
 import {
   buildSourceSegmentsFromCues,
@@ -1471,12 +1474,15 @@ test('readingPromptBuilder generates web-url & topic prompts and parses fenced J
 
   const topicPrompt = buildReadingWebAiPrompt({
     mode: 'topic',
+    formatPreference: 'story',
     topic: 'Ordering coffee naturally',
     level: 'B1',
     wordCount: 120,
   });
   assert.ok(topicPrompt.includes('Ordering coffee naturally'));
   assert.ok(topicPrompt.includes('CEFR B1'));
+  assert.ok(topicPrompt.includes('Short Story'));
+  assert.equal(READING_FORMAT_OPTIONS.length, 7);
 
   const fencedJson = parseReadingWebAiResponse(
     '```json\n{"title":"Morning Focus","topicBadge":"CEFR B1","level":"B1","text":"Line one.\\nLine two."}\n```',
@@ -1502,20 +1508,28 @@ test('readingPromptBuilder generates web-url & topic prompts and parses fenced J
   assert.ok(plain!.text.includes('barista clearly'));
 });
 
-test('eduStudioEffects provides 12 palettes, 12 book/plain frames, 13 pointer styles (incl. highlight-only), non-overlapping outro metrics, and multi-page pagination', () => {
-  assert.equal(READING_BOOK_PALETTES.length, 12);
+test('eduStudioEffects provides 18 palettes, 18 book/plain frames, 20 pointer styles (incl. highlight-only), nature backgrounds/audio, non-overlapping outro metrics, and multi-page pagination', () => {
+  assert.equal(READING_BOOK_PALETTES.length, 18);
   assert.ok(READING_BOOK_PALETTES.some((p) => p.id === 'Sakura Blossom'));
+  assert.ok(READING_BOOK_PALETTES.some((p) => p.id === 'Ocean Wave'));
   assert.ok(READING_BOOK_PALETTES.some((p) => p.id === 'Midnight Ink' && p.isDark));
 
-  assert.equal(READING_BOOK_FRAMES.length, 12);
+  assert.equal(READING_BOOK_FRAMES.length, 18);
   assert.ok(READING_BOOK_FRAMES.some((f) => f.id === 'plain'));
+  assert.ok(READING_BOOK_FRAMES.some((f) => f.id === 'plain-ocean-float'));
   assert.ok(READING_BOOK_FRAMES.some((f) => f.id === 'plain-glass'));
   assert.ok(READING_BOOK_FRAMES.some((f) => f.id === 'plain-kinetic'));
   assert.ok(READING_BOOK_FRAMES.some((f) => f.id === 'washi-scroll'));
 
-  assert.equal(READING_POINTER_STYLES.length, 13);
+  assert.equal(READING_POINTER_STYLES.length, 20);
   assert.ok(READING_POINTER_STYLES.some((p) => p.id === 'none'));
   assert.ok(READING_POINTER_STYLES.some((p) => p.id === 'calligraphy-brush'));
+  assert.ok(READING_POINTER_STYLES.some((p) => p.id === 'water-drop'));
+
+  assert.ok(BACKGROUND_PRESETS.length >= 12);
+  assert.ok(BACKGROUND_PRESETS.some((b) => b.id === 'ocean-shore-waves' && Boolean(b.assetUrl)));
+  assert.ok(STUDIO_BGM_PRESETS.length >= 10);
+  assert.ok(STUDIO_BGM_PRESETS.some((a) => a.id === 'ocean-waves'));
 
   const words = [
     { word: 'Practice', start: 0.2, end: 1.1 },

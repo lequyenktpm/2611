@@ -2884,6 +2884,21 @@ async function startServer(): Promise<void> {
               ? 'Write natural Korean (한국어) ONLY — do NOT add romanization inside the reading text.'
               : `Write natural ${langMeta.name} ONLY.`;
 
+      const rawFormat =
+        typeof req.body?.formatPreference === 'string'
+          ? req.body.formatPreference.trim().toLowerCase()
+          : 'auto';
+      const formatMap: Record<string, string> = {
+        auto: 'Pick the most engaging reading style automatically (short story, real-life dialogue, mindset reflection, or culture).',
+        story: 'Write as a compelling short story with a curiosity hook, smooth flow, and a memorable ending.',
+        dialogue: 'Write as a natural everyday life situation or dialogue people genuinely experience.',
+        mindset: 'Write an inspiring, practical mindset & daily habits reflection.',
+        culture: 'Write an engaging cultural/travel discovery piece showcasing local life or traditions.',
+        knowledge: 'Write a clear, fascinating mini essay explaining an everyday phenomenon or science idea.',
+        podcast: 'Write in a warm, calm, soothing podcast monologue tone ideal for relaxed read-along listening.',
+      };
+      const formatInstruction = formatMap[rawFormat] || formatMap.auto;
+
       const topicInstruction = topic
         ? `about: "${topic}"`
         : `on an engaging, high-retention daily life, mindset, or storytelling topic chosen autonomously by you that fits level ${level}`;
@@ -2892,6 +2907,7 @@ async function startServer(): Promise<void> {
         mode === 'adapt-url'
           ? `You are an expert ${langMeta.name} curriculum designer for Read-Along karaoke videos.
 Convert and adapt the scraped webpage content below into a clean, engaging ${langMeta.name} read-along passage tailored to proficiency level "${level}".
+Genre / Style guidance: ${formatInstruction}
 ${furiganaWarning}
 CRITICAL: Strip out any worksheet scaffolding or exercise labels (such as "Practice Reading English Exercises", "## Exercise 1", "Part 1", "Task 1", navigation menus, or instructions). Keep ONLY the clean story title and body sentences.
 Target total length: ${lengthDesc}${hasDuration ? ` (for a ~${durationRaw} minute video)` : ''}.
@@ -2909,6 +2925,7 @@ Return ONLY valid JSON with keys:
 }`
           : `You are an expert ${langMeta.name} curriculum designer for Read-Along karaoke videos.
 Write an original, engaging ${langMeta.name} read-along passage ${topicInstruction}.
+Genre / Style guidance: ${formatInstruction}
 ${furiganaWarning}
 CRITICAL: Do NOT include worksheet labels like "Practice Reading Exercises", "Exercise 1", "Part 1", or markdown headings inside the title or body text.
 Target proficiency level: ${level}.

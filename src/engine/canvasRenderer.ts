@@ -8,7 +8,7 @@ import {
 } from './animationMath';
 import { getCustomComponentByVariant } from './customComponentStore';
 import { VectorPrimitive } from './customComponentTypes';
-import { drawPresetBackground } from './backgroundPresets';
+import { drawPresetBackground, getBackgroundPresetMeta } from './backgroundPresets';
 import type { ExportAspectRatioId } from './mp4Config';
 import {
   BackgroundFitMode,
@@ -682,8 +682,17 @@ export function drawLoadedImageCover(
   stageW: number,
   stageH: number,
   fit: BackgroundFitMode = 'cover',
+  zoom = 1,
 ) {
   const rect = computeBackgroundImageDrawRect(mediaW || stageW, mediaH || stageH, stageW, stageH, fit);
+  if (zoom > 1.001) {
+    const cx = rect.dx + rect.dw / 2;
+    const cy = rect.dy + rect.dh / 2;
+    const zw = rect.dw * zoom;
+    const zh = rect.dh * zoom;
+    ctx.drawImage(media, cx - zw / 2, cy - zh / 2, zw, zh);
+    return;
+  }
   ctx.drawImage(media, rect.dx, rect.dy, rect.dw, rect.dh);
 }
 
@@ -693,7 +702,11 @@ export async function ensureProjectAssetsLoaded(project: LessonProject): Promise
     await ensureBgVideoLoaded(bg.videoUrl);
     return;
   }
-  const dataUrl = bg?.dataUrl;
+  const presetAssetUrl =
+    (bg?.kind === 'preset' || (!bg?.kind && !bg?.dataUrl && !bg?.videoUrl)) && bg?.presetId
+      ? getBackgroundPresetMeta(bg.presetId)?.assetUrl
+      : undefined;
+  const dataUrl = bg?.dataUrl || presetAssetUrl;
   if (!dataUrl || typeof Image === 'undefined') return;
   const cached = bgImageCache.get(dataUrl);
   if (cached && cached.complete && cached.naturalWidth > 0) return;
@@ -5454,7 +5467,26 @@ export function renderProjectFrame(
   if (bg) {
     let drewCustomBg = false;
     if ((bg.kind === 'preset' || (!bg.kind && bg.presetId && !bg.dataUrl && !bg.videoUrl)) && bg.presetId) {
-      drawPresetBackground(ctx, bg.presetId, stageW, stageH, time);
+      const presetMeta = getBackgroundPresetMeta(bg.presetId);
+      const presetImg = presetMeta?.assetUrl ? getCachedBgImage(presetMeta.assetUrl) : null;
+      if (presetImg) {
+        const gentleZoom = 1 + 0.022 * (1 - Math.cos(Math.max(0, time) * 0.2));
+        ctx.save();
+        drawLoadedImageCover(
+          ctx,
+          presetImg,
+          presetImg.naturalWidth || stageW,
+          presetImg.naturalHeight || stageH,
+          stageW,
+          stageH,
+          bg.fit || 'cover',
+          gentleZoom,
+        );
+        ctx.restore();
+        drawPresetBackground(ctx, bg.presetId, stageW, stageH, time, { overlayOnly: true });
+      } else {
+        drawPresetBackground(ctx, bg.presetId, stageW, stageH, time);
+      }
       drewCustomBg = true;
     } else if (bg.kind === 'video' && bg.videoUrl) {
       const vid = getCachedBgVideo(bg.videoUrl);

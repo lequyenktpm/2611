@@ -5370,7 +5370,7 @@ export const EnglishReelsTab: React.FC<EnglishReelsTabProps> = ({ onSendToStudio
                 </button>
               </div>
 
-              <div className="grid grid-cols-3 gap-1.5">
+              <div className="grid grid-cols-3 gap-1.5 max-h-[140px] overflow-y-auto pr-1">
                 {BACKGROUND_PRESETS.map((preset) => {
                   const isActive =
                     backgroundImage?.kind === 'preset' && backgroundImage.presetId === preset.id;
