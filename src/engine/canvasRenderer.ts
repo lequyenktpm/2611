@@ -5235,15 +5235,9 @@ export function renderProjectFrame(
       ctx.strokeStyle = '#4F46E5';
       ctx.lineWidth = 4;
       ctx.setLineDash([12, 10]);
-      const boxW = activeLayout.width + 26;
-      const boxH =
-        el.type === 'shape-3d'
-          ? (activeLayout.height ?? 200) + 26
-          : el.type === 'word-stack'
-            ? 480
-            : el.type === 'illustration-prop'
-              ? 320
-              : 170;
+      const est = estimateElementBoxDimensions(el, activeLayout);
+      const boxW = est.width + 26;
+      const boxH = est.height + 26;
       drawRoundedRectPath(ctx, -boxW / 2, -boxH / 2, boxW, boxH, 24);
       ctx.stroke();
       ctx.restore();
@@ -5308,6 +5302,48 @@ export function renderProjectFrame(
   }
 }
 
+function estimateElementBoxDimensions(
+  el: SceneElement,
+  activeLayout: ElementLayout,
+): { width: number; height: number } {
+  const width = Math.max(120, activeLayout.width || 600);
+  if (el.props.kind === 'shape-3d') {
+    return { width, height: activeLayout.height ?? 200 };
+  }
+  if (el.props.kind === 'word-stack') {
+    return { width, height: Math.max(360, activeLayout.height ?? 450) };
+  }
+  if (el.props.kind === 'illustration-prop') {
+    return { width, height: Math.max(220, activeLayout.height ?? 300) };
+  }
+  if (el.props.kind === 'comparison-strip') {
+    const items = Array.isArray(el.props.items) ? el.props.items : [];
+    const itemsLen = items.length;
+    const isLongStack =
+      el.id.startsWith('reel-quiz-opts-') ||
+      items.some((item) => item.label.trim().length > 16) ||
+      itemsLen > 4;
+    const computedH = isLongStack ? Math.max(150, itemsLen * 88 + 20) : 124;
+    return {
+      width,
+      height: isLongStack ? Math.max(activeLayout.height ?? 0, computedH) : (activeLayout.height ?? computedH),
+    };
+  }
+  if (el.props.kind === 'sentence-card') {
+    const subLen = (el.props.subtext || '').length;
+    const textLen = (el.props.text || '').length;
+    const extraLines = Math.floor(textLen / 46) + Math.floor(subLen / 52);
+    return {
+      width,
+      height: Math.max(165, activeLayout.height ?? Math.min(340, 175 + extraLines * 26)),
+    };
+  }
+  if (el.props.kind === 'topic-pill') {
+    return { width, height: activeLayout.height ?? 84 };
+  }
+  return { width, height: activeLayout.height ?? 160 };
+}
+
 export function hitTestElementLayout(
   elements: SceneElement[],
   canvasX: number,
@@ -5315,27 +5351,30 @@ export function hitTestElementLayout(
   time: number,
   aspectRatio: ExportAspectRatioId = '9:16',
 ): { element: SceneElement; layout: ElementLayout } | null {
+  const stage = getStageDimensionsForAspect(aspectRatio);
+  const stageW = stage.width;
   const sorted = [...elements].sort((a, b) => b.layout.zIndex - a.layout.zIndex);
   const layoutMap = resolveElementLayoutForAspect(sorted, time, aspectRatio);
   for (const el of sorted) {
     const state = computeElementFrameState(el, time);
     if (!state.visible) continue;
     const activeLayout = layoutMap.get(el.id) || el.layout;
-    const activeScale = state.scale * ((activeLayout.scale || 1) / Math.max(0.1, el.layout.scale || 1));
-    const halfW = (activeLayout.width * activeScale) / 2;
-    const halfH =
-      el.type === 'shape-3d'
-        ? ((activeLayout.height ?? 200) * activeScale) / 2
-        : el.type === 'word-stack'
-          ? 230
-          : el.type === 'illustration-prop'
-            ? 160
-            : 85;
+    const activeScale =
+      state.scale * ((activeLayout.scale || 1) / Math.max(0.1, el.layout.scale || 1));
+    const est = estimateElementBoxDimensions(el, activeLayout);
+    const clampedWidth = Math.min(stageW - 32, Math.max(120, est.width));
+    const halfW = (clampedWidth * activeScale) / 2;
+    const halfH = (est.height * activeScale) / 2;
+    const drawX =
+      halfW * 2 >= stageW - 32
+        ? stageW / 2
+        : Math.max(halfW + 16, Math.min(stageW - halfW - 16, activeLayout.x));
+    const drawY = activeLayout.y + state.translateY;
     if (
-      canvasX >= activeLayout.x - halfW &&
-      canvasX <= activeLayout.x + halfW &&
-      canvasY >= activeLayout.y - halfH &&
-      canvasY <= activeLayout.y + halfH
+      canvasX >= drawX - halfW &&
+      canvasX <= drawX + halfW &&
+      canvasY >= drawY - halfH &&
+      canvasY <= drawY + halfH
     ) {
       return { element: el, layout: activeLayout };
     }

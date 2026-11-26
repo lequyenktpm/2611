@@ -54,7 +54,7 @@ function deepMergeSettings(
   const out: Record<string, unknown> = { ...base };
   for (const [k, v] of Object.entries(patch)) {
     if (v === undefined) continue;
-    if (isPlainRecord(v) && isPlainRecord(out[k])) {
+    if (isPlainRecord(v) && isPlainRecord(out[k]) && k !== 'layoutOverridesByAspect') {
       out[k] = deepMergeSettings(out[k] as Record<string, unknown>, v);
     } else {
       out[k] = v;
@@ -1430,6 +1430,7 @@ async function startServer(): Promise<void> {
                   lang?: string;
                   provider?: string;
                   rate?: number;
+                  autoSplit?: boolean;
                 },
                 i: number,
               ) => ({
@@ -1440,6 +1441,7 @@ async function startServer(): Promise<void> {
                 lang: typeof seg?.lang === 'string' ? seg.lang.trim() : '',
                 provider: typeof seg?.provider === 'string' ? seg.provider.trim() : '',
                 rate: typeof seg?.rate === 'number' && Number.isFinite(seg.rate) ? seg.rate : undefined,
+                autoSplit: typeof seg?.autoSplit === 'boolean' ? seg.autoSplit : undefined,
               }),
             )
             .filter((s: { text: string }) => s.text.length > 0)
@@ -1454,6 +1456,7 @@ async function startServer(): Promise<void> {
                 lang: '',
                 provider: '',
                 rate: undefined as number | undefined,
+                autoSplit: undefined as boolean | undefined,
               }))
               .filter((s: { text: string }) => s.text.length > 0)
           : [];
@@ -1523,24 +1526,39 @@ async function startServer(): Promise<void> {
           ),
         );
         const attemptErrors: string[] = [];
-        const langCode = normalizeTtsLangCode(spanLang);
+        const hasHanziOnly = /[\u4e00-\u9faf\u3400-\u4dbf]/.test(spanText) && !/[\u3040-\u30ff]/.test(spanText);
+        const safeSpanLang =
+          hasHanziOnly && normalizeTtsLangCode(spanLang) !== 'zh' && normalizeTtsLangCode(spanLang) !== 'ja'
+            ? 'zh'
+            : spanLang;
+        const safeSpanVoice =
+          hasHanziOnly && detectVoiceLangCode(spanVoice) !== 'zh' && detectVoiceLangCode(spanVoice) !== 'ja'
+            ? pickEdgeVoiceForLang('zh', spanVoice)
+            : spanVoice;
+        const langCode = normalizeTtsLangCode(safeSpanLang);
 
         for (const p of attemptOrder) {
           try {
             if (p === 'elevenlabs') {
               if (!elevenLabsKey) continue;
-              buf = await synthesizeElevenLabsTtsBuffer(spanText, spanVoice || voice, elevenLabsKey);
+              buf = await synthesizeElevenLabsTtsBuffer(spanText, safeSpanVoice || voice, elevenLabsKey);
               used = 'elevenlabs';
               break;
             } else if (p === 'edge') {
-              const edgeVoice = pickEdgeVoiceForLang(spanLang, spanVoice || voice);
-              const edgeOut = await synthesizeEdgeTtsBuffer(spanText, edgeVoice, spanRate, tmpDir, tag);
+              const edgeVoice = pickEdgeVoiceForLang(safeSpanLang, safeSpanVoice || voice);
+              let edgeOut: { buffer: Buffer; wordBoundaries: EdgeWordBoundary[] };
+              try {
+                edgeOut = await synthesizeEdgeTtsBuffer(spanText, edgeVoice, spanRate, tmpDir, tag);
+              } catch {
+                await new Promise((r) => setTimeout(r, 250));
+                edgeOut = await synthesizeEdgeTtsBuffer(spanText, edgeVoice, spanRate, tmpDir, `${tag}_r`);
+              }
               buf = edgeOut.buffer;
               wordBoundaries = edgeOut.wordBoundaries;
               used = 'edge';
               break;
             } else if (p === 'google') {
-              buf = await synthesizeGoogleTranslateTtsChunked(spanText, spanLang || langCode, tmpDir, tag, spanRate);
+              buf = await synthesizeGoogleTranslateTtsChunked(spanText, safeSpanLang || langCode, tmpDir, tag, spanRate);
               used = 'google';
               break;
             } else if (p === 'streamelements') {
@@ -1548,17 +1566,17 @@ async function startServer(): Promise<void> {
               if (langCode !== 'en' && langCode !== 'ja') continue;
               const seVoice =
                 langCode === 'ja'
-                  ? ['Mizuki', 'Takumi'].includes(spanVoice)
-                    ? spanVoice
+                  ? ['Mizuki', 'Takumi'].includes(safeSpanVoice)
+                    ? safeSpanVoice
                     : 'Mizuki'
-                  : ['Joanna', 'Matthew', 'Amy', 'Brian'].includes(spanVoice)
-                    ? spanVoice
+                  : ['Joanna', 'Matthew', 'Amy', 'Brian'].includes(safeSpanVoice)
+                    ? safeSpanVoice
                     : 'Joanna';
               buf = await synthesizeStreamElementsTts(spanText, seVoice, tmpDir, tag);
               used = 'streamelements';
               break;
             } else if (p === 'gemini' && geminiKey) {
-              buf = await synthesizeGeminiTtsMp3(spanText, spanVoice || voice, geminiKey, tmpDir, tag);
+              buf = await synthesizeGeminiTtsMp3(spanText, safeSpanVoice || voice, geminiKey, tmpDir, tag);
               used = 'gemini';
               break;
             }
@@ -1588,13 +1606,15 @@ async function startServer(): Promise<void> {
         const segPrimaryVoice = segItem?.voice || voice;
         const segProvider = segItem?.provider || providerReq;
         const segRate = segItem?.rate ?? rate;
+        const segAutoSplit =
+          typeof segItem?.autoSplit === 'boolean' ? segItem.autoSplit : autoSplitLanguages;
 
         const spans = splitMixedLanguageTtsSpans(segText, {
           primaryLang: segPrimaryLang,
           secondaryLang,
           primaryVoice: segPrimaryVoice,
           secondaryVoice,
-          autoSplit: autoSplitLanguages,
+          autoSplit: segAutoSplit,
         });
 
         onProgress?.(

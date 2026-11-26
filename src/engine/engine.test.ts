@@ -98,6 +98,7 @@ import {
   detectReelMode,
   getLevelsForLearningLanguage,
   getQuizCardSpeechParts,
+  inferLearningLangFromCards,
   parseEnglishReelsAiJson,
   recommendCreatorItemCount,
   reelCardsToLessonProject,
@@ -2815,4 +2816,150 @@ test('resolveElementLayoutForAspect preserves manualPosition across 16:9 and hit
   assert.equal(movedBox.y, 380);
   assert.equal(movedBox.manualPosition, true);
 });
+
+test('splitMixedLanguageTtsSpans keeps unaccented VI words & Pinyin in VI clauses in 1 consistent VI voice and respects autoSplit=false', () => {
+  const viClause = splitMixedLanguageTtsSpans(
+    'Trong cong ty nay chung ta phai doc to cau nay moi ngay nhe.',
+    {
+      primaryLang: 'vi',
+      secondaryLang: 'vi',
+      primaryVoice: 'vi-VN-NamMinhNeural',
+      secondaryVoice: 'vi-VN-HoaiMyNeural',
+    },
+  );
+  assert.equal(viClause.length, 1);
+  assert.equal(viClause[0].lang, 'vi');
+  assert.equal(viClause[0].voice, 'vi-VN-NamMinhNeural');
+
+  const pinyinInViClause = splitMixedLanguageTtsSpans(
+    'Dùng Bù hǎo yì si khi cần xin lỗi nhẹ nhàng ở công ty.',
+    {
+      primaryLang: 'zh',
+      secondaryLang: 'vi',
+      primaryVoice: 'zh-CN-XiaoxiaoNeural',
+      secondaryVoice: 'vi-VN-HoaiMyNeural',
+    },
+  );
+  assert.equal(pinyinInViClause.length, 1);
+  assert.equal(pinyinInViClause[0].lang, 'vi');
+  assert.equal(pinyinInViClause[0].voice, 'vi-VN-HoaiMyNeural');
+
+  const noAutoSplit = splitMixedLanguageTtsSpans('Every day. Nghĩa là mỗi ngày.', {
+    primaryLang: 'vi',
+    primaryVoice: 'vi-VN-HoaiMyNeural',
+    secondaryVoice: 'en-US-JennyNeural',
+    autoSplit: false,
+  });
+  assert.equal(noAutoSplit.length, 1);
+  assert.equal(noAutoSplit[0].lang, 'vi');
+  assert.equal(noAutoSplit[0].voice, 'vi-VN-HoaiMyNeural');
+});
+
+test('buildReelCardsRuleBased emits spoken transitions, pairs quizzes per section (not dumped at end), respects includeQuiz=false, and handles Chinese sentences', () => {
+  const multiPartInput = `Part 1: Morning Routine
+Tom wakes up early every morning. He drinks water and stretches before breakfast.
+Q1. What does Tom do before breakfast?
+A) Sleeps again
+B) Drinks water and stretches
+Answer: B
+
+Part 2: Evening Review
+At night he reviews new words for ten minutes. Consistent practice builds fluency.
+Q2. How long does he review new words?
+A) Ten minutes
+B) Two hours
+Answer: A`;
+
+  const withQuiz = buildReelCardsRuleBased(multiPartInput, {
+    mode: 'reading',
+    targetLang: 'vi',
+    title: 'Daily Habits',
+    includeQuiz: true,
+  });
+  const types = withQuiz.cards.map((c) => c.type);
+  assert.ok(types.includes('transition'), `Expected transition card in multi-part flow, got ${types.join(',')}`);
+  const firstQuizIdx = types.indexOf('quiz');
+  const transitionIdx = types.indexOf('transition');
+  assert.ok(firstQuizIdx > 0 && transitionIdx > firstQuizIdx, `Expected Section 1 quiz (${firstQuizIdx}) before Section 2 transition (${transitionIdx}), types=${types.join(',')}`);
+  assert.ok(withQuiz.cards[0].type === 'intro' && Boolean(withQuiz.cards[0].explanationSpeech));
+  assert.ok(withQuiz.cards[withQuiz.cards.length - 1].type === 'outro' && Boolean(withQuiz.cards[withQuiz.cards.length - 1].explanationSpeech));
+
+  const withoutQuiz = buildReelCardsRuleBased(multiPartInput, {
+    mode: 'reading',
+    targetLang: 'vi',
+    title: 'Daily Habits No Quiz',
+    includeQuiz: false,
+  });
+  assert.equal(withoutQuiz.cards.some((c) => c.type === 'quiz'), false, 'Expected no quiz cards when includeQuiz=false');
+
+  const zhBuilt = buildReelCardsRuleBased('今天天气很好。我们去公园散步吧！你喜欢喝茶吗？', {
+    mode: 'reading',
+    targetLang: 'vi',
+    title: 'Tiếng Trung giao tiếp',
+    includeQuiz: false,
+  });
+  assert.equal(inferLearningLangFromCards(zhBuilt.cards), 'zh');
+  assert.ok(zhBuilt.cards.some((c) => c.type === 'vocab' && c.ttsText.includes('今天天气很好')));
+});
+
+test('buildEnglishReelsWebAiPrompt and buildAiCreatorWebAiPrompt avoid hardcoded Comfort Zone title, require title sync + transitions, and support includeQuiz=none', () => {
+  const webPrompt = buildEnglishReelsWebAiPrompt({
+    sourceText: 'Airport Check-in\nMay I see your passport?',
+    mode: 'auto',
+    targetLang: 'Tiếng Việt',
+    title: 'Thủ tục sân bay',
+    includeQuiz: 'none',
+  });
+  assert.ok(!webPrompt.includes('Outside the Comfort Zone'), 'Prompt must not hardcode Outside the Comfort Zone');
+  assert.ok(webPrompt.includes('Thủ tục sân bay'));
+  assert.ok(webPrompt.includes('KHÔNG tự tạo Quiz'));
+  assert.ok(webPrompt.includes('CHUYỂN TIẾP'));
+
+  const creatorPrompt = buildAiCreatorWebAiPrompt({
+    learningLanguage: 'zh',
+    level: 'HSK 1',
+    durationMinutes: 3,
+    targetLang: 'Tiếng Việt',
+    topicHint: 'Gọi món ở nhà hàng',
+    includeQuiz: false,
+  });
+  assert.ok(creatorPrompt.includes('Gọi món ở nhà hàng'));
+  assert.ok(creatorPrompt.includes('NO Surprise Quiz Cards'));
+  assert.ok(creatorPrompt.includes('transition'));
+});
+
+test('hitTestElementLayout accurately detects clicks on tall quiz comparison-strip options and clamped 9:16 cards', () => {
+  const built = buildReelCardsRuleBased(
+    `Tom checks his passport at the counter.
+Q1. Where does Tom check his passport?
+A) At the counter
+B) At the hotel pool
+C) On the train
+Answer: A`,
+    { mode: 'reading', targetLang: 'vi', includeQuiz: true },
+  );
+  const project = reelCardsToLessonProject(built.cards, {
+    title: 'Quiz Hit Test',
+    theme: 'warm-paper',
+    targetLang: 'vi',
+    aspectRatio: '9:16',
+  });
+  const quizStrip = project.elements.find((el) => el.id.startsWith('reel-quiz-opts-'));
+  assert.ok(quizStrip, 'Expected a reel-quiz-opts-* comparison-strip quiz element');
+  const quizTime = (quizStrip!.startTime + quizStrip!.endTime) / 2;
+  const layoutMap = resolveElementLayoutForAspect(project.elements, quizTime, '9:16');
+  const quizBox = layoutMap.get(quizStrip!.id)!;
+
+  // Click near lower option of 3-row stacked quiz card (+110px below center y)
+  const hitLowerQuiz = hitTestElementLayout(
+    project.elements,
+    quizBox.x,
+    quizBox.y + 110,
+    quizTime,
+    '9:16',
+  );
+  assert.ok(hitLowerQuiz, 'Expected hitTestElementLayout to catch lower quiz option area');
+  assert.equal(hitLowerQuiz!.element.id, quizStrip!.id);
+});
+
 

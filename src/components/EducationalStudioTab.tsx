@@ -1290,7 +1290,12 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
     };
   }, []);
 
+  const hasMountedPersistRef = useRef(false);
   useEffect(() => {
+    if (!hasMountedPersistRef.current) {
+      hasMountedPersistRef.current = true;
+      return;
+    }
     updatePersistedSettings({
       eduStudio: {
         subTab,

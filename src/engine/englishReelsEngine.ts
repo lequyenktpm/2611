@@ -31,7 +31,7 @@ import {
   resolveContextualVisualForCue,
 } from './vectorComponentDb';
 
-export type ReelCardType = 'intro' | 'vocab' | 'quiz' | 'outro';
+export type ReelCardType = 'intro' | 'transition' | 'vocab' | 'quiz' | 'outro';
 export type ReelMode = 'auto' | 'reading' | 'quiz' | 'vocab';
 export type ReelCreationMode = 'source' | 'creator';
 export type LearningLanguageId = 'en' | 'ja' | 'zh' | 'ko' | 'fr' | 'es';
@@ -243,8 +243,48 @@ export interface ParsedEnglishReelsResponse {
   title: string;
   mode: Exclude<ReelMode, 'auto'>;
   creatorSubMode?: string;
+  learningLang?: LearningLanguageId;
   cards: ReelCard[];
   sceneJson?: FlexibleSceneDocument | null;
+}
+
+export function inferLearningLangFromCards(
+  cards: ReelCard[],
+  explicitLang?: string,
+): LearningLanguageId {
+  const norm = String(explicitLang || '').trim().toLowerCase();
+  if (norm === 'en' || norm === 'ja' || norm === 'zh' || norm === 'ko' || norm === 'fr' || norm === 'es') {
+    return norm;
+  }
+  const perCardExplicit = cards.find(
+    (c) =>
+      c.learningLang &&
+      (c.learningLang === 'en' ||
+        c.learningLang === 'ja' ||
+        c.learningLang === 'zh' ||
+        c.learningLang === 'ko' ||
+        c.learningLang === 'fr' ||
+        c.learningLang === 'es'),
+  )?.learningLang;
+  if (perCardExplicit) return perCardExplicit;
+
+  const targetSample = cards
+    .filter((c) => c.type === 'vocab' || c.type === 'quiz')
+    .map((c) => `${c.title || ''} ${c.content || ''} ${c.ttsText || ''}`)
+    .join(' ')
+    .trim();
+  const sample = targetSample || cards.map((c) => `${c.title || ''} ${c.ttsText || ''}`).join(' ');
+
+  if (/[\u3040-\u30ff\u31f0-\u31ff]/.test(sample)) return 'ja';
+  if (/[\u4e00-\u9faf\u3400-\u4dbf]/.test(sample)) return 'zh';
+  if (/[\uac00-\ud7af\u1100-\u11ff]/.test(sample)) return 'ko';
+  if (/\b(?:s'il vous plaît|bonjour|merci|au revoir|c'est|je voudrais)\b|[çœæ]/i.test(sample)) {
+    return 'fr';
+  }
+  if (/[¿¡ñ]|\b(?:por favor|muchas gracias|buenos días|perdón)\b/i.test(sample)) {
+    return 'es';
+  }
+  return 'en';
 }
 
 function makeCardId(index: number): string {
@@ -961,22 +1001,42 @@ export function buildReelCardsRuleBased(
     title?: string;
     mode?: ReelMode;
     targetLang?: string;
+    includeQuiz?: boolean;
   },
 ): { title: string; mode: Exclude<ReelMode, 'auto'>; cards: ReelCard[] } {
   const locale = getReelLocaleStrings(options?.targetLang);
-  const worksheet = cleanReadingWorksheetInput(rawText, options?.title);
-  const cleaned = worksheet.bodyText || rawText.replace(/\r\n/g, '\n').trim();
+  const normalizedRaw = String(rawText || '').replace(/\r\n/g, '\n').trim();
+  const worksheet = cleanReadingWorksheetInput(normalizedRaw, options?.title);
+  const cleaned = worksheet.bodyText || normalizedRaw;
   const lines = worksheet.lines.filter((l) => Boolean(l) && !isMetadataNoiseLine(l));
   const mode =
     options?.mode && options.mode !== 'auto' ? options.mode : detectReelMode(cleaned);
   const docTitle = worksheet.title || 'English Practice Reel';
   const spokenTitle = sanitizeTtsSpeech(docTitle).replace(/[.!?]+$/, '');
+  const detectedLang = inferLearningLangFromCards(
+    [{ id: 'probe', type: 'vocab', badge: '', title: docTitle, content: cleaned, ttsText: cleaned }],
+  );
+  const allowQuiz = options?.includeQuiz !== false;
+
   const introSpeech =
-    mode === 'quiz'
-      ? `Welcome to today's English lesson on ${spokenTitle}. First, read the key details, then answer our interactive quiz.`
-      : mode === 'vocab'
-        ? `Welcome to today's vocabulary lesson on ${spokenTitle}. Today we will learn essential phrases and their meanings.`
-        : `Welcome to today's English reading lesson on ${spokenTitle}. Follow each sentence, learn key vocabulary and grammar, and finish strong.`;
+    detectedLang === 'zh'
+      ? `今天我们来学习：${spokenTitle}。`
+      : detectedLang === 'ja'
+        ? `今日は「${spokenTitle}」を学びましょう。`
+        : detectedLang === 'ko'
+          ? `오늘은 ${spokenTitle}에 대해 배워볼게요.`
+          : mode === 'quiz'
+            ? `Welcome to today's lesson on ${spokenTitle}. First, read the key details, then answer our interactive quiz.`
+            : mode === 'vocab'
+              ? `Welcome to today's vocabulary lesson on ${spokenTitle}. Today we will learn essential phrases and their meanings.`
+              : `Welcome to today's reading lesson on ${spokenTitle}. Follow each sentence, learn key vocabulary and grammar, and practice aloud.`;
+
+  const introExplanation =
+    locale.code === 'vi'
+      ? `Chào mừng bạn đến với bài học ${docTitle}. Hãy nghe kỹ từng phần và luyện đọc theo nhé.`
+      : locale.code === 'ja'
+        ? `${docTitle}のレッスンへようこそ。順番に聞いて一緒に練習しましょう。`
+        : undefined;
 
   const cards: ReelCard[] = [
     {
@@ -992,6 +1052,8 @@ export function buildReelCardsRuleBased(
       content: `${locale.introGoalPrefix} ${docTitle}`,
       translation: locale.code !== 'none' ? locale.introRoadmapLine : undefined,
       ttsText: introSpeech,
+      explanationSpeech: introExplanation,
+      learningLang: detectedLang,
       durationSec: estimateCardSpeechDuration(introSpeech),
       visual: {
         variant: 'bs-card-header',
@@ -1003,59 +1065,25 @@ export function buildReelCardsRuleBased(
     },
   ];
 
-  // Parse body reading/vocab lines BEFORE quiz section if mixed article + quiz!
-  const explicitQuizIdx = cleaned.search(
-    /(?:^|\n)\s*(?:True\s*\/\s*False(?:\s+Quiz)?|Multiple\s*Choice|Comprehension(?:\s+Quiz)?|Quiz\b|Question\s*1\b|Q\d+[.)])/im,
-  );
-  const quizSplitIdx =
-    explicitQuizIdx >= 0
-      ? explicitQuizIdx
-      : mode === 'quiz'
-        ? cleaned.search(/(?:^|\n)\s*Q?\d+[.)]\s+/im)
-        : -1;
-  const readingChunk =
-    quizSplitIdx > 0
-      ? cleaned.slice(0, quizSplitIdx).trim()
-      : mode === 'quiz'
-        ? ''
-        : cleaned;
+  // Detect multi-section structure BEFORE stripping worksheet headings so each section keeps
+  // its spoken transition lead-in and pairs any section quiz immediately after that section!
+  const sectionSplitRe =
+    /(?=^(?:#{1,3}\s+(?:Part|Task|Exercise|Lesson|Section|Reading|Article|Passage|Bài|Phần)\s*\d*|(?:Part|Task|Exercise|Lesson|Section|Bài|Phần)\s*\d+[:.\-–\s]))/gim;
+  const rawSections = normalizedRaw
+    .split(sectionSplitRe)
+    .map((s) => s.trim())
+    .filter((s) => {
+      if (s.length < 20) return false;
+      const cw = cleanReadingWorksheetInput(s);
+      return cw.bodyText.trim().length >= 20;
+    });
 
-  let readingSentences: string[] = [];
+  const effectiveSections = rawSections.length >= 2 ? rawSections : [cleaned];
+  const isMultiSection = effectiveSections.length >= 2;
+  let globalQuizCount = 0;
 
-  if (mode === 'vocab') {
-    for (let i = 0; i < lines.length && cards.length < 12; i++) {
-      const line = lines[i];
-      if (line.startsWith('#')) continue;
-      const match = line.match(
-        /^([^/\-–—:=]+?)(?:\s+(\/[^/]+\/))?\s*(?:[-–—:=]|→)\s*(.+)$/,
-      );
-      if (match) {
-        const word = match[1].replace(/^\d+[.)]\s*/, '').trim();
-        const phonetic = match[2]?.trim();
-        const meaning = match[3].trim();
-        const cleanSpoken = sanitizeTtsSpeech(word);
-        if (!cleanSpoken) continue;
-        cards.push({
-          id: makeCardId(cards.length),
-          type: 'vocab',
-          badge: `${locale.vocabBadgePrefix} #${cards.length}`,
-          title: word,
-          content: word,
-          phonetic,
-          translation: meaning,
-          ttsText: cleanSpoken,
-          durationSec: estimateCardSpeechDuration(cleanSpoken),
-          visual: {
-            variant: 'css-flashcard-flip',
-            title: word,
-            subtitle: meaning,
-            sceneIcon: 'book',
-          },
-        });
-      }
-    }
-  } else if (readingChunk) {
-    const cleanReadingLines = readingChunk
+  const splitSentencesSmart = (chunkText: string): string[] => {
+    const cleanReadingLines = chunkText
       .split('\n')
       .map((l) => l.trim())
       .filter((l, idx) => {
@@ -1066,171 +1094,302 @@ export function buildReelCardsRuleBased(
         return !/^(?:Q\d+[.)]|\([A-Da-d]\)|[A-Da-d][.)])\s+/i.test(l);
       })
       .map((l) => l.replace(/^#+\s*/, '').replace(/^\d+[.)]\s*/, '').trim())
-      .filter((l) => l.length >= 6);
+      .filter((l) => l.length >= 4);
 
-    const sentences = cleanReadingLines
-      .join(' ')
-      .split(/(?<=[.!?])\s+/)
+    const joined = cleanReadingLines.join(' ');
+    const hasCjk = /[\u4e00-\u9faf\u3040-\u30ff\uac00-\ud7af]/.test(joined);
+    const splitRe = hasCjk ? /(?<=[.!?。！？])\s*/ : /(?<=[.!?])\s+/;
+    return joined
+      .split(splitRe)
       .map((s) => s.trim())
-      .filter((s) => s.length >= 8 && !isMetadataNoiseLine(s));
+      .filter((s) => {
+        const minLen = hasCjk ? 3 : 8;
+        return s.length >= minLen && !isMetadataNoiseLine(s);
+      });
+  };
 
-    readingSentences = sentences;
+  for (let secIdx = 0; secIdx < effectiveSections.length; secIdx++) {
+    const rawSec = effectiveSections[secIdx];
+    const secWorksheet = isMultiSection
+      ? cleanReadingWorksheetInput(rawSec, `Part ${secIdx + 1}`)
+      : { title: docTitle, bodyText: cleaned, lines };
+    const secBody = secWorksheet.bodyText || rawSec;
+    const secLines = secWorksheet.lines.filter((l) => Boolean(l) && !isMetadataNoiseLine(l));
+    if (!secBody && secLines.length === 0) continue;
 
-    for (const s of sentences.slice(0, 10)) {
-      const cleanSpoken = sanitizeTtsSpeech(s);
-      if (!cleanSpoken) continue;
-      const notes = extractVocabAndGrammarNote(s, options?.targetLang);
-      const combinedNote = [notes.vocabNote, notes.grammarNote].filter(Boolean).join('\n') || undefined;
-      const ctx = resolveContextualVisualForCue(`${docTitle} ${s}`, s);
+    // Extract readable section label from heading line when multi-section
+    const secFirstLine = rawSec.split('\n')[0]?.replace(/^#+\s*/, '').trim() || '';
+    const secHeadingLabel =
+      secWorksheet.title && secWorksheet.title !== 'Reading Practice'
+        ? secWorksheet.title
+        : secFirstLine && secFirstLine.length <= 68
+          ? secFirstLine
+          : `Part ${secIdx + 1}`;
+
+    if (isMultiSection && secIdx > 0) {
+      const transitionSpeech =
+        detectedLang === 'zh'
+          ? `接下来我们进入第${secIdx + 1}部分：${secHeadingLabel}。`
+          : `Now let's move on to part ${secIdx + 1}: ${sanitizeTtsSpeech(secHeadingLabel).replace(/[.!?]+$/, '')}.`;
+      const transitionExplain =
+        locale.code === 'vi'
+          ? `Chuyển sang phần ${secIdx + 1}: ${secHeadingLabel}.`
+          : locale.code === 'ja'
+            ? `次はパート${secIdx + 1}、${secHeadingLabel}に進みましょう。`
+            : undefined;
       cards.push({
         id: makeCardId(cards.length),
-        type: 'vocab',
-        badge: `${locale.readingBadgePrefix} #${cards.length}`,
-        title: `${locale.sentenceTitlePrefix} ${cards.length} · ${docTitle}`,
-        content: s,
-        translation: combinedNote,
-        grammarNote: notes.grammarNote,
-        ttsText: cleanSpoken,
-        durationSec: estimateCardSpeechDuration(cleanSpoken),
+        type: 'transition',
+        badge:
+          locale.code === 'vi'
+            ? `CHUYỂN PHẦN ${secIdx + 1}`
+            : locale.code === 'ja'
+              ? `パート ${secIdx + 1}`
+              : `PART ${secIdx + 1}`,
+        kicker: `PART ${secIdx + 1}`,
+        title: secHeadingLabel,
+        content:
+          locale.code === 'vi'
+            ? `Chuyển tiếp sang phần ${secIdx + 1}: ${secHeadingLabel}`
+            : `Moving to Part ${secIdx + 1}: ${secHeadingLabel}`,
+        translation: transitionExplain,
+        ttsText: transitionSpeech,
+        explanationSpeech: transitionExplain,
+        learningLang: detectedLang,
+        durationSec: estimateCardSpeechDuration(transitionSpeech),
         visual: {
-          variant: ctx.matchedRule !== 'fallback' ? ctx.variant : 'css-browser-mockup',
-          title: docTitle,
-          subtitle: notes.vocabNote || notes.grammarNote || s.slice(0, 64),
-          speechText: s,
-          sceneIcon: ctx.sceneIcon,
-          ...ctx.data,
+          variant: 'css-roadmap-steps',
+          title: secHeadingLabel,
+          subtitle: locale.code === 'vi' ? `Phần ${secIdx + 1}` : `Part ${secIdx + 1}`,
+          sceneIcon: 'sparkles',
         },
       });
     }
-  }
 
-  // Extract Quiz blocks (capped at 4 high-signal concise questions)
-  const hasQuizBlocks = quizSplitIdx >= 0 || mode === 'quiz';
+    const explicitQuizIdx = secBody.search(
+      /(?:^|\n)\s*(?:True\s*\/\s*False(?:\s+Quiz)?|Multiple\s*Choice|Comprehension(?:\s+Quiz)?|Quiz\b|Question\s*1\b|Q\d+[.)])/im,
+    );
+    const quizSplitIdx =
+      explicitQuizIdx >= 0
+        ? explicitQuizIdx
+        : mode === 'quiz'
+          ? secBody.search(/(?:^|\n)\s*Q?\d+[.)]\s+/im)
+          : -1;
+    const readingChunk =
+      quizSplitIdx > 0
+        ? secBody.slice(0, quizSplitIdx).trim()
+        : mode === 'quiz'
+          ? ''
+          : secBody;
 
-  if (hasQuizBlocks) {
-    const quizSource = quizSplitIdx >= 0 ? cleaned.slice(quizSplitIdx) : cleaned;
-    const qBlocks = quizSource
-      .split(/(?=^(?:Q?\d+[.)]\s+))/gm)
-      .map((b) => b.trim())
-      .filter(Boolean);
+    let readingSentences: string[] = [];
 
-    let quizCount = 0;
-    for (const block of qBlocks) {
-      if (quizCount >= 4) break;
-      const blockLines = block.split('\n').map((l) => l.trim()).filter(Boolean);
-      if (blockLines.length === 0) continue;
-      const firstLine = blockLines[0];
-      const looksLikeQuizBlock =
-        /^Q\d+[.)]\s+/i.test(firstLine) ||
-        /\b(?:Answer|Key|Đáp án)[:\s]/i.test(block) ||
-        /^(?:\([A-Da-d]\)|[A-Da-d][.)])\s+/m.test(block) ||
-        (mode === 'quiz' && /^Q?\d+[.)]\s+/i.test(firstLine));
-      if (!looksLikeQuizBlock) continue;
-
-      const question = firstLine.replace(/^Q?\d+[.)]\s*/i, '').trim();
-      if (question.length < 5 || isMetadataNoiseLine(question)) continue;
-
-      const opts: string[] = [];
-      let answerIndex = 0;
-      let explanation = '';
-      for (const bl of blockLines.slice(1)) {
-        const optMatch = bl.match(/^(?:\(([A-Da-d])\)|([A-Da-d])[.)])\s+(.+)$/);
-        if (optMatch) {
-          opts.push(optMatch[3].trim());
-          continue;
-        }
-        const ansMatch = bl.match(/^(?:Answer|Key|Đáp án)[:\s]+(.+)$/i);
-        if (ansMatch) {
-          const val = ansMatch[1].trim();
-          const letterIdx = 'abcd'.indexOf(val.charAt(0).toLowerCase());
-          if (letterIdx >= 0 && letterIdx < Math.max(2, opts.length || 4)) {
-            answerIndex = letterIdx;
-          } else if (/^false$/i.test(val)) {
-            answerIndex = 1;
-          }
-          continue;
-        }
-        if (/^(?:Explanation|Giải thích)[:\s]+/i.test(bl)) {
-          explanation = bl.replace(/^(?:Explanation|Giải thích)[:\s]+/i, '').trim();
-        }
-      }
-
-      if (opts.length === 0 && /true\s*\/\s*false|\(T\/F\)/i.test(block)) {
-        opts.push('True', 'False');
-      }
-
-      quizCount += 1;
-      const finalOpts = opts.length > 0 ? opts : ['True', 'False'];
-      const safeAnsIdx = Math.min(answerIndex, Math.max(0, finalOpts.length - 1));
-      const letter = String.fromCharCode(65 + safeAnsIdx);
-      const optSpoken = finalOpts
-        .slice(0, 4)
-        .map((o, i) => `${String.fromCharCode(65 + i)}, ${o}`)
-        .join('. ');
-      const leadIn =
-        quizCount === 1
-          ? "Now let's test your understanding! ... Question one:"
-          : `Question ${quizCount}: ...`;
-      const questionSpeech = sanitizeTtsSpeech(
-        `${leadIn} ${question} ... ${optSpoken}. Take five seconds to think.`,
-      );
-      const answerSpeech = sanitizeTtsSpeech(
-        `Time is up! The correct answer is ${letter}, ${finalOpts[safeAnsIdx]}.${explanation ? ` ${explanation}` : ''}`,
-      );
-
-      const snippetContext = pickConciseQuizExcerpt(
-        readingSentences,
-        question,
-        finalOpts[safeAnsIdx] || '',
-        readingChunk,
-      );
-
-      cards.push({
-        id: makeCardId(cards.length),
-        type: 'quiz',
-        badge: `QUIZ #${quizCount}`,
-        title: `Quiz Question ${quizCount}`,
-        content: question,
-        contextExcerpt: snippetContext,
-        options: finalOpts,
-        answerIndex: safeAnsIdx,
-        thinkSec: 5,
-        explanation: explanation || locale.defaultExplanation(letter, finalOpts[safeAnsIdx]),
-        ttsText: questionSpeech,
-        ttsAnswerText: answerSpeech,
-        durationSec: Number(
-          (estimateCardSpeechDuration(questionSpeech) + 5 + estimateCardSpeechDuration(answerSpeech)).toFixed(2),
-        ),
-        visual: snippetContext
-          ? {
-              variant: 'css-browser-mockup',
-              title: docTitle,
-              formula: locale.contextPassageTitle,
-              speechText: snippetContext,
+    if (mode === 'vocab') {
+      const vocabLimit = isMultiSection ? 6 : 12;
+      let addedVocab = 0;
+      for (let i = 0; i < secLines.length && addedVocab < vocabLimit; i++) {
+        const line = secLines[i];
+        if (line.startsWith('#')) continue;
+        const match = line.match(
+          /^([^/\-–—:=]+?)(?:\s+(\/[^/]+\/))?\s*(?:[-–—:=]|→)\s*(.+)$/,
+        );
+        if (match) {
+          const word = match[1].replace(/^\d+[.)]\s*/, '').trim();
+          const phonetic = match[2]?.trim();
+          const meaning = match[3].trim();
+          const cleanSpoken = sanitizeTtsSpeech(word);
+          if (!cleanSpoken) continue;
+          addedVocab += 1;
+          cards.push({
+            id: makeCardId(cards.length),
+            type: 'vocab',
+            badge: `${locale.vocabBadgePrefix} #${addedVocab}`,
+            title: word,
+            content: word,
+            phonetic,
+            translation: meaning,
+            explanationSpeech:
+              locale.code === 'vi' && meaning
+                ? sanitizeTtsSpeech(`Nghĩa là ${meaning}`)
+                : undefined,
+            learningLang: detectedLang,
+            ttsText: cleanSpoken,
+            durationSec: estimateCardSpeechDuration(cleanSpoken),
+            visual: {
+              variant: 'css-flashcard-flip',
+              title: word,
+              subtitle: meaning,
               sceneIcon: 'book',
-            }
-          : {
-              variant: 'bs-accordion-faq',
-              title: 'QUIZ CHALLENGE (5s)',
-              speechText: question,
-              sceneIcon: 'brain',
             },
-      });
+          });
+        }
+      }
+    } else if (readingChunk) {
+      const sentences = splitSentencesSmart(readingChunk);
+      readingSentences = sentences;
+      const sentenceCap = isMultiSection ? 5 : 10;
+
+      for (const s of sentences.slice(0, sentenceCap)) {
+        const cleanSpoken = sanitizeTtsSpeech(s);
+        if (!cleanSpoken) continue;
+        const notes = extractVocabAndGrammarNote(s, options?.targetLang);
+        const combinedNote = [notes.vocabNote, notes.grammarNote].filter(Boolean).join('\n') || undefined;
+        const ctx = resolveContextualVisualForCue(`${secHeadingLabel} ${s}`, s);
+        cards.push({
+          id: makeCardId(cards.length),
+          type: 'vocab',
+          badge: `${locale.readingBadgePrefix} #${cards.length}`,
+          title: `${locale.sentenceTitlePrefix} ${cards.length} · ${isMultiSection ? secHeadingLabel : docTitle}`,
+          content: s,
+          translation: combinedNote,
+          grammarNote: notes.grammarNote,
+          explanationSpeech:
+            locale.code === 'vi' && combinedNote
+              ? sanitizeTtsSpeech(combinedNote)
+              : undefined,
+          learningLang: detectedLang,
+          ttsText: cleanSpoken,
+          durationSec: estimateCardSpeechDuration(cleanSpoken),
+          visual: {
+            variant: ctx.matchedRule !== 'fallback' ? ctx.variant : 'css-browser-mockup',
+            title: isMultiSection ? secHeadingLabel : docTitle,
+            subtitle: notes.vocabNote || notes.grammarNote || s.slice(0, 64),
+            speechText: s,
+            sceneIcon: ctx.sceneIcon,
+            ...ctx.data,
+          },
+        });
+      }
+    }
+
+    // Extract Quiz blocks FOR THIS SECTION ONLY (immediately paired right after this section's reading!)
+    const hasQuizBlocks = allowQuiz && (quizSplitIdx >= 0 || (mode === 'quiz' && !readingChunk));
+    if (hasQuizBlocks) {
+      const quizSource = quizSplitIdx >= 0 ? secBody.slice(quizSplitIdx) : secBody;
+      const qBlocks = quizSource
+        .split(/(?=^(?:Q?\d+[.)]\s+))/gm)
+        .map((b) => b.trim())
+        .filter(Boolean);
+
+      let sectionQuizCount = 0;
+      const maxQuizPerSection = isMultiSection ? 2 : 4;
+      for (const block of qBlocks) {
+        if (sectionQuizCount >= maxQuizPerSection || globalQuizCount >= 6) break;
+        const blockLines = block.split('\n').map((l) => l.trim()).filter(Boolean);
+        if (blockLines.length === 0) continue;
+        const firstLine = blockLines[0];
+        const looksLikeQuizBlock =
+          /^Q\d+[.)]\s+/i.test(firstLine) ||
+          /\b(?:Answer|Key|Đáp án)[:\s]/i.test(block) ||
+          /^(?:\([A-Da-d]\)|[A-Da-d][.)])\s+/m.test(block) ||
+          (mode === 'quiz' && /^Q?\d+[.)]\s+/i.test(firstLine));
+        if (!looksLikeQuizBlock) continue;
+
+        const question = firstLine.replace(/^Q?\d+[.)]\s*/i, '').trim();
+        if (question.length < 4 || isMetadataNoiseLine(question)) continue;
+
+        const opts: string[] = [];
+        let answerIndex = 0;
+        let explanation = '';
+        for (const bl of blockLines.slice(1)) {
+          const optMatch = bl.match(/^(?:\(([A-Da-d])\)|([A-Da-d])[.)])\s+(.+)$/);
+          if (optMatch) {
+            opts.push(optMatch[3].trim());
+            continue;
+          }
+          const ansMatch = bl.match(/^(?:Answer|Key|Đáp án)[:\s]+(.+)$/i);
+          if (ansMatch) {
+            const val = ansMatch[1].trim();
+            const letterIdx = 'abcd'.indexOf(val.charAt(0).toLowerCase());
+            if (letterIdx >= 0 && letterIdx < Math.max(2, opts.length || 4)) {
+              answerIndex = letterIdx;
+            } else if (/^false$/i.test(val)) {
+              answerIndex = 1;
+            }
+            continue;
+          }
+          if (/^(?:Explanation|Giải thích)[:\s]+/i.test(bl)) {
+            explanation = bl.replace(/^(?:Explanation|Giải thích)[:\s]+/i, '').trim();
+          }
+        }
+
+        if (opts.length === 0 && /true\s*\/\s*false|\(T\/F\)/i.test(block)) {
+          opts.push('True', 'False');
+        }
+
+        sectionQuizCount += 1;
+        globalQuizCount += 1;
+        const finalOpts = opts.length > 0 ? opts : ['True', 'False'];
+        const safeAnsIdx = Math.min(answerIndex, Math.max(0, finalOpts.length - 1));
+        const letter = String.fromCharCode(65 + safeAnsIdx);
+        const optSpoken = finalOpts
+          .slice(0, 4)
+          .map((o, i) => `${String.fromCharCode(65 + i)}, ${o}`)
+          .join('. ');
+        const wordNumber =
+          ['one', 'two', 'three', 'four', 'five', 'six'][globalQuizCount - 1] ||
+          String(globalQuizCount);
+        const leadIn =
+          sectionQuizCount === 1
+            ? isMultiSection
+              ? `Now let's check ${sanitizeTtsSpeech(secHeadingLabel).replace(/[.!?]+$/, '')}! ... Question ${wordNumber}:`
+              : globalQuizCount === 1
+                ? "Now let's test your understanding! ... Question one:"
+                : `Now let's check the next part! ... Question ${wordNumber}:`
+            : `Question ${wordNumber}: ...`;
+        const questionSpeech = sanitizeTtsSpeech(
+          `${leadIn} ${question} ... ${optSpoken}. Take five seconds to think.`,
+        );
+        const answerSpeech = sanitizeTtsSpeech(
+          `Time is up! The correct answer is ${letter}, ${finalOpts[safeAnsIdx]}.${explanation ? ` ${explanation}` : ''}`,
+        );
+
+        const snippetContext = pickConciseQuizExcerpt(
+          readingSentences,
+          question,
+          finalOpts[safeAnsIdx] || '',
+          readingChunk,
+        );
+
+        cards.push({
+          id: makeCardId(cards.length),
+          type: 'quiz',
+          badge: `QUIZ #${globalQuizCount}`,
+          title: `Quiz Question ${globalQuizCount}`,
+          content: question,
+          contextExcerpt: snippetContext,
+          options: finalOpts,
+          answerIndex: safeAnsIdx,
+          thinkSec: 5,
+          explanation: explanation || locale.defaultExplanation(letter, finalOpts[safeAnsIdx]),
+          learningLang: detectedLang,
+          ttsText: questionSpeech,
+          ttsAnswerText: answerSpeech,
+          durationSec: Number(
+            (estimateCardSpeechDuration(questionSpeech) + 5 + estimateCardSpeechDuration(answerSpeech)).toFixed(2),
+          ),
+          visual: snippetContext
+            ? {
+                variant: 'css-browser-mockup',
+                title: isMultiSection ? secHeadingLabel : docTitle,
+                formula: locale.contextPassageTitle,
+                speechText: snippetContext,
+                sceneIcon: 'book',
+              }
+            : {
+                variant: 'bs-accordion-faq',
+                title: 'QUIZ CHALLENGE (5s)',
+                speechText: question,
+                sceneIcon: 'brain',
+              },
+        });
+      }
     }
   }
 
   // Fallback sentences if cards still only has intro
   if (cards.length <= 1) {
-    const cleanBodyLines = lines
-      .filter((l, idx) => !(idx === 0 && l.replace(/^#+\s*/, '').trim().toLowerCase() === docTitle.toLowerCase()))
-      .map((l) => l.replace(/^#+\s*/, '').replace(/^\d+[.)]\s*/, '').trim())
-      .filter((l) => l.length >= 6 && !isMetadataNoiseLine(l));
-    const sentences = cleanBodyLines
-      .join(' ')
-      .split(/(?<=[.!?])\s+/)
-      .map((s) => s.trim())
-      .filter((s) => s.length >= 8 && !isMetadataNoiseLine(s));
-
+    const sentences = splitSentencesSmart(lines.join('\n'));
     for (const s of sentences.slice(0, 10)) {
       const cleanSpoken = sanitizeTtsSpeech(s);
       if (!cleanSpoken) continue;
@@ -1244,13 +1403,23 @@ export function buildReelCardsRuleBased(
         content: s,
         translation: combinedNote,
         grammarNote: notes.grammarNote,
+        explanationSpeech:
+          locale.code === 'vi' && combinedNote
+            ? sanitizeTtsSpeech(combinedNote)
+            : undefined,
+        learningLang: detectedLang,
         ttsText: cleanSpoken,
         durationSec: estimateCardSpeechDuration(cleanSpoken),
       });
     }
   }
 
-  const outroSpeech = `Great job! Today you practiced ${spokenTitle}. Review the key vocabulary and practice reading aloud every day. See you in the next lesson!`;
+  const outroSpeech =
+    detectedLang === 'zh'
+      ? `太棒了！今天我们学习了${spokenTitle}。记得每天大声练习。下节课见！`
+      : `Great job! Today you practiced ${spokenTitle}. Review the key vocabulary and practice reading aloud every day. See you in the next lesson!`;
+  const outroExplanation =
+    locale.code !== 'none' ? sanitizeTtsSpeech(locale.outroTranslation) : undefined;
   cards.push({
     id: makeCardId(cards.length),
     type: 'outro',
@@ -1259,6 +1428,8 @@ export function buildReelCardsRuleBased(
     content: `${locale.outroContentPrefix} ${docTitle}`,
     translation: locale.code !== 'none' ? locale.outroTranslation : undefined,
     ttsText: outroSpeech,
+    explanationSpeech: outroExplanation,
+    learningLang: detectedLang,
     durationSec: estimateCardSpeechDuration(outroSpeech),
     visual: {
       variant: 'css-bento-stats',
@@ -1313,19 +1484,50 @@ export function buildEnglishReelsWebAiPrompt(params: {
   targetLang: string;
   style?: PromptVideoStyle;
   compositionId?: LayoutCompositionId | 'ai-decide';
+  includeQuiz?: 'auto' | 'always' | 'none';
 }): string {
   const locale = getReelLocaleStrings(params.targetLang);
+  const includeQuiz = params.includeQuiz ?? 'auto';
+  const cleanedUserTitle = (params.title || '').trim();
+  const isStaleDefaultTitle =
+    !cleanedUserTitle ||
+    cleanedUserTitle === 'Hotel Check-in & Polite Requests' ||
+    cleanedUserTitle === 'Outside the Comfort Zone' ||
+    cleanedUserTitle.startsWith('Mẫu bài học:');
 
   const modeInstruction =
     params.mode === 'auto'
-      ? 'Tự động nhận diện dạng bài phù hợp nhất trong 3 dạng: "reading", "quiz", hoặc "vocab" (nếu bài có cả đoạn đọc + câu hỏi quiz thì giữ ĐẦY ĐỦ cả phần đọc lẫn phần quiz 5s!).'
+      ? 'Tự động nhận diện dạng bài phù hợp nhất trong 3 dạng: "reading", "quiz", hoặc "vocab" dựa trên nội dung thực tế (CHỈ đưa quiz nếu nguồn thực sự có phần câu hỏi/kiểm tra).'
       : `Bắt buộc xử lý theo dạng bài: "${params.mode}".`;
+
+  const quizPolicyBlock =
+    includeQuiz === 'none'
+      ? [
+          '3. **KHÔNG tự tạo Quiz (`type: "quiz"`)**:',
+          '   - Bài giảng này CHỈ tập trung vào đọc hiểu / từ vựng / mẫu câu và giải thích.',
+          '   - **TUYỆT ĐỐI KHÔNG** tự ý thêm thẻ `"quiz"` vào cuối video.',
+        ]
+      : includeQuiz === 'always'
+        ? [
+            '3. **Thử thách Quiz tương tác (`type: "quiz"`)**:',
+            '   - Giữ số câu hỏi vừa phải (**2–3 câu** chất lượng cao, gắn sát nội dung vừa đọc).',
+            '   - Nếu nguồn có **nhiều bài / nhiều phần nhỏ**, BẮT BUỘC đặt câu Quiz kiểm tra phần nào **ngay sau phần đó** (Phần 1 → Quiz phần 1 → Lời dẫn chuyển tiếp → Phần 2 → Quiz phần 2). **TUYỆT ĐỐI KHÔNG** đọc dồn hết mấy bài rồi mới đổ đống Quiz ra cuối video!',
+            '   - Giữ câu hỏi (`"content"`) và phương án (`"options"`) súc tích, đủ nghĩa; nếu có bài đọc trước đó, trích **1–2 câu bằng chứng trực tiếp** vào `"contextExcerpt"`.',
+            '   - Đặt `"thinkSec": 5` cùng lời dẫn mở Quiz tự nhiên trong `"ttsText"` và công bố đáp án trong `"ttsAnswerText"`.',
+          ]
+        : [
+            '3. **Thử thách Quiz tương tác (`type: "quiz"` — CHỈ DÙNG KHI NGUỒN CÓ CÂU HỎI / BÀI TẬP QUIZ)**:',
+            '   - **TUYỆT ĐỐI KHÔNG** tự ý gắn thêm thẻ quiz vào cuối video nếu nội dung gốc chỉ là từ vựng, hội thoại, ngữ pháp hoặc bài đọc thuần túy (KHÔNG phải bài cuối lúc nào cũng phải có quiz!).',
+            '   - Nếu nguồn có **nhiều phần / nhiều bài nhỏ** kèm câu hỏi tương ứng, phải ghép câu hỏi kiểm tra phần nào **ngay sau phần đó** kèm lời dẫn chuyển tiếp — **TUYỆT ĐỐI KHÔNG** đọc hết mấy bài dài rồi mới đưa quiz dồn ở cuối.',
+            '   - Khi có thẻ Quiz: đặt `"thinkSec": 5`, trích 1–2 câu bằng chứng trực tiếp vào `"contextExcerpt"` (nếu là bài đọc), đọc lời dẫn Quiz + phương án + `"Take five seconds to think."` trong `"ttsText"`, và công bố đáp án trong `"ttsAnswerText"`.',
+          ];
 
   const { variantsListText, sceneIconsListText } = getCatalogSummaryForPrompt();
 
   const exampleTimelinePromptHint =
     params.compositionId && params.compositionId !== 'ai-decide'
-      ? `Ưu tiên bố cục "${params.compositionId}" nhưng VẪN giữ đầy đủ các thẻ UI minh họa & Quiz 5s cho từng card.`
+      ? `Ưu tiên bố cục "${params.compositionId}" nhưng vẫn đảm bảo chuyển cảnh có lời dẫn và giữ đủ ` +
+        (includeQuiz === 'none' ? 'các thẻ UI minh họa rõ nét.' : 'thẻ UI minh họa & Quiz 5s (nếu bài có quiz).')
       : 'Chọn component minh họa (`visual.variant` + tùy biến `title`, `subtitle`, `labels`, `value`, `sceneIcon`) khớp từng đoạn bài học.';
 
   const targetLangConstraint =
@@ -1335,22 +1537,21 @@ export function buildEnglishReelsWebAiPrompt(params: {
 
   return [
     '# VAI TRÒ',
-    'Bạn là giáo viên tiếng Anh bản ngữ & đạo diễn kịch bản video bài giảng dọc 9:16 (TikTok / Reels / Shorts), tương thích chuẩn JSON cố định của English Reels Studio + KineticSub Studio.',
+    'Bạn là giáo viên ngôn ngữ bản ngữ & đạo diễn kịch bản video bài giảng dọc 9:16 (TikTok / Reels / Shorts), tương thích chuẩn JSON cố định của English Reels Studio + KineticSub Studio.',
+    '',
+    '# QUY TẮC ĐẶT TÊN BÀI HỌC & MẠCH CHUYỂN TIẾP (CỰC KỲ QUAN TRỌNG)',
+    '- **TÊN BÀI HỌC (`"title"`) PHẢI ĐÚNG 100% NỘI DUNG NGUỒN**: Đọc kỹ toàn bộ `# NỘI DUNG GỐC CẦN CHUYỂN HÓA` bên dưới và đặt `"title"` (ở JSON gốc và ở thẻ `intro`) tóm tắt **chính xác chủ đề thật của bài học đó**. KHÔNG lấy tên mẫu minh họa, KHÔNG bịa tên lạc đề!',
+    '- **CHUYỂN TIẾP PHẢI CÓ LỜI DẪN NÓI (KHÔNG CHUYỂN TRONG IM LẶNG)**: Khi chuyển từ Mở đầu → Bài 1, từ Phần/Bài 1 → Phần/Bài 2, từ Bài đọc → Quiz, hoặc trước Tổng kết, BẮT BUỘC phải có lời dẫn nói tự nhiên trong `ttsText` / `explanationSpeech` (VD: `"Now let\'s move on to the next part..."`, `"Chuyển sang phần tiếp theo..."`, `"Now let\'s check what we just learned!"`).',
     '',
     '# CẤU TRÚC BÀI GIẢNG BẮT BUỘC (KHÔNG ĐƯỢC CHỈ XUẤT SUBTITLE TRƠN)',
-    'Video bài học PHẢI sinh động, có lộ trình rõ ràng gồm 4 phần:',
-    '1. **Mở đầu (`type: "intro"`)**: Giới thiệu rõ **mục tiêu bài học** (VD: "Welcome to today\'s lesson on ..."). Chọn `visual.variant: "bs-card-header"` hoặc `"css-roadmap-steps"`.',
+    'Video bài học PHẢI sinh động, có lộ trình rõ ràng:',
+    '1. **Mở đầu (`type: "intro"`)**: Giới thiệu rõ **mục tiêu thực tế & đúng tên bài học** (VD: `"Welcome to today\'s lesson on <Exact Lesson Title>..."`). Chọn `visual.variant: "bs-card-header"` hoặc `"css-roadmap-steps"`.',
     '2. **Nội dung bài đọc / Từ vựng (`type: "vocab"`)**:',
-    '   - **KHÔNG** nhồi nhét phiên âm `/IPA/` rườm rà trừ khi thật sự cần cho từ cực khó.',
-    `   - Ở trường \`"translation"\`, giải thích ngắn gọn từ khó & ngữ pháp bằng **${locale.targetLanguageLabel}** (tránh văn bản dài dòng khiến chữ bị tràn hoặc cắt mất).`,
-    '   - Nếu có nhiều câu trong bài đọc, tách câu hợp lý (1–2 ý ngắn gọn trên mỗi card) để màn hình 9:16 hiển thị ĐẦY ĐỦ không bị mất chữ.',
-    '3. **Thử thách Quiz tương tác (`type: "quiz"`)**:',
-    '   - Giữ số câu hỏi vừa phải (**tối đa 2–4 câu** chất lượng cao, KHÔNG nhồi quá nhiều).',
-    '   - Giữ câu hỏi (`"content"`) và các đáp án (`"options"`) súc tích, đầy đủ nghĩa (KHÔNG tự cắt lửng, tránh mỗi option dài lê thê 20+ từ).',
-    '   - **QUAN TRỌNG**: Nếu Quiz hỏi về bài đọc trước đó, chỉ trích **1–2 câu bằng chứng trực tiếp liên quan nhất** vào `"contextExcerpt"` (tối đa ~200 ký tự, câu hoàn chỉnh) để vừa vặn, dễ đọc rõ nét trên điện thoại trong 5 giây suy nghĩ!',
-    '   - Lời đọc `"ttsText"` PHẢI có **lời dẫn mở Quiz + khoảng nghỉ** trước khi đọc câu hỏi (VD: `"Now let\'s test your understanding! ... Question one: ..."`), rồi đọc các phương án A, B..., cuối cùng nói `"Take five seconds to think."`.',
-    '   - Đặt `"thinkSec": 5` để hệ thống đếm ngược 5s im lặng trước khi đọc `"ttsAnswerText"` công bố đáp án.',
-    '4. **Tổng kết (`type: "outro"`)**: Bắt buộc có lời đọc `"ttsText"` tổng kết bài học qua component `"css-bento-stats"` hoặc `"bs-list-group"`.',
+    '   - **KHÔNG** nhồi nhét phiên âm `/IPA/` vào `ttsText` (tránh TTS đọc sai).',
+    `   - Ở trường \`"translation"\` và \`"explanationSpeech"\`, giải thích ngắn gọn từ khó & ngữ pháp bằng **${locale.targetLanguageLabel}** (tránh văn bản dài dòng khiến chữ bị tràn).`,
+    '   - Nếu nguồn có nhiều phần nhỏ, tách từng phần gọn gàng có lời dẫn chuyển phần giữa các phần (1–2 ý ngắn gọn mỗi card).',
+    ...quizPolicyBlock,
+    '4. **Tổng kết (`type: "outro"`)**: Bắt buộc có lời đọc `"ttsText"` (và `"explanationSpeech"` nếu có giải thích) tổng kết đúng bài vừa học qua component `"css-bento-stats"` hoặc `"bs-list-group"`.',
     '',
     TYPOGRAPHY_MOBILE_READABILITY_PROMPT_BLOCK,
     '',
@@ -1369,34 +1570,45 @@ export function buildEnglishReelsWebAiPrompt(params: {
     '',
     '# NHIỆM VỤ XỬ LÝ NGUỒN DỮ LIỆU',
     params.sourceUrl ? `- URL nguồn: ${params.sourceUrl}` : '',
-    params.title ? `- Tiêu đề gợi ý: ${params.title}` : '',
-    '1. Lọc bỏ hoàn toàn tiêu đề khung bài tập/worksheet (VD: `"## Practice Reading English Exercises for Beginner – Plans"`, `"English Reading Exercises for Beginner"`, `"## Exercise 1"`, `"Part 1"`, menu web, markdown). Không bao giờ đưa chúng vào `cards` hay `ttsText`!',
+    !isStaleDefaultTitle
+      ? `- Tên bài học gợi ý (đối chiếu lại với nội dung nguồn nếu cần): ${cleanedUserTitle}`
+      : '- Chưa có tên bài học cố định — BẮT BUỘC đặt `"title"` phản ánh chính xác 100% nội dung bài trong nguồn bên dưới.',
+    '1. Lọc bỏ tiêu đề khung bài tập thừa kiểu menu web hay `"English Reading Exercises for Beginner"` khỏi câu đọc, nhưng giữ chuyển tiếp có lời dẫn nói giữa các phần nội dung thật.',
     `2. ${modeInstruction}`,
     `3. ${targetLangConstraint}`,
     `4. ${exampleTimelinePromptHint}`,
     '',
-    '# QUY TẮC VÀNG CHO GIỌNG ĐỌC TTS ("ttsText" & "ttsAnswerText")',
-    '- "ttsText" và "ttsAnswerText" PHẢI là 100% tiếng Anh tự nhiên để máy đọc thành giọng giáo viên.',
-    '- TUYỆT ĐỐI KHÔNG đưa ký tự `&` (viết thành `and`), IPA `/.../`, emoji, URL, hay ký hiệu markdown vào `ttsText` / `ttsAnswerText`.',
-    '- Riêng thẻ `quiz`: `"ttsText"` bắt đầu bằng lời dẫn Quiz (`"Now let\'s test your understanding! ... Question 1: ..."`), rồi đọc lựa chọn + `"Take five seconds to think."`.',
+    '# QUY TẮC VÀNG CHO GIỌNG ĐỌC TTS ("ttsText", "explanationSpeech", "ttsAnswerText")',
+    '- `"ttsText"` và `"ttsAnswerText"` PHẢI hoàn toàn tự nhiên để TTS đọc thành giọng giáo viên — không trộn lẫn 2 ngôn ngữ trong cùng một câu.',
+    '- TUYỆT ĐỐI KHÔNG đưa ký tự `&` (viết thành `and`), IPA `/.../`, emoji, URL, hay ký hiệu markdown vào `ttsText` / `explanationSpeech` / `ttsAnswerText`.',
+    ...(includeQuiz !== 'none'
+      ? [
+          '- Riêng thẻ `quiz` (nếu bài có quiz): `"ttsText"` bắt đầu bằng lời dẫn Quiz tự nhiên, đọc câu hỏi + phương án + `"Take five seconds to think."` và đặt `"thinkSec": 5`.',
+        ]
+      : []),
     '',
-    `# ĐỊNH DẠNG JSON CỐ ĐỊNH BẮT BUỘC TRẢ VỀ (MINH HỌA THEO NGÔN NGỮ: ${locale.targetLanguageLabel})`,
+    `# ĐỊNH DẠNG JSON CỐ ĐỊNH BẮT BUỘC TRẢ VỀ (MINH HỌA SCHEMA CHO NGÔN NGỮ: ${locale.targetLanguageLabel} — PHẢI THAY BẰNG NỘI DUNG THẬT TỪ NGUỒN)`,
     '```json',
     '{',
-    '  "title": "Outside the Comfort Zone",',
+    '  "title": "<Tiêu đề ngắn gọn, ĐÚNG NỘI DUNG bài học thực tế bên dưới>",',
     '  "mode": "reading | quiz | vocab",',
     '  "cards": [',
     '    {',
     '      "type": "intro",',
     `      "badge": ${JSON.stringify(locale.promptExampleBadge)},`,
-    '      "title": "Outside the Comfort Zone",',
+    '      "title": "<Tên bài học khớp với title gốc>",',
     `      "content": ${JSON.stringify(locale.promptExampleIntroContent)},`,
     `      "translation": ${JSON.stringify(locale.promptExampleTranslation)},`,
-    '      "ttsText": "Welcome to today\'s English lesson on Outside the Comfort Zone. Listen to the story, learn useful vocabulary and grammar, then answer a short quiz.",',
+    '      "ttsText": "Welcome to today\'s lesson on <Exact Topic>. Let\'s start with the first key expression.",',
+    ...(locale.code !== 'none'
+      ? [
+          '      "explanationSpeech": "Chào mừng bạn đến với bài học hôm nay về <Chủ đề thật của bài>. Bây giờ chúng ta vào nội dung đầu tiên nhé.",',
+        ]
+      : []),
     '      "visual": {',
     '        "variant": "bs-card-header",',
     '        "formula": "TODAY LESSON GOAL",',
-    '        "title": "Outside the Comfort Zone",',
+    '        "title": "<Tên bài học thực tế>",',
     `        "subtitle": ${JSON.stringify(locale.introVisualSubtitle)},`,
     '        "sceneIcon": "graduation"',
     '      }',
@@ -1404,10 +1616,10 @@ export function buildEnglishReelsWebAiPrompt(params: {
     '    {',
     '      "type": "vocab",',
     `      "badge": ${JSON.stringify(`${locale.readingBadgePrefix} #1`)},`,
-    '      "title": "Mountain Challenge",',
-    '      "content": "In this exciting new TV programme, ten people go and live in the mountains for ten days.",',
+    '      "title": "<Tiêu đề ngắn cho mục / câu 1>",',
+    '      "content": "<Câu hoặc từ vựng thực tế trích từ nguồn>",',
     `      "translation": ${JSON.stringify(locale.promptExampleVocabTranslation)},`,
-    '      "ttsText": "In this exciting new TV programme, ten people go and live in the mountains for ten days.",',
+    '      "ttsText": "<Câu hoặc từ vựng tự nhiên để đọc>",',
     '      "visual": {',
     '        "variant": "css-sticky-note",',
     '        "title": "KEY VOCAB & GRAMMAR",',
@@ -1415,33 +1627,42 @@ export function buildEnglishReelsWebAiPrompt(params: {
     '        "sceneIcon": "book"',
     '      }',
     '    },',
-    '    {',
-    '      "type": "quiz",',
-    '      "badge": "QUIZ #1",',
-    '      "title": "Check Understanding",',
-    '      "contextExcerpt": "In this exciting new TV programme, ten people go and live in the mountains for ten days.",',
-    '      "content": "How long do the ten people live in the mountains?",',
-    '      "translation": "How long do they live in the mountains?",',
-    '      "options": ["Five days", "Ten days", "Two weeks"],',
-    '      "answerIndex": 1,',
-    '      "thinkSec": 5,',
-    `      "explanation": ${JSON.stringify(locale.promptExampleExplanation)},`,
-    '      "ttsText": "Now let\'s test your understanding! ... Question one: How long do the ten people live in the mountains? ... A, Five days. B, Ten days. C, Two weeks. Take five seconds to think.",',
-    '      "ttsAnswerText": "Time is up! The correct answer is B, Ten days. The text says they live in the mountains for ten days.",',
-    '      "visual": {',
-    '        "variant": "css-browser-mockup",',
-    `        "title": ${JSON.stringify(locale.promptExampleContextTitle)},`,
-    '        "speechText": "In this exciting new TV programme, ten people go and live in the mountains for ten days.",',
-    '        "sceneIcon": "book"',
-    '      }',
-    '    },',
+    ...(includeQuiz !== 'none'
+      ? [
+          '    {',
+          '      "type": "quiz",',
+          '      "badge": "QUIZ #1",',
+          '      "title": "<Chỉ thêm card quiz khi nguồn có câu hỏi hoặc bật chế độ Quiz>",',
+          '      "contextExcerpt": "<1-2 câu bằng chứng trực tiếp nếu là bài đọc>",',
+          '      "content": "<Câu hỏi kiểm tra ngay phần vừa học>",',
+          '      "translation": "<Nghĩa ngắn gọn câu hỏi>",',
+          '      "options": ["Option A", "Option B", "Option C"],',
+          '      "answerIndex": 1,',
+          '      "thinkSec": 5,',
+          `      "explanation": ${JSON.stringify(locale.promptExampleExplanation)},`,
+          '      "ttsText": "Now let\'s test what we just read! ... Question one: ... A, Option A. B, Option B. C, Option C. Take five seconds to think.",',
+          '      "ttsAnswerText": "Time is up! The correct answer is B, Option B.",',
+          '      "visual": {',
+          '        "variant": "css-browser-mockup",',
+          `        "title": ${JSON.stringify(locale.promptExampleContextTitle)},`,
+          '        "speechText": "<Câu bằng chứng trích từ bài>",',
+          '        "sceneIcon": "book"',
+          '      }',
+          '    },',
+        ]
+      : []),
     '    {',
     '      "type": "outro",',
     `      "badge": ${JSON.stringify(locale.outroBadge)},`,
     '      "title": "Key Takeaways",',
     `      "content": ${JSON.stringify(locale.promptExampleOutroContent)},`,
     `      "translation": ${JSON.stringify(locale.promptExampleOutroTranslation)},`,
-    '      "ttsText": "Great job! Today you practiced Outside the Comfort Zone. Review the new words and keep speaking English every day.",',
+    '      "ttsText": "Great job! Today you practiced <Exact Topic>. Review these expressions every day.",',
+    ...(locale.code !== 'none'
+      ? [
+          '      "explanationSpeech": "Tuyệt vời! Bạn vừa hoàn thành bài học về <Chủ đề thật>. Hãy lưu lại và luyện đọc to mỗi ngày nhé.",',
+        ]
+      : []),
     '      "visual": {',
     '        "variant": "css-bento-stats",',
     '        "title": "Lesson Complete!",',
@@ -1476,6 +1697,7 @@ export function buildAiCreatorWebAiPrompt(params: {
   aspectRatio?: ExportAspectRatioId;
   includeExplanationSpeech?: boolean;
   splitAudioByRole?: boolean;
+  includeQuiz?: boolean;
 }): string {
   const locale = getReelLocaleStrings(params.targetLang);
   const { variantsListText, sceneIconsListText } = getCatalogSummaryForPrompt();
@@ -1822,14 +2044,21 @@ export function buildAiCreatorWebAiPrompt(params: {
     '- Formats to draw from: **A. Vocabulary Lists** · **B. Natural Phrases** · **C. Phrasal Verbs** · **D. Common Mistakes** · **E. Grammar in Context** · **F. Vocabulary Comparisons** · **G. Real-life Conversations**.',
     '',
     '## 3. VIDEO PACING & STRUCTURE',
-    `1. **Hook Card (\`type: "title"\`)**: Scroll-stopping \`kicker\`, punchy \`title\`, ${splitAudioByRole ? 'empty `speech: ""` with `explanationSpeech` in ' + explainLangName : 'spoken `speech`' + (includeExplanationSpeech ? ' + `explanationSpeech`' : '')}, and \`visual\`.`,
+    `1. **Hook Card (\`type: "title"\`)**: Scroll-stopping \`kicker\`, **EXACT concrete \`title\` matching the lesson content & topic**, ${splitAudioByRole ? 'empty `speech: ""` with natural welcoming hook + transition into item 01 in `explanationSpeech` in ' + explainLangName : 'spoken `speech`' + (includeExplanationSpeech ? ' + `explanationSpeech`' : '')}, and \`visual\`.`,
     `2. **Core Teaching Cards (\`${count}\` cards, \`type: "vocab"\`)**:`,
     `   - Ordered cleanly with \`"indexLabel": "01 / ${countPadded}"\` through \`"${countPadded} / ${countPadded}"\`.`,
+    '   - Include natural **spoken transition phrases** inside `explanationSpeech` (or `speech` if single-voice) when advancing to the next section/nuance (e.g. "Next expression...", "Moving on to...") so transitions are NEVER silent!',
     `   - Scale detail richness across all ${count} cards so total audio fits **${durationLabel}** naturally (do NOT rush or bloat beyond target minutes).`,
     '   - If level is a progression (`N5→N1`, `A1→C2`, `HSK 1→6`, `TOPIK 1→6`), progress clearly from elementary (`01`) to advanced (`' + countPadded + '`).',
-    `3. **Recap Outro Card (\`type: "outro"\`)**: ${splitAudioByRole ? 'Empty `speech: ""` with encouraging closing in `explanationSpeech`' : 'Encouraging closing in `speech`' + (includeExplanationSpeech ? ' + `explanationSpeech`' : '')} + summary visual.`,
+    params.includeQuiz
+      ? `3. **Optional Quick Interactive Check (\`type: "quiz"\`, 1–2 concise cards)**: Place a quick 5-second check right after the items it tests (ONLY on key contrasts, NOT an unrelated quiz dumped out of nowhere).`
+      : `3. **NO Surprise Quiz Cards**: Do NOT append \`type: "quiz"\` cards at the end — stay focused on teaching items and practical examples.`,
+    `4. **Recap Outro Card (\`type: "outro"\`)**: ${splitAudioByRole ? 'Empty `speech: ""` with encouraging spoken closing summarizing the exact lesson in `explanationSpeech`' : 'Encouraging closing in `speech`' + (includeExplanationSpeech ? ' + `explanationSpeech`' : '')} + summary visual.`,
     '',
-    '## 4. VOICEOVER / TTS QUALITY RULES (`speech` & `explanationSpeech`)',
+    '## 4. LESSON TITLE & VOICEOVER / TTS QUALITY RULES (`title`, `speech`, `explanationSpeech`)',
+    topicHint
+      ? `- **EXACT TITLE RULE**: Root \`"title"\` and \`type: "title"\` card \`"title"\` MUST accurately reflect "${topicHint}" (${chosenLevel}) — do NOT invent an unrelated title or copy generic placeholder labels.`
+      : `- **EXACT TITLE RULE**: Root \`"title"\` and \`type: "title"\` card \`"title"\` MUST be a concrete, specific title summarizing the exact expressions you generated (NEVER leave placeholder text like "<Replace with Exact Topic Title>").`,
     ...dualTtsRules,
     '- NEVER put `/IPA/` symbols, `&`, markdown (`**`, `#`), URLs, or emojis inside `speech` or `explanationSpeech`.',
     `- ${translationRule}`,
@@ -1848,7 +2077,11 @@ export function buildAiCreatorWebAiPrompt(params: {
     '  "mode": "vocab | phrases | phrasal_verbs | mistakes | grammar | comparisons | real_life",',
     `  "learningLang": "${learningLang}",`,
     `  "level": "${chosenLevel}",`,
-    `  "title": "${count} Essential ${langOption.nativeName} Expressions (${chosenLevel})",`,
+    `  "title": ${JSON.stringify(
+      topicHint
+        ? `${topicHint} (${chosenLevel})`
+        : `<Concrete Lesson Title Matching Generated ${langOption.nativeName} Content (${chosenLevel})>`,
+    )},`,
     '  "cards": [',
     ...exampleBlocks,
     '    {',
@@ -2473,6 +2706,8 @@ export function parseEnglishReelsAiJson(
       let type: ReelCardType;
       if (rawType === 'intro' || rawType === 'title' || rawType === 'hook') {
         type = 'intro';
+      } else if (rawType === 'transition' || rawType === 'bridge' || rawType === 'section') {
+        type = 'transition';
       } else if (rawType === 'quiz' || rawType === 'question') {
         type = 'quiz';
       } else if (rawType === 'outro' || rawType === 'recap') {
@@ -2665,6 +2900,10 @@ export function parseEnglishReelsAiJson(
       title: String(parsed.title || cards[0]?.title || 'English Reels Project').trim(),
       mode,
       creatorSubMode,
+      learningLang: inferLearningLangFromCards(
+        cards,
+        typeof parsed.learningLang === 'string' ? parsed.learningLang : undefined,
+      ),
       cards,
       sceneJson,
     };
@@ -2703,6 +2942,7 @@ export function parseEnglishReelsAiJson(
       return {
         title: scenePlan.title || 'KineticSub Imported Lesson',
         mode: 'reading',
+        learningLang: inferLearningLangFromCards(cards),
         cards,
         sceneJson: scenePlan,
       };

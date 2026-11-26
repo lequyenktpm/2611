@@ -23,7 +23,6 @@ const RE_HAS_VI_DIACRITIC =
   /[ăâđêôơưàáạảãằắặẳẵầấậẩẫèéẹẻẽềếệểễìíịỉĩòóọỏõồốộổỗờớợởỡùúụủũừứựửữỳýỵỷỹĂÂĐÊÔƠƯÀÁẠẢÃẰẮẶẲẴẦẤẬẨẪÈÉẸẺẼỀẾỆỂỄÌÍỊỈĨÒÓỌỎÕỒỐỘỔỖỜỚỢỞỠÙÚỤỦŨỪỨỰỬỮỲÝỴỶỸ]/;
 const RE_HAS_FR_ES_DIACRITIC = /[çœæñ¿¡éèêëàâîïôùûüÿáíóú]/i;
 const RE_HAS_SPOKEN_CHAR = /[A-Za-z0-9À-ỹ\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9faf\uac00-\ud7af]/;
-
 const RE_HAS_PINYIN_TONE = /[āáǎàēéěèīíǐìōóǒòūúǔùǖǘǚǜĀÁǍÀĒÉĚÈĪÍǏÌŌÓǑÒŪÚǓÙǕǗǙǛ]/;
 
 // Unaccented lowercase tokens that exist in Vietnamese phrases and do not collide with standard English words.
@@ -131,10 +130,31 @@ const UNAMBIGUOUS_VI_ASCII = new Set([
   'chuc',
   'mung',
   'cac',
+  'giao',
+  'tiep',
+  'cach',
+  'quang',
+  'nuoc',
+  'buoi',
+  'chieu',
+  'sang',
+  'trua',
+  'khuya',
+  'ngon',
+  'ngan',
+  'thang',
+  'tuan',
+  'nhanh',
+  'cham',
+  'muoi',
+  'chao',
+  'thao',
+  'khach',
+  'hang',
 ]);
 
-// Words that overlap with English/French ("la", "tu", "ban", "day", "the", "hay", "doc", "cam", "rat", "lam", "noi")
-// should ONLY be classified as Vietnamese when primary language is non-Latin (zh/ja/ko) or Vietnamese AND the text has Vietnamese diacritics.
+// Words that overlap with short English/French tokens (to, ty, on, in, do, so, at, go, no, may, can, day, la...)
+// Classified as Vietnamese ONLY inside Vietnamese-diacritic / unambiguous-VI clauses or when primary is 'vi'.
 const CONTEXTUAL_VI_ASCII = new Set([
   'la',
   'tu',
@@ -175,7 +195,114 @@ const CONTEXTUAL_VI_ASCII = new Set([
   'nhu',
   'tai',
   'vi',
+  'to',
+  'ty',
+  'an',
+  'at',
+  'do',
+  'so',
+  'on',
+  'in',
+  'no',
+  'go',
+  'may',
+  'can',
+  'me',
+  'cha',
+  'ba',
+  'hai',
+  'bay',
+  'tam',
+  'chin',
+  'xe',
+  'ta',
+  'ten',
+  'tin',
+  'van',
+  'song',
+  'sai',
+  'gap',
+  'nam',
+  'han',
+  'tien',
+  'dep',
+  'cao',
+  'lon',
+  'tot',
+  'o',
+  'ben',
+  'gan',
+  'xa',
+  'it',
+  'mot',
+  'bon',
+  'tram',
+  'mat',
+  'tay',
+  'chan',
+  'da',
+  'lo',
+  'mo',
+  'nho',
+  'ru',
+  'su',
+  'thu',
+  'tu',
+  'vu',
+  'ke',
+  'le',
+  'ne',
+  're',
+  'se',
+  'te',
+  'ha',
+  'ca',
+  'ho',
+  'bo',
+  'cu',
+  'du',
+  'hu',
+  'lu',
+  'mu',
+  'nu',
+  'cong',
+  'quan',
+  'nham',
+  'nhat',
+  'trong',
+  'dang',
+  'bang',
+  'tang',
+  'mang',
+  'sang',
+  'nang',
+  'lang',
+  'hang',
+  'vang',
+  'cang',
+  'rang',
+  'thang',
+  'khang',
+  'phang',
+  'trang',
 ]);
+
+// Valid Vietnamese syllable phonotactics (ASCII-folded) so single unaccented VI words inside VI sentences
+// (e.g. "ty", "to", "nhan", "hoan") are NOT falsely broken out to an English TTS voice.
+const RE_VI_ASCII_SYLLABLE =
+  /^(?:ngh|ng|nh|ch|gh|gi|kh|ph|qu|th|tr|[bcdghklmnpqrstvx])?(?:uy|ue|ua|uo|uu|uya|uye|uoi|uou|ai|ao|au|ay|eo|eu|ia|ie|iu|oa|oe|oi|oo|ua|ui|uo|uu|ye|ya|[aeiouy])(?:ch|ng|nh|c|m|n|p|t)?$/;
+
+export function isLikelyVietnameseAsciiSyllable(rawWord: string): boolean {
+  const lower = rawWord.toLowerCase().replace(/^'+|'+$/g, '');
+  if (!lower || lower.length > 7) return false;
+  if (/[fjwz]/.test(lower)) return false;
+  if (UNAMBIGUOUS_VI_ASCII.has(lower) || CONTEXTUAL_VI_ASCII.has(lower)) return true;
+  // Common English suffixes / endings never found in Vietnamese single syllables:
+  if (/(?:ed|ing|tion|sion|ment|ness|able|ible|ly|er|est|sh|th|ck|st|nt|nd|nk|mp|ct|pt|ft|ld)$/.test(lower)) {
+    return false;
+  }
+  return RE_VI_ASCII_SYLLABLE.test(lower);
+}
 
 export function normalizeTtsLangCode(raw?: string): SupportedTtsLang {
   const low = String(raw || '').trim().toLowerCase();
@@ -235,6 +362,7 @@ interface RawPiece {
   raw: string;
   kind: 'word' | 'cjk' | 'hangul' | 'num' | 'punct';
   langHint: SupportedTtsLang | null;
+  clauseIdx: number;
 }
 
 export function splitMixedLanguageTtsSpans(
@@ -257,7 +385,23 @@ export function splitMixedLanguageTtsSpans(
       (primary === 'vi' ? 'en' : 'vi'),
   );
 
+  // Enforce a single consistent Vietnamese voice across all 'vi' spans in the same request
+  const consistentViVoice =
+    (primary === 'vi' && opts.primaryVoice && detectVoiceLangCode(opts.primaryVoice) === 'vi'
+      ? opts.primaryVoice
+      : undefined) ||
+    (opts.secondaryVoice && detectVoiceLangCode(opts.secondaryVoice) === 'vi'
+      ? opts.secondaryVoice
+      : undefined) ||
+    (opts.primaryVoice && detectVoiceLangCode(opts.primaryVoice) === 'vi'
+      ? opts.primaryVoice
+      : undefined) ||
+    DEFAULT_EDGE_VOICE_BY_LANG.vi;
+
   const voiceForLang = (lang: SupportedTtsLang): string => {
+    if (lang === 'vi') {
+      return consistentViVoice;
+    }
     if (lang === primary && opts.primaryVoice) {
       return pickVoiceForLangCode(lang, opts.primaryVoice);
     }
@@ -280,7 +424,19 @@ export function splitMixedLanguageTtsSpans(
           .trim() || clean
       : clean;
 
-  // Tokenize into script-homogeneous pieces + separators
+  // Compute sentence/clause Vietnamese predominance per clause so "Every day. Nghĩa là mỗi ngày."
+  // keeps "Every day." as English while "Đây là mẫu câu... công ty." keeps "ty" as Vietnamese.
+  const clauseStrings = spokenPrepared.split(/(?<=[.!?\n。！？]+)/);
+  const clauseHasViContext: boolean[] = clauseStrings.map((cl) => {
+    if (RE_HAS_VI_DIACRITIC.test(cl)) return true;
+    const words = cl.toLowerCase().match(/[a-z]+/g) || [];
+    if (words.length === 0) return false;
+    const unambigCount = words.filter((w) => UNAMBIGUOUS_VI_ASCII.has(w)).length;
+    if (unambigCount >= 2 || (unambigCount >= 1 && words.length <= 5)) return true;
+    return primary === 'vi' && secondary === 'vi';
+  });
+
+  // Tokenize into script-homogeneous pieces + separators with clause index tracking
   const regex =
     /([\u3040-\u30ff\u31f0-\u31ff\uff65-\uff9f\u3400-\u4dbf\u4e00-\u9faf\u3005\u3006ー々]+)|([\uac00-\ud7af\u1100-\u11ff\u3130-\u318f]+)|([A-Za-zÀ-ỹāáǎàēéěèīíǐìōóǒòūúǔùǖǘǚǜĀÁǍÀĒÉĚÈĪÍǏÌŌÓǑÒŪÚǓÙǕǗǙǛ][A-Za-zÀ-ỹāáǎàēéěèīíǐìōóǒòūúǔùǖǘǚǜĀÁǍÀĒÉĚÈĪÍǏÌŌÓǑÒŪÚǓÙǕǗǙǛ'’-]*)|(\d+(?:[.,:/-]\d+)*%?)|(\s+|[^\sA-Za-zÀ-ỹ0-9\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9faf\uac00-\ud7af]+)/g;
 
@@ -291,28 +447,49 @@ export function splitMixedLanguageTtsSpans(
   const primaryIsNonLatin = primary === 'zh' || primary === 'ja' || primary === 'ko';
   const secondaryIsVi = secondary === 'vi' || primary === 'vi';
 
+  // Map each character index in spokenPrepared to its clause index
+  const charToClause: number[] = new Array(spokenPrepared.length).fill(0);
+  let scanPos = 0;
+  for (let ci = 0; ci < clauseStrings.length; ci++) {
+    const len = clauseStrings[ci].length;
+    for (let k = 0; k < len && scanPos + k < spokenPrepared.length; k++) {
+      charToClause[scanPos + k] = ci;
+    }
+    scanPos += len;
+  }
+
   while ((match = regex.exec(spokenPrepared)) !== null) {
     const raw = match[0];
+    const clauseIdx = charToClause[match.index] ?? 0;
+    const inViClause = clauseHasViContext[clauseIdx] ?? false;
+
     if (match[1]) {
       const lang: SupportedTtsLang =
         RE_HAS_KANA.test(raw) || primary === 'ja' || secondary === 'ja' || textContainsKana
           ? 'ja'
           : 'zh';
-      pieces.push({ raw, kind: 'cjk', langHint: lang });
+      pieces.push({ raw, kind: 'cjk', langHint: lang, clauseIdx });
     } else if (match[2]) {
-      pieces.push({ raw, kind: 'hangul', langHint: 'ko' });
+      pieces.push({ raw, kind: 'hangul', langHint: 'ko', clauseIdx });
     } else if (match[3]) {
       let langHint: SupportedTtsLang | null = null;
       if (RE_HAS_VI_DIACRITIC.test(raw)) {
         langHint = 'vi';
       } else if (RE_HAS_PINYIN_TONE.test(raw)) {
-        langHint = primary === 'zh' || secondary === 'zh' ? 'zh' : 'en';
+        // Inside a Vietnamese explanation clause (e.g. "Dùng Bù hǎo yì si khi..."),
+        // keep Pinyin with the Vietnamese voice rather than jarring mid-sentence English!
+        langHint = inViClause || primary === 'vi' ? 'vi' : primary === 'zh' || secondary === 'zh' ? 'zh' : 'en';
       } else {
         const lower = raw.toLowerCase();
+        const isAllCapsAcronym = raw.length >= 2 && /^[A-Z0-9]{2,}$/.test(raw);
         if (
-          (textContainsViDiacritics || secondaryIsVi) &&
+          (inViClause || primary === 'vi' || textContainsViDiacritics || secondaryIsVi) &&
           (UNAMBIGUOUS_VI_ASCII.has(lower) ||
-            ((primaryIsNonLatin || primary === 'vi' || (pieces.length > 0 && RE_HAS_VI_DIACRITIC.test(pieces.slice(-4).map((p) => p.raw).join('')))) &&
+            (primary === 'vi' && secondary === 'vi' && !isAllCapsAcronym) ||
+            (inViClause &&
+              !isAllCapsAcronym &&
+              (CONTEXTUAL_VI_ASCII.has(lower) || isLikelyVietnameseAsciiSyllable(lower))) ||
+            ((primaryIsNonLatin || primary === 'vi') &&
               textContainsViDiacritics &&
               CONTEXTUAL_VI_ASCII.has(lower)))
         ) {
@@ -327,11 +504,11 @@ export function splitMixedLanguageTtsSpans(
           langHint = 'en';
         }
       }
-      pieces.push({ raw, kind: 'word', langHint });
+      pieces.push({ raw, kind: 'word', langHint, clauseIdx });
     } else if (match[4]) {
-      pieces.push({ raw, kind: 'num', langHint: null });
+      pieces.push({ raw, kind: 'num', langHint: null, clauseIdx });
     } else {
-      pieces.push({ raw, kind: 'punct', langHint: null });
+      pieces.push({ raw, kind: 'punct', langHint: null, clauseIdx });
     }
   }
 
@@ -339,7 +516,6 @@ export function splitMixedLanguageTtsSpans(
     return [{ text: spokenPrepared, lang: primary, voice: voiceForLang(primary) }];
   }
 
-  // Resolve unassigned Latin ambiguous tokens between strong VI neighbors only if primary is VI and secondary is VI
   // Resolve numbers & punctuation by inheriting nearest spoken neighbor (prefer left for trailing punct, right for leading punct)
   const resolvedLangs: Array<SupportedTtsLang | null> = pieces.map((p) => p.langHint);
 

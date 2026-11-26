@@ -26,7 +26,18 @@ import {
   synthesizeAudioWithProgressJob,
 } from '../engine/ttsSyncHelper';
 import { TranscriptCue } from '../engine/types';
+import {
+  detectVoiceLangCode,
+  pickVoiceForLangCode,
+} from '../engine/bilingualTtsHelper';
 import { buildApiKeyHeaders, useClientApiKeys } from '../utils/apiKeysStore';
+import {
+  loadPersistedSettings,
+  PersistedStudioSettings,
+  updatePersistedSettings,
+  USER_SETTINGS_HYDRATED_EVENT,
+  USER_SETTINGS_RESET_EVENT,
+} from '../utils/studioSettingsStore';
 
 export interface TtsVoiceOption {
   id: string;
@@ -103,33 +114,66 @@ Instead, try saying I am exhausted.
 At the airport, keep your boarding pass ready at the gate.
 Practice speaking one natural phrase every morning.`;
 
+const RE_LINE_HAS_HANZI = /[\u4e00-\u9faf\u3400-\u4dbf]/;
+const RE_LINE_HAS_KANA = /[\u3040-\u30ff\u31f0-\u31ff]/;
+const RE_LINE_HAS_HANGUL = /[\uac00-\ud7af\u1100-\u11ff]/;
+const RE_LINE_HAS_VI_DIACRITIC =
+  /[ăâđêôơưàáạảãằắặẳẵầấậẩẫèéẹẻẽềếệểễìíịỉĩòóọỏõồốộổỗờớợởỡùúụủũừứựửữỳýỵỷỹĂÂĐÊÔƠƯÀÁẠẢÃẰẮẶẲẴẦẤẬẨẪÈÉẸẺẼỀẾỆỂỄÌÍỊỈĨÒÓỌỎÕỒỐỘỔỖỜỚỢỞỠÙÚỤỦŨỪỨỰỬỮỲÝỴỶỸ]/;
+const RE_EXPLANATION_PREFIX =
+  /^(?:giải thích|nghĩa|dịch|lưu ý|mẹo|mở bài|tổng kết|kết bài|note|meaning|explanation)\s*[:：\-]/i;
+
 export const AudioSubtitleStudioModal: React.FC<AudioSubtitleStudioModalProps> = ({
   isOpen,
   initialTranscriptText,
   onClose,
   onApplyAudioAndCues,
 }) => {
-  const [tab, setTab] = useState<'tts' | 'transcribe'>('tts');
+  const [initialSavedModal] = useState(() => loadPersistedSettings().audioModal);
+  const [tab, setTab] = useState<'tts' | 'transcribe'>(() => initialSavedModal?.tab || 'tts');
 
   // TTS state
   const [providers, setProviders] = useState<TtsProviderInfo[]>([]);
   const [hasGeminiKey, setHasGeminiKey] = useState(false);
   const [hasElevenLabsKey, setHasElevenLabsKey] = useState(false);
   const [fasterWhisperAvailable, setFasterWhisperAvailable] = useState(false);
-  const [provider, setProvider] = useState<string>('auto');
-  const [voice, setVoice] = useState<string>('en-US-JennyNeural');
-  const [secondaryVoice, setSecondaryVoice] = useState<string>('vi-VN-HoaiMyNeural');
-  const [rate, setRate] = useState<number>(1.0);
-  const [ttsTitle, setTtsTitle] = useState<string>('Luyện nói tiếng Anh tự nhiên');
+  const [provider, setProvider] = useState<string>(() => initialSavedModal?.provider || 'auto');
+  const [voice, setVoice] = useState<string>(() => initialSavedModal?.voice || 'en-US-JennyNeural');
+  const [secondaryVoice, setSecondaryVoice] = useState<string>(
+    () => initialSavedModal?.secondaryVoice ?? 'vi-VN-HoaiMyNeural',
+  );
+  const [rate, setRate] = useState<number>(() =>
+    typeof initialSavedModal?.rate === 'number' ? initialSavedModal.rate : 1.0,
+  );
+  const [ttsTitle, setTtsTitle] = useState<string>(
+    () => initialSavedModal?.ttsTitle || 'Luyện nói tiếng Anh tự nhiên',
+  );
+  const [autoSplitLanguages, setAutoSplitLanguages] = useState<boolean>(() =>
+    typeof initialSavedModal?.autoSplitLanguages === 'boolean'
+      ? initialSavedModal.autoSplitLanguages
+      : true,
+  );
+  const [onlyTargetContentSpeech, setOnlyTargetContentSpeech] = useState<boolean>(() =>
+    typeof initialSavedModal?.onlyTargetContentSpeech === 'boolean'
+      ? initialSavedModal.onlyTargetContentSpeech
+      : false,
+  );
   const [ttsText, setTtsText] = useState<string>(() => {
     const cleaned = initialTranscriptText?.trim()
       ? stripTimestampsFromScript(initialTranscriptText)
       : '';
     return cleaned || SAMPLE_TTS_SCRIPT;
   });
-  const [autoAlignWhisper, setAutoAlignWhisper] = useState<boolean>(true);
-  const [ttsAlignMode, setTtsAlignMode] = useState<'fast-forced' | 'whisper'>('fast-forced');
-  const [ttsWhisperModel, setTtsWhisperModel] = useState<string>('Xenova/whisper-small');
+  const [autoAlignWhisper, setAutoAlignWhisper] = useState<boolean>(() =>
+    typeof initialSavedModal?.autoAlignWhisper === 'boolean'
+      ? initialSavedModal.autoAlignWhisper
+      : true,
+  );
+  const [ttsAlignMode, setTtsAlignMode] = useState<'fast-forced' | 'whisper'>(
+    () => initialSavedModal?.ttsAlignMode || 'fast-forced',
+  );
+  const [ttsWhisperModel, setTtsWhisperModel] = useState<string>(
+    () => initialSavedModal?.ttsWhisperModel || 'Xenova/whisper-small',
+  );
   const [ttsAlignNote, setTtsAlignNote] = useState<string | null>(null);
   const [ttsCleanedNotice, setTtsCleanedNotice] = useState<string | null>(null);
   const { keys: clientKeys } = useClientApiKeys();
@@ -153,16 +197,26 @@ export const AudioSubtitleStudioModal: React.FC<AudioSubtitleStudioModalProps> =
 
   // Transcribe state (defaults: faster-whisper Built-in, Xenova/whisper-small for fast CPU/ONNX, .srt)
   const [mediaFile, setMediaFile] = useState<File | null>(null);
-  const [sttService, setSttService] = useState<'faster-whisper' | 'whisper' | 'gemini'>('faster-whisper');
-  const [whisperModel, setWhisperModel] = useState<string>('Xenova/whisper-small');
-  const [outputFormat, setOutputFormat] = useState<'srt' | 'vtt'>('srt');
-  const [sourceLang, setSourceLang] = useState<string>('auto');
-  const [translateLang, setTranslateLang] = useState<string>('none');
+  const [sttService, setSttService] = useState<'faster-whisper' | 'whisper' | 'gemini'>(
+    () => initialSavedModal?.sttService || 'faster-whisper',
+  );
+  const [whisperModel, setWhisperModel] = useState<string>(
+    () => initialSavedModal?.whisperModel || 'Xenova/whisper-small',
+  );
+  const [outputFormat, setOutputFormat] = useState<'srt' | 'vtt'>(
+    () => initialSavedModal?.outputFormat || 'srt',
+  );
+  const [sourceLang, setSourceLang] = useState<string>(() => initialSavedModal?.sourceLang || 'auto');
+  const [translateLang, setTranslateLang] = useState<string>(
+    () => initialSavedModal?.translateLang || 'none',
+  );
   const [isTranscribing, setIsTranscribing] = useState(false);
   const [transcribeProgress, setTranscribeProgress] = useState(0);
   const [transcribeStageLabel, setTranscribeStageLabel] = useState<string | null>(null);
   const [transcribeError, setTranscribeError] = useState<string | null>(null);
-  const [subFormatTab, setSubFormatTab] = useState<'srt' | 'vtt'>('srt');
+  const [subFormatTab, setSubFormatTab] = useState<'srt' | 'vtt'>(
+    () => initialSavedModal?.outputFormat || 'srt',
+  );
   const [transcribeResult, setTranscribeResult] = useState<{
     language: string;
     durationSec: number;
@@ -182,8 +236,14 @@ export const AudioSubtitleStudioModal: React.FC<AudioSubtitleStudioModalProps> =
   const [whisperPreloadProgress, setWhisperPreloadProgress] = useState(0);
   const [whisperPreloadMsg, setWhisperPreloadMsg] = useState<string | null>(null);
 
-  const [standaloneTargetLang, setStandaloneTargetLang] = useState<string>('Vietnamese');
-  const [standaloneBilingual, setStandaloneBilingual] = useState<boolean>(true);
+  const [standaloneTargetLang, setStandaloneTargetLang] = useState<string>(
+    () => initialSavedModal?.standaloneTargetLang || 'Vietnamese',
+  );
+  const [standaloneBilingual, setStandaloneBilingual] = useState<boolean>(() =>
+    typeof initialSavedModal?.standaloneBilingual === 'boolean'
+      ? initialSavedModal.standaloneBilingual
+      : true,
+  );
   const [standaloneSourceText, setStandaloneSourceText] = useState<string>('');
   const [standaloneSourceName, setStandaloneSourceName] = useState<string>('');
   const [isTranslatingSubs, setIsTranslatingSubs] = useState(false);
@@ -193,6 +253,7 @@ export const AudioSubtitleStudioModal: React.FC<AudioSubtitleStudioModalProps> =
   const mediaInputRef = useRef<HTMLInputElement>(null);
   const srtFileInputRef = useRef<HTMLInputElement>(null);
   const isMountedRef = useRef<boolean>(true);
+  const hasMountedPersistRef = useRef<boolean>(false);
 
   useEffect(() => {
     isMountedRef.current = true;
@@ -200,6 +261,111 @@ export const AudioSubtitleStudioModal: React.FC<AudioSubtitleStudioModalProps> =
       isMountedRef.current = false;
     };
   }, []);
+
+  useEffect(() => {
+    const onHydrated = (ev: Event) => {
+      const m = (ev as CustomEvent<PersistedStudioSettings>).detail?.audioModal;
+      if (!m) return;
+      if (m.tab) setTab(m.tab);
+      if (m.provider) setProvider(m.provider);
+      if (m.voice) setVoice(m.voice);
+      if (m.secondaryVoice !== undefined) setSecondaryVoice(m.secondaryVoice);
+      if (typeof m.rate === 'number') setRate(m.rate);
+      if (m.ttsTitle) setTtsTitle(m.ttsTitle);
+      if (typeof m.autoSplitLanguages === 'boolean') setAutoSplitLanguages(m.autoSplitLanguages);
+      if (typeof m.onlyTargetContentSpeech === 'boolean') {
+        setOnlyTargetContentSpeech(m.onlyTargetContentSpeech);
+      }
+      if (typeof m.autoAlignWhisper === 'boolean') setAutoAlignWhisper(m.autoAlignWhisper);
+      if (m.ttsAlignMode) setTtsAlignMode(m.ttsAlignMode);
+      if (m.ttsWhisperModel) setTtsWhisperModel(m.ttsWhisperModel);
+      if (m.sttService) setSttService(m.sttService);
+      if (m.whisperModel) setWhisperModel(m.whisperModel);
+      if (m.outputFormat) {
+        setOutputFormat(m.outputFormat);
+        setSubFormatTab(m.outputFormat);
+      }
+      if (m.sourceLang) setSourceLang(m.sourceLang);
+      if (m.translateLang) setTranslateLang(m.translateLang);
+      if (m.standaloneTargetLang) setStandaloneTargetLang(m.standaloneTargetLang);
+      if (typeof m.standaloneBilingual === 'boolean') setStandaloneBilingual(m.standaloneBilingual);
+    };
+    const onReset = () => {
+      setTab('tts');
+      setProvider('auto');
+      setVoice('en-US-JennyNeural');
+      setSecondaryVoice('vi-VN-HoaiMyNeural');
+      setRate(1.0);
+      setTtsTitle('Luyện nói tiếng Anh tự nhiên');
+      setAutoSplitLanguages(true);
+      setOnlyTargetContentSpeech(false);
+      setAutoAlignWhisper(true);
+      setTtsAlignMode('fast-forced');
+      setTtsWhisperModel('Xenova/whisper-small');
+      setSttService('faster-whisper');
+      setWhisperModel('Xenova/whisper-small');
+      setOutputFormat('srt');
+      setSubFormatTab('srt');
+      setSourceLang('auto');
+      setTranslateLang('none');
+      setStandaloneTargetLang('Vietnamese');
+      setStandaloneBilingual(true);
+    };
+    window.addEventListener(USER_SETTINGS_HYDRATED_EVENT, onHydrated);
+    window.addEventListener(USER_SETTINGS_RESET_EVENT, onReset);
+    return () => {
+      window.removeEventListener(USER_SETTINGS_HYDRATED_EVENT, onHydrated);
+      window.removeEventListener(USER_SETTINGS_RESET_EVENT, onReset);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!hasMountedPersistRef.current) {
+      hasMountedPersistRef.current = true;
+      return;
+    }
+    updatePersistedSettings({
+      audioModal: {
+        tab,
+        provider,
+        voice,
+        secondaryVoice,
+        rate,
+        ttsTitle,
+        autoSplitLanguages,
+        onlyTargetContentSpeech,
+        autoAlignWhisper,
+        ttsAlignMode,
+        ttsWhisperModel,
+        sttService,
+        whisperModel,
+        outputFormat,
+        sourceLang,
+        translateLang,
+        standaloneTargetLang,
+        standaloneBilingual,
+      },
+    });
+  }, [
+    tab,
+    provider,
+    voice,
+    secondaryVoice,
+    rate,
+    ttsTitle,
+    autoSplitLanguages,
+    onlyTargetContentSpeech,
+    autoAlignWhisper,
+    ttsAlignMode,
+    ttsWhisperModel,
+    sttService,
+    whisperModel,
+    outputFormat,
+    sourceLang,
+    translateLang,
+    standaloneTargetLang,
+    standaloneBilingual,
+  ]);
 
   const refreshWhisperStatus = () => {
     fetch('/api/whisper/status')
@@ -297,6 +463,29 @@ export const AudioSubtitleStudioModal: React.FC<AudioSubtitleStudioModalProps> =
     );
   };
 
+  const resolveVoiceForScript = (sampleText: string, preferredVoice: string, preferredLang: string) => {
+    const voiceLang = detectVoiceLangCode(preferredVoice) || detectVoiceLangCode(preferredLang);
+    if (RE_LINE_HAS_HANZI.test(sampleText) && !RE_LINE_HAS_KANA.test(sampleText) && voiceLang !== 'zh') {
+      const zhVoice =
+        availableVoices.find((v) => v.lang.toLowerCase().startsWith('zh'))?.id ||
+        pickVoiceForLangCode('zh');
+      return { voice: zhVoice, lang: 'zh-CN' };
+    }
+    if (RE_LINE_HAS_KANA.test(sampleText) && voiceLang !== 'ja') {
+      const jaVoice =
+        availableVoices.find((v) => v.lang.toLowerCase().startsWith('ja'))?.id ||
+        pickVoiceForLangCode('ja');
+      return { voice: jaVoice, lang: 'ja-JP' };
+    }
+    if (RE_LINE_HAS_HANGUL.test(sampleText) && voiceLang !== 'ko') {
+      const koVoice =
+        availableVoices.find((v) => v.lang.toLowerCase().startsWith('ko'))?.id ||
+        pickVoiceForLangCode('ko');
+      return { voice: koVoice, lang: 'ko-KR' };
+    }
+    return { voice: preferredVoice, lang: preferredLang };
+  };
+
   const handleSynthesize = async () => {
     const clean = stripTimestampsFromScript(ttsText).trim();
     if (!clean) {
@@ -316,17 +505,92 @@ export const AudioSubtitleStudioModal: React.FC<AudioSubtitleStudioModalProps> =
     setTtsStageLabel('Đang khởi tạo tác vụ đọc TTS...');
     try {
       const secondaryVoiceObj = availableVoices.find((v) => v.id === secondaryVoice);
+      const explVoice = secondaryVoice || 'vi-VN-HoaiMyNeural';
+      const explLang = secondaryVoiceObj?.lang || 'vi-VN';
+      const resolvedPrimary = resolveVoiceForScript(clean, voice, selectedVoiceObj?.lang || 'en-US');
+
+      const requestPayload: Record<string, unknown> = {
+        provider,
+        voice: resolvedPrimary.voice,
+        lang: resolvedPrimary.lang,
+        secondaryVoice: secondaryVoice || undefined,
+        secondaryLang: explLang,
+        autoSplitLanguages: onlyTargetContentSpeech ? false : autoSplitLanguages,
+        rate,
+      };
+
+      if (onlyTargetContentSpeech) {
+        const lines = clean
+          .split(/\r?\n/)
+          .map((l) => l.trim())
+          .filter(Boolean);
+        const roleSegments: Array<{
+          id: string;
+          text: string;
+          voice: string;
+          lang: string;
+          autoSplit: boolean;
+        }> = [];
+        lines.forEach((line, idx) => {
+          const delimMatch = line.match(/^(.*?)\s*(?:::|\|)\s*(.+)$/);
+          if (delimMatch) {
+            const targetPart = delimMatch[1].trim();
+            const explPart = delimMatch[2].trim();
+            if (targetPart) {
+              const targetMeta = resolveVoiceForScript(
+                targetPart,
+                resolvedPrimary.voice,
+                resolvedPrimary.lang,
+              );
+              roleSegments.push({
+                id: `line-${idx}-target`,
+                text: targetPart,
+                voice: targetMeta.voice,
+                lang: targetMeta.lang,
+                autoSplit: false,
+              });
+            }
+            if (explPart) {
+              roleSegments.push({
+                id: `line-${idx}-expl`,
+                text: explPart,
+                voice: explVoice,
+                lang: explLang,
+                autoSplit: false,
+              });
+            }
+            return;
+          }
+          const hasCjkOrKorean =
+            RE_LINE_HAS_HANZI.test(line) || RE_LINE_HAS_KANA.test(line) || RE_LINE_HAS_HANGUL.test(line);
+          const isExplanationLine =
+            !hasCjkOrKorean && (RE_EXPLANATION_PREFIX.test(line) || RE_LINE_HAS_VI_DIACRITIC.test(line));
+          if (isExplanationLine) {
+            roleSegments.push({
+              id: `line-${idx}-expl`,
+              text: line,
+              voice: explVoice,
+              lang: explLang,
+              autoSplit: false,
+            });
+          } else {
+            const targetMeta = resolveVoiceForScript(line, resolvedPrimary.voice, resolvedPrimary.lang);
+            roleSegments.push({
+              id: `line-${idx}-target`,
+              text: line,
+              voice: targetMeta.voice,
+              lang: targetMeta.lang,
+              autoSplit: false,
+            });
+          }
+        });
+        requestPayload.segments = roleSegments;
+      } else {
+        requestPayload.text = clean;
+      }
+
       const data = await synthesizeAudioWithProgressJob(
-        {
-          provider,
-          voice,
-          lang: selectedVoiceObj?.lang || 'en-US',
-          secondaryVoice: secondaryVoice || undefined,
-          secondaryLang: secondaryVoiceObj?.lang || 'vi-VN',
-          autoSplitLanguages: true,
-          rate,
-          text: clean,
-        },
+        requestPayload,
         (pct, lbl) => {
           const scaled = autoAlignWhisper ? Math.round(pct * 0.72) : pct;
           setTtsProgress(Math.max(4, scaled));
@@ -917,6 +1181,33 @@ export const AudioSubtitleStudioModal: React.FC<AudioSubtitleStudioModalProps> =
                   <p className="mt-1 text-[11px] text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-1">
                     {ttsCleanedNotice}
                   </p>
+                )}
+              </div>
+
+              {/* Dual-voice / Role separation options */}
+              <div className="px-3.5 py-2.5 rounded-xl bg-violet-50/60 border border-violet-200/80 space-y-2">
+                <label className="flex items-start gap-2 text-xs text-slate-800 font-medium cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={onlyTargetContentSpeech}
+                    onChange={(e) => setOnlyTargetContentSpeech(e.target.checked)}
+                    className="mt-0.5 rounded border-slate-300 text-violet-600"
+                  />
+                  <span>
+                    Chỉ dùng <strong>Giọng 1 (Ngoại ngữ)</strong> để đọc dòng Từ vựng / Ngữ pháp / Ví dụ ·{' '}
+                    <strong>Giọng 2</strong> chỉ đọc dòng giải thích (hoặc phần sau dấu <code className="font-mono">::</code>) — không nhảy giọng giữa câu
+                  </span>
+                </label>
+                {!onlyTargetContentSpeech && (
+                  <label className="flex items-center gap-2 text-[11px] text-slate-700 cursor-pointer pl-5">
+                    <input
+                      type="checkbox"
+                      checked={autoSplitLanguages}
+                      onChange={(e) => setAutoSplitLanguages(e.target.checked)}
+                      className="rounded border-slate-300 text-indigo-600"
+                    />
+                    <span>Tự nhận diện chuyển giọng ngoại ngữ ↔ tiếng Việt theo mệnh đề trong cùng 1 dòng</span>
+                  </label>
                 )}
               </div>
 
