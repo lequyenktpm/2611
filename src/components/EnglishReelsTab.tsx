@@ -28,6 +28,7 @@ import {
   Volume2,
   X,
 } from 'lucide-react';
+import { downloadTextAsPlainFile } from '../utils/safeFileDownload';
 import { BACKGROUND_PRESETS } from '../engine/backgroundPresets';
 import {
   ensureProjectAssetsLoaded,
@@ -5106,10 +5107,10 @@ export const EnglishReelsTab: React.FC<EnglishReelsTabProps> = ({ onSendToStudio
               </div>
             </div>
 
-            {(ttsProvider === 'elevenlabs' || ttsProvider === 'gemini') && (
+            {ttsProvider === 'elevenlabs' && (
               <ApiKeyInlineControl
-                provider={ttsProvider === 'elevenlabs' ? 'elevenlabs' : 'gemini'}
-                hasServerKey={ttsProvider === 'elevenlabs' ? hasElevenLabsKey : hasGeminiKey}
+                provider="elevenlabs"
+                hasServerKey={hasElevenLabsKey}
                 onSaved={refreshTtsVoices}
                 compact
               />
@@ -5686,17 +5687,7 @@ export const EnglishReelsTab: React.FC<EnglishReelsTabProps> = ({ onSendToStudio
                     type="button"
                     onClick={() => {
                       const stem = cleanOutputTitleStem(lessonTitle, 'English Reels');
-                      const blob = new Blob([videoDescription.txtContent], {
-                        type: 'text/plain;charset=utf-8',
-                      });
-                      const url = URL.createObjectURL(blob);
-                      const a = document.createElement('a');
-                      a.href = url;
-                      a.download = `${stem}.txt`;
-                      document.body.appendChild(a);
-                      a.click();
-                      a.remove();
-                      setTimeout(() => URL.revokeObjectURL(url), 1000);
+                      downloadTextAsPlainFile(videoDescription.txtContent, `${stem}.txt`);
                     }}
                     className="inline-flex items-center gap-1 px-2.5 py-1 font-semibold bg-indigo-50 text-indigo-700 border border-indigo-200 rounded-md hover:bg-indigo-100"
                   >

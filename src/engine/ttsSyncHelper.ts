@@ -109,6 +109,35 @@ export async function fetchTtsVoicesCatalog(): Promise<{
   };
 }
 
+async function runDirectTtsFallback(
+  headers: Record<string, string>,
+  bodyWithKeys: Record<string, unknown>,
+  onProgress?: (progress: number, stageLabel: string) => void,
+): Promise<TtsSynthesizeResponse> {
+  onProgress?.(35, 'Đang tổng hợp giọng đọc TTS...');
+  const directRes = await fetch('/api/tts/synthesize', {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(bodyWithKeys),
+  });
+  const directRaw = await directRes.text();
+  let directJson: TtsSynthesizeResponse = {};
+  try {
+    directJson = JSON.parse(directRaw) as TtsSynthesizeResponse;
+  } catch {
+    throw new Error(
+      directRes.ok
+        ? 'Server trả về dữ liệu TTS không hợp lệ (không phải JSON).'
+        : `Lỗi tổng hợp TTS (HTTP ${directRes.status}).`,
+    );
+  }
+  if (!directRes.ok || !directJson.audioBase64) {
+    throw new Error(directJson.error || `Lỗi tổng hợp TTS (HTTP ${directRes.status}).`);
+  }
+  onProgress?.(100, 'Tổng hợp Audio hoàn tất!');
+  return directJson;
+}
+
 export async function synthesizeAudioWithProgressJob(
   payload: Record<string, unknown>,
   onProgress?: (progress: number, stageLabel: string) => void,
@@ -131,28 +160,7 @@ export async function synthesizeAudioWithProgressJob(
 
   // Graceful fallback to synchronous endpoint if /start returned 404 or HTML page
   if (startRes.status === 404 || trimmedStart.startsWith('<')) {
-    onProgress?.(35, 'Đang tổng hợp giọng đọc TTS...');
-    const directRes = await fetch('/api/tts/synthesize', {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(bodyWithKeys),
-    });
-    const directRaw = await directRes.text();
-    let directJson: TtsSynthesizeResponse = {};
-    try {
-      directJson = JSON.parse(directRaw) as TtsSynthesizeResponse;
-    } catch {
-      throw new Error(
-        directRes.ok
-          ? 'Server trả về dữ liệu TTS không hợp lệ (không phải JSON).'
-          : `Lỗi tổng hợp TTS (HTTP ${directRes.status}).`,
-      );
-    }
-    if (!directRes.ok || !directJson.audioBase64) {
-      throw new Error(directJson.error || `Lỗi tổng hợp TTS (HTTP ${directRes.status}).`);
-    }
-    onProgress?.(100, 'Tổng hợp Audio hoàn tất!');
-    return directJson;
+    return runDirectTtsFallback(headers, bodyWithKeys, onProgress);
   }
 
   let startJson: { jobId?: string; error?: string } = {};
@@ -172,6 +180,7 @@ export async function synthesizeAudioWithProgressJob(
   const jobId = startJson.jobId;
   const startedAt = Date.now();
   let consecutivePollFailures = 0;
+  let notFoundRetries = 0;
 
   while (Date.now() - startedAt < 10 * 60 * 1000) {
     await new Promise((r) => setTimeout(r, 380));
@@ -181,9 +190,24 @@ export async function synthesizeAudioWithProgressJob(
     } catch (netErr) {
       consecutivePollFailures += 1;
       if (consecutivePollFailures >= 4) {
-        throw netErr instanceof Error ? netErr : new Error('Mất kết nối tới server TTS.');
+        return runDirectTtsFallback(headers, bodyWithKeys, onProgress);
       }
       continue;
+    }
+
+    if (pollRes.status === 429 || pollRes.status === 502 || pollRes.status === 503 || pollRes.status === 504) {
+      await new Promise((r) => setTimeout(r, 650));
+      continue;
+    }
+
+    if (pollRes.status === 404) {
+      notFoundRetries += 1;
+      if (notFoundRetries <= 2) {
+        await new Promise((r) => setTimeout(r, 420));
+        continue;
+      }
+      // Server restarted or routed to another instance: seamlessly fall back to stateless sync TTS
+      return runDirectTtsFallback(headers, bodyWithKeys, onProgress);
     }
 
     const pollRaw = await pollRes.text();
@@ -191,7 +215,7 @@ export async function synthesizeAudioWithProgressJob(
     if (!trimmedPoll || trimmedPoll.startsWith('<')) {
       consecutivePollFailures += 1;
       if (consecutivePollFailures >= 4) {
-        throw new Error(`Mất kết nối theo dõi tiến trình TTS (HTTP ${pollRes.status}).`);
+        return runDirectTtsFallback(headers, bodyWithKeys, onProgress);
       }
       continue;
     }
@@ -217,6 +241,7 @@ export async function synthesizeAudioWithProgressJob(
       throw new Error(pollData.error || `Mất kết nối theo dõi tiến trình TTS (HTTP ${pollRes.status}).`);
     }
     consecutivePollFailures = 0;
+    notFoundRetries = 0;
 
     if (typeof pollData.progress === 'number' || pollData.stageLabel) {
       onProgress?.(
@@ -304,11 +329,7 @@ export async function alignAudioWithProgressJob(
     return lastRes!;
   };
 
-  const startRes = await postWithRetry('/api/subtitles/align/start');
-  const startRaw = await startRes.text();
-  const trimmedStart = startRaw.trim();
-
-  if (startRes.status === 404 || trimmedStart.startsWith('<')) {
+  const runDirectAlignFallback = async (): Promise<WhisperAlignResponse> => {
     onProgress?.(35, 'Đang chạy căn chỉnh trực tiếp...');
     const directRes = await postWithRetry('/api/subtitles/align');
     const directData = (await directRes.json().catch(() => ({}))) as WhisperAlignResponse;
@@ -317,6 +338,14 @@ export async function alignAudioWithProgressJob(
     }
     onProgress?.(100, 'Căn từng từ hoàn tất!');
     return directData;
+  };
+
+  const startRes = await postWithRetry('/api/subtitles/align/start');
+  const startRaw = await startRes.text();
+  const trimmedStart = startRaw.trim();
+
+  if (startRes.status === 404 || trimmedStart.startsWith('<')) {
+    return runDirectAlignFallback();
   }
 
   let startData: { jobId?: string; error?: string } = {};
@@ -336,6 +365,7 @@ export async function alignAudioWithProgressJob(
   const jobId = startData.jobId;
   const startedAt = Date.now();
   let consecutivePollFailures = 0;
+  let notFoundRetries = 0;
   while (Date.now() - startedAt < 10 * 60 * 1000) {
     await new Promise((r) => setTimeout(r, mode === 'fast-forced' ? 180 : 600));
     let pollRes: Response;
@@ -346,9 +376,17 @@ export async function alignAudioWithProgressJob(
       if (consecutivePollFailures >= 4) throw new Error('Mất kết nối theo dõi tiến trình căn chỉnh.');
       continue;
     }
-    if (pollRes.status === 429 || pollRes.status === 503) {
+    if (pollRes.status === 429 || pollRes.status === 502 || pollRes.status === 503 || pollRes.status === 504) {
       await new Promise((r) => setTimeout(r, 700));
       continue;
+    }
+    if (pollRes.status === 404) {
+      notFoundRetries += 1;
+      if (notFoundRetries <= 2) {
+        await new Promise((r) => setTimeout(r, 420));
+        continue;
+      }
+      return runDirectAlignFallback();
     }
     const pollData = (await pollRes.json().catch(() => ({}))) as {
       status?: 'queued' | 'running' | 'done' | 'error';
@@ -361,6 +399,7 @@ export async function alignAudioWithProgressJob(
       throw new Error(pollData.error || 'Lỗi theo dõi tiến trình Whisper Align.');
     }
     consecutivePollFailures = 0;
+    notFoundRetries = 0;
     if (typeof pollData.progress === 'number' || pollData.stageLabel) {
       onProgress?.(
         Math.max(8, Math.min(99, Number(pollData.progress ?? 15))),

@@ -695,7 +695,135 @@ export interface ReadingAlongRenderOptions {
   background?: BackgroundImageConfig;
   subtitlePosition?: EduKaraokePosition;
   subtitleSize?: EduKaraokeSize;
+  learningLanguage?: string;
   watermarkOutro: EduWatermarkOutroConfig;
+}
+
+export interface ReadingUiStrings {
+  langCode: 'en' | 'ja' | 'zh' | 'ko' | 'fr' | 'es';
+  introBadge: string;
+  introDefaultTitle: string;
+  introPreparingLabel: string;
+  introSubtitleTemplate: (title: string) => string;
+  pageIndicator: (current: number, total: number) => string;
+  outroLine1: string;
+  outroLine2: string;
+}
+
+const READING_UI_STRINGS_MAP: Record<ReadingUiStrings['langCode'], ReadingUiStrings> = {
+  en: {
+    langCode: 'en',
+    introBadge: 'TODAY’S READING GOAL',
+    introDefaultTitle: 'Reading Practice',
+    introPreparingLabel: 'Get ready to read...',
+    introSubtitleTemplate: (title: string) =>
+      `Today we are going to read "${title}". Listen carefully and follow word by word!`,
+    pageIndicator: (current: number, total: number) => `Page ${current}/${total}`,
+    outroLine1: 'Thanks for watching!',
+    outroLine2: 'See you next time',
+  },
+  ja: {
+    langCode: 'ja',
+    introBadge: '今日のリーディング目標',
+    introDefaultTitle: '日本語リーディング',
+    introPreparingLabel: 'まもなく読み始めます...',
+    introSubtitleTemplate: (title: string) =>
+      `今日のリーディング：${title}。音声を聞きながら一緒に読んでみましょう。`,
+    pageIndicator: (current: number, total: number) => `ページ ${current}/${total}`,
+    outroLine1: 'ご視聴ありがとうございました！',
+    outroLine2: 'また次回お会いしましょう',
+  },
+  zh: {
+    langCode: 'zh',
+    introBadge: '今日跟读目标',
+    introDefaultTitle: '中文跟读练习',
+    introPreparingLabel: '准备开始跟读...',
+    introSubtitleTemplate: (title: string) =>
+      `今天的跟读练习：${title}。请跟着声音一起读。`,
+    pageIndicator: (current: number, total: number) => `第 ${current}/${total} 页`,
+    outroLine1: '感谢观看！',
+    outroLine2: '下期再见',
+  },
+  ko: {
+    langCode: 'ko',
+    introBadge: '오늘의 읽기 목표',
+    introDefaultTitle: '한국어 읽기 연습',
+    introPreparingLabel: '곧 읽기를 시작합니다...',
+    introSubtitleTemplate: (title: string) =>
+      `오늘의 읽기 연습: ${title}. 소리를 들으며 따라 읽어 보세요.`,
+    pageIndicator: (current: number, total: number) => `${current}/${total} 페이지`,
+    outroLine1: '시청해 주셔서 감사합니다!',
+    outroLine2: '다음 시간에 또 만나요',
+  },
+  fr: {
+    langCode: 'fr',
+    introBadge: 'OBJECTIF DE LECTURE',
+    introDefaultTitle: 'Lecture du jour',
+    introPreparingLabel: 'Préparation de la lecture...',
+    introSubtitleTemplate: (title: string) =>
+      `Lecture du jour : ${title}. Écoutez et suivez chaque mot.`,
+    pageIndicator: (current: number, total: number) => `Page ${current}/${total}`,
+    outroLine1: 'Merci d’avoir regardé !',
+    outroLine2: 'À la prochaine fois',
+  },
+  es: {
+    langCode: 'es',
+    introBadge: 'META DE LECTURA',
+    introDefaultTitle: 'Lectura de hoy',
+    introPreparingLabel: 'Preparando la lectura...',
+    introSubtitleTemplate: (title: string) =>
+      `Lectura de hoy: ${title}. Escucha con atención y sigue cada palabra.`,
+    pageIndicator: (current: number, total: number) => `Página ${current}/${total}`,
+    outroLine1: '¡Gracias por ver!',
+    outroLine2: 'Hasta la próxima',
+  },
+};
+
+export function getReadingUiStrings(lang?: string): ReadingUiStrings {
+  const norm = (lang || 'en').toLowerCase().trim();
+  if (norm.startsWith('ja') || norm === 'jp') return READING_UI_STRINGS_MAP.ja;
+  if (norm.startsWith('zh') || norm === 'cn') return READING_UI_STRINGS_MAP.zh;
+  if (norm.startsWith('ko') || norm === 'kr') return READING_UI_STRINGS_MAP.ko;
+  if (norm.startsWith('fr')) return READING_UI_STRINGS_MAP.fr;
+  if (norm.startsWith('es')) return READING_UI_STRINGS_MAP.es;
+  return READING_UI_STRINGS_MAP.en;
+}
+
+export function isDefaultReadingOutroPair(line1?: string, line2?: string): boolean {
+  const l1 = (line1 || '').trim();
+  const l2 = (line2 || '').trim();
+  if (!l1 && !l2) return true;
+  return Object.values(READING_UI_STRINGS_MAP).some(
+    (s) => s.outroLine1 === l1 && s.outroLine2 === l2,
+  );
+}
+
+function wrapTextForCanvas(
+  text: string,
+  maxWidth: number,
+  measureWidth: (s: string) => number,
+): string[] {
+  const trimmed = text.trim();
+  if (!trimmed) return [];
+  const hasCjkOrNoSpaces =
+    /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff]/.test(trimmed) || !trimmed.includes(' ');
+  const tokens = hasCjkOrNoSpaces
+    ? Array.from(trimmed)
+    : trimmed.split(/\s+/).filter(Boolean);
+  const joiner = hasCjkOrNoSpaces ? '' : ' ';
+  const lines: string[] = [];
+  let cur = '';
+  for (const tok of tokens) {
+    const candidate = cur ? `${cur}${joiner}${tok}` : tok;
+    if (measureWidth(candidate) <= maxWidth) {
+      cur = candidate;
+    } else {
+      if (cur) lines.push(cur);
+      cur = tok;
+    }
+  }
+  if (cur) lines.push(cur);
+  return lines;
 }
 
 export interface ReadingTimelineMetrics {
@@ -1385,6 +1513,7 @@ export function renderReadingAlongFrame(
   const refH = isLandscape ? Math.round(height * 1.28) : height;
   const palette =
     READING_BOOK_PALETTES.find((p) => p.id === opts.paletteId) ?? READING_BOOK_PALETTES[0];
+  const uiStrings = getReadingUiStrings(opts.learningLanguage);
   const bookFrame: ReadingBookFrameId = opts.bookFrame ?? 'classic-page';
   const pointerStyle: ReadingPointerStyleId = opts.pointerStyle ?? 'hand-classic';
   const isChalkboard = bookFrame === 'chalkboard';
@@ -1510,25 +1639,50 @@ export function renderReadingAlongFrame(
       ctx.shadowBlur = 16;
       ctx.shadowOffsetY = 4;
 
-      const heroFs = Math.max(30, Math.round(Math.min(width, height) * 0.052));
+      const plainKicker = (opts.introTitle || uiStrings.introBadge).trim();
+      const plainKickerFs = Math.max(13, Math.round(Math.min(width, height) * 0.02));
+      ctx.font = `800 ${plainKickerFs}px "Plus Jakarta Sans", sans-serif`;
+      const plainKickerW = Math.min(width * 0.78, ctx.measureText(plainKicker).width + 30);
+      const plainKickerH = Math.max(28, Math.round(plainKickerFs * 1.8));
+      ctx.save();
+      ctx.shadowBlur = 0;
+      ctx.fillStyle = palette.accent;
+      roundRectPath(ctx, width / 2 - plainKickerW / 2, height * 0.31 - plainKickerH / 2, plainKickerW, plainKickerH, plainKickerH / 2);
+      ctx.fill();
+      ctx.fillStyle = '#FFFFFF';
+      ctx.fillText(plainKicker, width / 2, height * 0.31, plainKickerW - 18);
+      ctx.restore();
+
+      const heroFs = Math.max(28, Math.round(Math.min(width, height) * 0.05));
       ctx.font = `800 ${heroFs}px "Outfit", "Plus Jakarta Sans", sans-serif`;
       ctx.fillStyle = '#FFFFFF';
-      ctx.fillText(opts.title || 'Reading Practice', width / 2, height * 0.43, width * 0.84);
+      ctx.fillText(opts.title || uiStrings.introDefaultTitle, width / 2, height * 0.43, width * 0.84);
 
-      const introSub = (opts.introSubtitle || `Listen carefully and follow word by word.`).trim();
-      const subFs = Math.max(20, Math.round(heroFs * 0.56));
+      const introSub = (
+        opts.introSubtitle || uiStrings.introSubtitleTemplate(opts.title || uiStrings.introDefaultTitle)
+      ).trim();
+      const subFs = Math.max(18, Math.round(heroFs * 0.52));
       ctx.font = `600 ${subFs}px "Plus Jakarta Sans", sans-serif`;
       ctx.fillStyle = 'rgba(226, 232, 240, 0.94)';
-      ctx.fillText(introSub, width / 2, height * 0.54, width * 0.8);
+      const plainSubLines = wrapTextForCanvas(introSub, width * 0.8, (s) => ctx.measureText(s).width).slice(0, 2);
+      const subLineStep = Math.round(subFs * 1.38);
+      plainSubLines.forEach((ln, idx) => {
+        ctx.fillText(ln, width / 2, height * 0.525 + idx * subLineStep, width * 0.82);
+      });
 
       const barW = Math.min(width * 0.44, 360);
       const barH = 8;
+      const barTop = height * 0.65;
       ctx.fillStyle = 'rgba(255,255,255,0.22)';
-      roundRectPath(ctx, width / 2 - barW / 2, height * 0.63, barW, barH, 4);
+      roundRectPath(ctx, width / 2 - barW / 2, barTop, barW, barH, 4);
       ctx.fill();
       ctx.fillStyle = '#FACC15';
-      roundRectPath(ctx, width / 2 - barW / 2, height * 0.63, Math.max(12, barW * introProgress), barH, 4);
+      roundRectPath(ctx, width / 2 - barW / 2, barTop, Math.max(12, barW * introProgress), barH, 4);
       ctx.fill();
+
+      ctx.font = `700 ${Math.max(13, Math.round(subFs * 0.72))}px "Plus Jakarta Sans", sans-serif`;
+      ctx.fillStyle = 'rgba(253, 230, 138, 0.92)';
+      ctx.fillText(uiStrings.introPreparingLabel, width / 2, barTop + 26, width * 0.75);
       ctx.restore();
     } else {
       const bodyDuration = Math.max(1, timeline.contentEnd - timeline.introEnd);
@@ -1819,6 +1973,20 @@ export function renderReadingAlongFrame(
           opts.currentTime,
           true,
         );
+      }
+
+      if (pages.length > 1) {
+        ctx.save();
+        ctx.font = `700 ${Math.max(12, Math.round(refH * 0.015))}px "Plus Jakarta Sans", sans-serif`;
+        ctx.fillStyle = 'rgba(241, 245, 249, 0.72)';
+        ctx.textAlign = 'right';
+        ctx.textBaseline = 'bottom';
+        ctx.fillText(
+          uiStrings.pageIndicator(activePageIdx + 1, pages.length),
+          width - Math.round(width * 0.035),
+          height - Math.round(height * 0.03),
+        );
+        ctx.restore();
       }
     }
 
@@ -2124,7 +2292,7 @@ export function renderReadingAlongFrame(
   ctx.fillStyle = isChalkboard ? '#F8FAFC' : palette.headerText;
   ctx.font = `800 ${Math.round(refH * 0.026)}px "Outfit", "Plus Jakarta Sans", sans-serif`;
   ctx.textBaseline = 'top';
-  ctx.fillText(opts.title || 'Reading Practice', padX, titleY, contentW - 70);
+  ctx.fillText(opts.title || uiStrings.introDefaultTitle, padX, titleY, contentW - 70);
   ctx.restore();
 
   // Divider line
@@ -2141,7 +2309,7 @@ export function renderReadingAlongFrame(
   const maxBodyY = bookY + bookH - refH * 0.075;
 
   if (inIntroPhase) {
-    // Dedicated Intro card ("Hôm nay học gì?") inside the book before words start
+    // Dedicated localized Intro card inside the book before words start
     ctx.save();
     const introProgress = Math.max(
       0,
@@ -2160,8 +2328,8 @@ export function renderReadingAlongFrame(
     ctx.lineWidth = 2;
     ctx.stroke();
 
-    // Intro header pill
-    const introKicker = (opts.introTitle || 'HÔM NAY HỌC GÌ? · TODAY GOAL').trim();
+    // Intro header pill (localized to target learning language)
+    const introKicker = (opts.introTitle || uiStrings.introBadge).trim();
     const kickerFs = Math.max(13, Math.round(refH * 0.016));
     ctx.font = `800 ${kickerFs}px "Plus Jakarta Sans", sans-serif`;
     const kickerW = Math.min(contentW - cardPad * 2, ctx.measureText(introKicker).width + 28);
@@ -2183,28 +2351,17 @@ export function renderReadingAlongFrame(
     ctx.textAlign = 'center';
     ctx.textBaseline = 'top';
     const titleStartY = kickerY + kickerH + Math.max(16, refH * 0.024);
-    ctx.fillText(opts.title || 'Reading Practice', padX + contentW / 2, titleStartY, contentW - cardPad * 2);
+    ctx.fillText(opts.title || uiStrings.introDefaultTitle, padX + contentW / 2, titleStartY, contentW - cardPad * 2);
 
-    // Wrapped intro subtitle / goal
-    const introSub =
-      (opts.introSubtitle || `Today we are going to read "${opts.title || 'this story'}". Listen carefully and follow word by word!`).trim();
+    // Wrapped intro subtitle / goal (CJK-aware wrapping)
+    const introSub = (
+      opts.introSubtitle || uiStrings.introSubtitleTemplate(opts.title || uiStrings.introDefaultTitle)
+    ).trim();
     const subFs = Math.max(15, Math.round(refH * 0.019));
     ctx.font = `600 ${subFs}px "Plus Jakarta Sans", sans-serif`;
     ctx.fillStyle = isChalkboard ? '#CBD5E1' : palette.bodyText;
     const maxSubW = contentW - cardPad * 2.2;
-    const wordsArr = introSub.split(/\s+/).filter(Boolean);
-    const wrappedSubLines: string[] = [];
-    let curLine = '';
-    for (const word of wordsArr) {
-      const candidate = curLine ? `${curLine} ${word}` : word;
-      if (ctx.measureText(candidate).width <= maxSubW) {
-        curLine = candidate;
-      } else {
-        if (curLine) wrappedSubLines.push(curLine);
-        curLine = word;
-      }
-    }
-    if (curLine) wrappedSubLines.push(curLine);
+    const wrappedSubLines = wrapTextForCanvas(introSub, maxSubW, (s) => ctx.measureText(s).width);
 
     const subLineH = Math.round(subFs * 1.48);
     const subStartY = titleStartY + heroTitleFs + Math.max(16, refH * 0.022);
@@ -2226,7 +2383,7 @@ export function renderReadingAlongFrame(
 
     ctx.font = `700 ${Math.max(12, Math.round(refH * 0.014))}px "Plus Jakarta Sans", sans-serif`;
     ctx.fillStyle = isChalkboard ? '#FDE68A' : palette.spokenText;
-    ctx.fillText('Chuẩn bị bắt đầu đọc...', padX + contentW / 2, barY + barH + 10);
+    ctx.fillText(uiStrings.introPreparingLabel, padX + contentW / 2, barY + barH + 10, contentW - cardPad * 2);
     ctx.restore();
   } else {
     const bodyDuration = Math.max(1, timeline.contentEnd - timeline.introEnd);
@@ -2336,10 +2493,10 @@ export function renderReadingAlongFrame(
       ctx.fillText(p.item.word, p.x, p.y);
     }
 
-    // Multi-page indicator if >= 2 pages
+    // Multi-page indicator if >= 2 pages (localized to learning language)
     if (pages.length > 1) {
       ctx.save();
-      const pgLabel = `Trang ${activePageIdx + 1}/${pages.length}`;
+      const pgLabel = uiStrings.pageIndicator(activePageIdx + 1, pages.length);
       ctx.font = `700 ${Math.max(12, Math.round(refH * 0.014))}px "Plus Jakarta Sans", sans-serif`;
       ctx.fillStyle = isDarkPage ? 'rgba(255,255,255,0.65)' : palette.spokenText;
       ctx.textAlign = 'right';

@@ -225,6 +225,7 @@ export type BuiltinIllustrationVariant =
   | 'bs-badge-cluster'
   | 'css-magnifying-word'
   | 'bs-modal-quiz'
+  | 'cartoon-host'
   | 'dynamic-scene';
 
 export type IllustrationVariant = BuiltinIllustrationVariant | (string & {});
@@ -308,6 +309,7 @@ export interface IllustrationPropProps {
 export type LayoutCompositionId =
   | 'plain'
   | 'story-scenes'
+  | 'cartoon-host'
   | 'flow-steps'
   | 'gauge-tone'
   | 'checklist-cards'
@@ -391,7 +393,7 @@ export interface KaraokeCardProps {
   activeColor: string;
   inactiveColor: string;
   spokenColor: string;
-  variant?: 'white-card' | 'dark-bar' | 'plain-shadow';
+  variant?: 'white-card' | 'dark-bar' | 'plain-shadow' | 'yellow-pill';
   helperText?: string;
 }
 

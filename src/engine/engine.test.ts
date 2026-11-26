@@ -14,6 +14,10 @@ import { buildSceneGenerationPrompt } from './aiPromptBuilder';
 import { choreographFromTranscript, resyncProjectTimingToCues } from './autoChoreographer';
 import { computeElementFrameState, computeStaggerItemState } from './animationMath';
 import {
+  classifyCharToViseme,
+  computeSpeechLipSyncState,
+} from './cartoonHostAnimator';
+import {
   cleanDownloadFileName,
   cleanOutputTitleStem,
   resolveTabOutputSubfolder,
@@ -41,6 +45,11 @@ import {
   summarizeScenePlan,
 } from './scenePlanAdapter';
 import { buildZipArchive } from '../utils/zipBuilder';
+import {
+  ensureExpectedExtension,
+  isHtmlPayload,
+  resolveOutputMimeType,
+} from '../utils/safeFileDownload';
 import { buildFfmpegArgs } from './ffmpegArgs';
 import { resolveMp4EncodingParams } from './mp4Config';
 import {
@@ -127,11 +136,21 @@ import { BACKGROUND_PRESETS } from './backgroundPresets';
 import {
   buildEstimatedReadingWords,
   computeReadingTimelineMetrics,
+  getReadingUiStrings,
+  isDefaultReadingOutroPair,
   paginateReadingWords,
   READING_BOOK_FRAMES,
   READING_BOOK_PALETTES,
   READING_POINTER_STYLES,
 } from './eduStudioEffects';
+import {
+  detectLearningLanguageFromText,
+  generateBatchPromptsForTopics,
+  parseCreatorOrTranslationBatchInput,
+  parseReadingBatchInput,
+  parseTopicLinesInput,
+  splitMultiJsonInputs,
+} from './multiTabBatchHelper';
 import {
   computeDuckingGainAtTime,
   DEFAULT_BGM_PRESET,
@@ -3126,7 +3145,7 @@ test('Phản Xạ Dịch Câu: prompt, curated/custom card builder, AI JSON pars
   const repeatPills = proj916.elements.filter((el) => el.id.includes('reel-tr-pill-rep-'));
   assert.equal(repeatPills.length, 3);
 
-  const repeatCues = proj916.cues.filter((c) => c.id.includes('-r'));
+  const repeatCues = proj916.cues.filter((c) => /-r\d+$/.test(c.id));
   assert.equal(repeatCues.length, 3);
   const promptCue = proj916.cues.find((c) => c.id.endsWith('-q'))!;
   assert.ok(repeatCues[0].start - promptCue.end >= 2.9, 'Think countdown gap must precede first repeat');
@@ -3632,9 +3651,220 @@ test('Tab 3 multilingual reading prompt, CJK/Korean alignment tokenization, and 
   }
 });
 
+test('getReadingUiStrings and isDefaultReadingOutroPair localize intro badge, page labels, and outro across 6 languages', () => {
+  const ja = getReadingUiStrings('ja');
+  assert.equal(ja.introBadge, '今日のリーディング目標');
+  assert.equal(ja.introPreparingLabel, 'まもなく読み始めます...');
+  assert.equal(ja.pageIndicator(1, 3), 'ページ 1/3');
+  assert.equal(ja.outroLine1, 'ご視聴ありがとうございました！');
+  assert.equal(ja.outroLine2, 'また次回お会いしましょう');
+  assert.ok(!ja.introBadge.includes('HÔM NAY'));
 
+  const zh = getReadingUiStrings('zh-CN');
+  assert.equal(zh.introBadge, '今日跟读目标');
+  assert.equal(zh.pageIndicator(2, 4), '第 2/4 页');
+  assert.equal(zh.outroLine1, '感谢观看！');
 
+  const ko = getReadingUiStrings('ko');
+  assert.equal(ko.introBadge, '오늘의 읽기 목표');
+  assert.equal(ko.pageIndicator(1, 2), '1/2 페이지');
 
+  const fr = getReadingUiStrings('fr');
+  assert.equal(fr.introBadge, 'OBJECTIF DE LECTURE');
+  assert.equal(fr.pageIndicator(1, 3), 'Page 1/3');
 
+  const es = getReadingUiStrings('es');
+  assert.equal(es.introBadge, 'META DE LECTURA');
+  assert.equal(es.pageIndicator(2, 3), 'Página 2/3');
+
+  const en = getReadingUiStrings('en');
+  assert.equal(en.introBadge, 'TODAY’S READING GOAL');
+  assert.equal(en.pageIndicator(1, 3), 'Page 1/3');
+
+  assert.equal(isDefaultReadingOutroPair(ja.outroLine1, ja.outroLine2), true);
+  assert.equal(isDefaultReadingOutroPair(en.outroLine1, en.outroLine2), true);
+  assert.equal(isDefaultReadingOutroPair('', ''), true);
+  assert.equal(isDefaultReadingOutroPair('Custom Channel', 'Subscribe'), false);
+});
+
+test('multiTabBatchHelper splits multi-JSON drops, parses creator/translation/reading payloads, and generates topic prompts without API keys', () => {
+  assert.equal(detectLearningLanguageFromText('雨の日に見つけた小さな親切', 'en'), 'ja');
+  assert.equal(detectLearningLanguageFromText('今天天气很好，我们去散步吧。', 'en'), 'zh');
+  assert.equal(detectLearningLanguageFromText('오늘 날씨가 정말 좋네요.', 'en'), 'ko');
+  assert.equal(detectLearningLanguageFromText('Bonjour, comment allez-vous?', 'en'), 'fr');
+
+  const fencedMulti = [
+    '```json',
+    '{"title":"Rainy Kindness","text":"雨が降る午後、駅の前で傘を貸してくれた人がいました。"}',
+    '```',
+    '',
+    '```json',
+    '{"title":"Morning Coffee","text":"毎朝コーヒーを飲みながらニュースを読みます。"}',
+    '```',
+  ].join('\n');
+  const splitFenced = splitMultiJsonInputs(fencedMulti);
+  assert.equal(splitFenced.length, 2);
+
+  const concatJson = '{"title":"Lesson A","cards":[{"type":"vocab","word":"Calm","meaning":"Bình tĩnh","example":"Stay calm.","speech":"Stay calm."}]} {"title":"Lesson B","cards":[{"type":"vocab","word":"Focus","meaning":"Tập trung","example":"Keep focus.","speech":"Keep focus."}]}';
+  const splitConcat = splitMultiJsonInputs(concatJson);
+  assert.equal(splitConcat.length, 2);
+
+  const creatorParsed = parseCreatorOrTranslationBatchInput(splitConcat[0], {
+    mode: 'creator',
+    fileName: '01_Calm.json',
+  });
+  assert.ok(creatorParsed !== null);
+  assert.equal(creatorParsed!.title, 'Lesson A');
+  assert.ok(creatorParsed!.cards.length >= 1);
+
+  const translationJson = JSON.stringify({
+    mode: 'translation-challenge',
+    learningLanguage: 'ja',
+    title: 'Japanese Travel Phrases',
+    items: [
+      {
+        prompt: 'Cho tôi hỏi nhà ga ở đâu ạ?',
+        answer: 'すみません、駅はどこですか。',
+        meaning: 'Excuse me, where is the station?',
+        thinkSec: 4,
+        repeatCount: 2,
+      },
+    ],
+  });
+  const translationParsed = parseCreatorOrTranslationBatchInput(translationJson, {
+    mode: 'translation',
+  });
+  assert.ok(translationParsed !== null);
+  assert.equal(translationParsed!.learningLanguage, 'ja');
+  assert.ok(translationParsed!.cards.some((c) => c.type === 'translation'));
+
+  const readingParsed = parseReadingBatchInput(splitFenced[0], {
+    fileName: '01_Rainy.json',
+  });
+  assert.ok(readingParsed !== null);
+  assert.equal(readingParsed!.learningLanguage, 'ja');
+  assert.equal(readingParsed!.uiStrings.introBadge, '今日のリーディング目標');
+  assert.equal(readingParsed!.uiStrings.outroLine1, 'ご視聴ありがとうございました！');
+
+  const topics = parseTopicLinesInput('1. Ordering ramen\n- Train etiquette\nConvenience store');
+  assert.deepEqual(topics, ['Ordering ramen', 'Train etiquette', 'Convenience store']);
+
+  const readingPrompts = generateBatchPromptsForTopics({
+    subTab: 'reading',
+    topics,
+    learningLanguage: 'ja',
+    level: 'N4',
+    durationMinutes: 2,
+  });
+  assert.equal(readingPrompts.length, 3);
+  assert.ok(readingPrompts[0].promptText.includes('Ordering ramen'));
+  assert.ok(readingPrompts[0].promptText.includes('JLPT N4'));
+
+  const creatorPrompts = generateBatchPromptsForTopics({
+    subTab: 'creator',
+    topics: ['Airport English'],
+    learningLanguage: 'en',
+    level: 'B1',
+    durationMinutes: 1.5,
+    targetLang: 'vi',
+  });
+  assert.equal(creatorPrompts.length, 1);
+  assert.ok(creatorPrompts[0].promptText.includes('Airport English'));
+});
+
+test('safeFileDownload detects HTML fallback payloads and preserves UTF-8 plain text MIME and .txt extension', () => {
+  assert.equal(isHtmlPayload('<!doctype html><html><head></head></html>', 'text/plain'), true);
+  assert.equal(isHtmlPayload('<html><body>Sign in</body></html>', ''), true);
+  assert.equal(isHtmlPayload('plain text content', 'text/html; charset=utf-8'), true);
+
+  const sampleTxt = [
+    '【心温まる話】雨の日に見つけた小さな親切',
+    '',
+    'Tổng hợp 4 mẫu câu & từ vựng tiếng Nhật thực tế người bản xứ hay dùng nhất!',
+    '✔ Phản xạ nhanh (<0.2s)',
+    '#HocTiengNhat #TiengNhatGiaoTiep',
+  ].join('\n');
+  assert.equal(isHtmlPayload(sampleTxt, 'text/plain; charset=utf-8'), false);
+  assert.equal(resolveOutputMimeType('【心温まる話】雨の日に見つけた小さな親切.txt'), 'text/plain; charset=utf-8');
+  assert.equal(resolveOutputMimeType('lesson.srt'), 'text/plain; charset=utf-8');
+  assert.equal(resolveOutputMimeType('lesson.mp4'), 'video/mp4');
+  assert.equal(ensureExpectedExtension('My Lesson', '.txt'), 'My Lesson.txt');
+  assert.equal(ensureExpectedExtension('My Lesson.txt', '.txt'), 'My Lesson.txt');
+  assert.equal(ensureExpectedExtension('My Lesson.html', '.txt'), 'My Lesson.txt');
+});
+
+test('cartoonHostAnimator produces smooth speech-synced visemes, blinks, and arm gestures without sudden frame jumps', () => {
+  assert.equal(classifyCharToViseme('m'), 'closed');
+  assert.equal(classifyCharToViseme('a'), 'ah');
+  assert.equal(classifyCharToViseme('あ'), 'ah');
+  assert.equal(classifyCharToViseme('o'), 'oh');
+  assert.equal(classifyCharToViseme('u'), 'oo');
+  assert.equal(classifyCharToViseme('e'), 'ee');
+
+  const cues = [
+    {
+      id: 'c1',
+      start: 0.2,
+      end: 1.8,
+      text: 'Is it okay?',
+      words: [
+        { word: 'Is', start: 0.2, end: 0.45 },
+        { word: 'it', start: 0.5, end: 0.72 },
+        { word: 'okay?', start: 0.8, end: 1.6 },
+      ],
+    },
+  ];
+
+  // Silent gap before cue: mouth closed/smile, not speaking
+  const silentBefore = computeSpeechLipSyncState(cues, 0.05);
+  assert.equal(silentBefore.isSpeaking, false);
+  assert.ok(silentBefore.mouthOpen <= 0.1);
+
+  // Mid active word "okay?": speaking with open mouth & question eyebrow lift
+  const midWord = computeSpeechLipSyncState(cues, 1.15);
+  assert.equal(midWord.isSpeaking, true);
+  assert.equal(midWord.activeWord, 'okay?');
+  assert.ok(midWord.mouthOpen > 0.2);
+  assert.ok(midWord.browLift > 0.3);
+
+  // Verify 60fps smoothness across the entire cue duration (no choppy jumps)
+  let prev = computeSpeechLipSyncState(cues, 0);
+  for (let t = 1 / 60; t <= 2.2; t += 1 / 60) {
+    const curr = computeSpeechLipSyncState(cues, t);
+    assert.ok(
+      Math.abs(curr.mouthOpen - prev.mouthOpen) < 0.28,
+      `Abrupt mouth jump at t=${t.toFixed(3)}: ${prev.mouthOpen} -> ${curr.mouthOpen}`,
+    );
+    assert.ok(
+      Math.abs(curr.headBobY - prev.headBobY) < 0.5,
+      `Abrupt bob jump at t=${t.toFixed(3)}`,
+    );
+    assert.ok(
+      Math.abs(curr.leftShoulderAngle - prev.leftShoulderAngle) < 0.12,
+      `Abrupt arm jump at t=${t.toFixed(3)}`,
+    );
+    prev = curr;
+  }
+
+  // Verify blink cadence fires cleanly around 2.93s
+  const blinking = computeSpeechLipSyncState(cues, 2.93);
+  assert.ok(blinking.blinkFactor > 0.7);
+  const awake = computeSpeechLipSyncState(cues, 1.0);
+  assert.equal(awake.blinkFactor, 0);
+});
+
+test('cartoon-host @Gimmys composition produces yellow-pill karaoke and 0 visual overlaps', () => {
+  const proj = recomposeProjectWithStyle(PRESET_JP_EN_POLITE, 'cartoon-host');
+  assert.equal(proj.compositionId, 'cartoon-host');
+  const hostEl = proj.elements.find(
+    (e) => e.props.kind === 'illustration-prop' && e.props.variant === 'cartoon-host',
+  );
+  assert.ok(hostEl, 'cartoon-host illustration element should exist');
+  const yellowSub = proj.elements.find(
+    (e) => e.props.kind === 'karaoke-card' && e.props.variant === 'yellow-pill',
+  );
+  assert.ok(yellowSub, 'cartoon-host should apply yellow-pill karaoke card styling');
+  assert.deepEqual(findVisualOverlaps(proj.elements), []);
+});
 
 

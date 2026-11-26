@@ -3969,6 +3969,7 @@ function resolveVisualPayloadForReelCard(
     else if (compositionId === 'timeline-track') chosenVariant = 'timeline-track';
     else if (compositionId === 'spatial-contrast') chosenVariant = 'spatial-boxes';
     else if (compositionId === 'avatar-dialogue') chosenVariant = 'avatar-speech';
+    else if (compositionId === 'cartoon-host') chosenVariant = 'cartoon-host';
     else if (compositionId === 'clock-spotlight') chosenVariant = 'clock-face';
     else if (compositionId === 'phrase-icon-split') chosenVariant = 'phrase-icon-split';
   }

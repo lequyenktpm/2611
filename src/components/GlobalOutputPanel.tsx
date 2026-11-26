@@ -12,6 +12,7 @@ import {
   RefreshCw,
   Trash2,
 } from 'lucide-react';
+import { downloadServerOutputFile, isHtmlPayload } from '../utils/safeFileDownload';
 
 export interface GlobalOutputFileEntry {
   name: string;
@@ -48,6 +49,7 @@ export const GlobalOutputPanel: React.FC<GlobalOutputPanelProps> = ({ activeTab 
   const [copiedPreviewText, setCopiedPreviewText] = useState(false);
   const [filterTab, setFilterTab] = useState<string>('all');
   const [folderMsg, setFolderMsg] = useState<string | null>(null);
+  const [downloadError, setDownloadError] = useState<string | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
 
   const refreshFiles = useCallback(async (selectRelPath?: string) => {
@@ -143,8 +145,19 @@ export const GlobalOutputPanel: React.FC<GlobalOutputPanelProps> = ({ activeTab 
       return;
     }
     let cancelled = false;
-    fetch(`/api/output/download?path=${encodeURIComponent(previewRelPath)}&inline=1`)
-      .then((r) => (r.ok ? r.text() : ''))
+    fetch(`/api/output/download?path=${encodeURIComponent(previewRelPath)}&inline=1`, {
+      credentials: 'same-origin',
+      cache: 'no-store',
+    })
+      .then(async (r) => {
+        if (!r.ok) return '';
+        const ct = r.headers.get('content-type');
+        const txt = await r.text();
+        if (isHtmlPayload(txt, ct)) {
+          return '⚠️ Không đọc được file văn bản (server/proxy trả về HTML thay vì nội dung .txt).';
+        }
+        return txt;
+      })
       .then((txt) => {
         if (!cancelled) setPreviewTextContent(txt);
       })
@@ -155,6 +168,14 @@ export const GlobalOutputPanel: React.FC<GlobalOutputPanelProps> = ({ activeTab 
       cancelled = true;
     };
   }, [previewRelPath, isPreviewText]);
+
+  const handleSafeDownload = async (relPath: string, fileName?: string) => {
+    setDownloadError(null);
+    const res = await downloadServerOutputFile(relPath, fileName);
+    if (!res.ok) {
+      setDownloadError(res.error || `Không tải được ${res.fileName}.`);
+    }
+  };
 
   return (
     <section
@@ -233,6 +254,19 @@ export const GlobalOutputPanel: React.FC<GlobalOutputPanelProps> = ({ activeTab 
           </div>
         )}
 
+        {downloadError && (
+          <div className="px-4 py-2 bg-rose-50 border-b border-rose-200 text-xs text-rose-900 flex items-center justify-between gap-2">
+            <span>{downloadError}</span>
+            <button
+              type="button"
+              onClick={() => setDownloadError(null)}
+              className="font-semibold text-rose-700"
+            >
+              Đóng
+            </button>
+          </div>
+        )}
+
         {isExpanded && (
           <div className="p-4 grid grid-cols-1 lg:grid-cols-12 gap-4 items-start">
             {/* Compact File List */}
@@ -295,14 +329,15 @@ export const GlobalOutputPanel: React.FC<GlobalOutputPanelProps> = ({ activeTab 
                             <Play className="w-3.5 h-3.5" />
                           )}
                         </button>
-                        <a
-                          href={`/api/output/download?path=${encodeURIComponent(f.relativePath)}`}
-                          download={f.name}
+                        <button
+                          type="button"
+                          onClick={() => void handleSafeDownload(f.relativePath, f.name)}
+                          aria-label={`Tải ${f.name}`}
                           className="p-1.5 text-emerald-700 hover:bg-emerald-100 rounded-md"
                           title="Tải về máy"
                         >
                           <Download className="w-3.5 h-3.5" />
-                        </a>
+                        </button>
                         <button
                           type="button"
                           onClick={async () => {
@@ -350,13 +385,18 @@ export const GlobalOutputPanel: React.FC<GlobalOutputPanelProps> = ({ activeTab 
                           <span>{copiedPreviewText ? 'Đã chép' : 'Sao chép'}</span>
                         </button>
                       )}
-                      <a
-                        href={`/api/output/download?path=${encodeURIComponent(previewRelPath)}`}
-                        download
+                      <button
+                        type="button"
+                        onClick={() =>
+                          void handleSafeDownload(
+                            previewRelPath,
+                            previewRelPath.split('/').filter(Boolean).pop(),
+                          )
+                        }
                         className="text-emerald-300 hover:text-emerald-200 font-sans font-semibold shrink-0"
                       >
                         Tải về
-                      </a>
+                      </button>
                     </div>
                   </div>
                   {isPreviewText ? (

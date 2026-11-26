@@ -124,6 +124,7 @@ export function estimateElementHalfExtents(el: SceneElement): {
         variant === 'css-grammar-equation' ||
         variant === 'bs-badge-cluster' ||
         variant === 'bs-modal-quiz' ||
+        variant === 'cartoon-host' ||
         variant === 'dynamic-scene' ||
         variant === 'custom-vector';
 
@@ -145,6 +146,8 @@ export function estimateElementHalfExtents(el: SceneElement): {
         baseHalfH = 122;
       } else if (variant === 'avatar-speech') {
         baseHalfH = 116;
+      } else if (variant === 'cartoon-host') {
+        baseHalfH = 355;
       } else if (variant === 'phrase-icon-split') {
         baseHalfH = 222;
       } else if (

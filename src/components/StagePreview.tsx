@@ -24,6 +24,7 @@ import {
   StudioBgmPresetId,
 } from '../engine/audioMixHelper';
 import { cleanOutputTitleStem } from '../engine/outputNaming';
+import { downloadTextAsPlainFile } from '../utils/safeFileDownload';
 import {
   VideoDescriptionOutput,
   VideoDescriptionStyle,
@@ -1318,17 +1319,7 @@ export const StagePreview: React.FC<StagePreviewProps> = ({
                     type="button"
                     onClick={() => {
                       const stem = cleanOutputTitleStem(project.title || project.id, 'Studio Video');
-                      const blob = new Blob([descriptionOutput.txtContent], {
-                        type: 'text/plain;charset=utf-8',
-                      });
-                      const url = URL.createObjectURL(blob);
-                      const a = document.createElement('a');
-                      a.href = url;
-                      a.download = `${stem}.txt`;
-                      document.body.appendChild(a);
-                      a.click();
-                      a.remove();
-                      setTimeout(() => URL.revokeObjectURL(url), 1000);
+                      downloadTextAsPlainFile(descriptionOutput.txtContent, `${stem}.txt`);
                     }}
                     className="inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-semibold bg-indigo-50 border border-indigo-200 text-indigo-700 rounded hover:bg-indigo-100"
                   >

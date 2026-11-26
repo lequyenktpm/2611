@@ -9,6 +9,7 @@ import {
 import { getCustomComponentByVariant } from './customComponentStore';
 import { VectorPrimitive } from './customComponentTypes';
 import { drawPresetBackground, getBackgroundPresetMeta } from './backgroundPresets';
+import { computeSpeechLipSyncState, type CartoonLipSyncFrame } from './cartoonHostAnimator';
 import type { ExportAspectRatioId } from './mp4Config';
 import {
   BackgroundFitMode,
@@ -28,6 +29,7 @@ import {
   ThemePalette,
   ToneMeterProps,
   TopicPillProps,
+  TranscriptCue,
   WordStackProps,
 } from './types';
 
@@ -244,12 +246,14 @@ export function resolveElementLayoutForAspect(
           scale: Math.min(0.95, el.layout.scale || 1),
         });
       } else {
+        const isCartoonHost =
+          el.props.kind === 'illustration-prop' && el.props.variant === 'cartoon-host';
         out.set(el.id, {
           ...el.layout,
           x: 960,
-          y: hasTopSubCollision ? 560 : 515,
+          y: hasTopSubCollision ? 560 : isCartoonHost ? 485 : 515,
           width: Math.min(1260, Math.round(el.layout.width * 1.2)),
-          scale: Math.min(1.02, el.layout.scale || 1),
+          scale: isCartoonHost ? 0.8 : Math.min(1.02, el.layout.scale || 1),
         });
       }
       continue;
@@ -408,6 +412,7 @@ function drawCharacterAvatar(
     nameTag?: string;
     tagColor?: string;
     scale?: number;
+    lipSync?: CartoonLipSyncFrame;
   },
 ) {
   const {
@@ -421,10 +426,11 @@ function drawCharacterAvatar(
     nameTag,
     tagColor = shirtColor,
     scale = 1,
+    lipSync,
   } = opts;
 
   ctx.save();
-  ctx.translate(x, y);
+  ctx.translate(x, y + (lipSync ? lipSync.headBobY * 0.45 : 0));
   if (scale !== 1) ctx.scale(scale, scale);
 
   // Back hair for bob/long styles
@@ -493,30 +499,62 @@ function drawCharacterAvatar(
   }
 
   // Eyebrows
+  const browRaise = lipSync ? lipSync.browLift * 2.5 : 0;
   ctx.strokeStyle = hairColor;
   ctx.lineWidth = 3.2;
   ctx.lineCap = 'round';
   ctx.beginPath();
-  ctx.moveTo(-21, -24);
-  ctx.quadraticCurveTo(-14, -27, -7, -24);
-  ctx.moveTo(7, -24);
-  ctx.quadraticCurveTo(14, -27, 21, -24);
+  ctx.moveTo(-21, -24 - browRaise);
+  ctx.quadraticCurveTo(-14, -27 - browRaise, -7, -24 - browRaise);
+  ctx.moveTo(7, -24 - browRaise);
+  ctx.quadraticCurveTo(14, -27 - browRaise, 21, -24 - browRaise);
   ctx.stroke();
 
-  // Eyes + white specular glints
-  ctx.fillStyle = '#0F172A';
-  ctx.beginPath();
-  ctx.arc(-14, -12, 4.8, 0, Math.PI * 2);
-  ctx.arc(14, -12, 4.8, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.fillStyle = '#FFFFFF';
-  ctx.beginPath();
-  ctx.arc(-15.5, -13.5, 1.7, 0, Math.PI * 2);
-  ctx.arc(12.5, -13.5, 1.7, 0, Math.PI * 2);
-  ctx.fill();
+  // Eyes + white specular glints (smooth blink support)
+  const eyeScaleY = lipSync ? Math.max(0.1, 1 - lipSync.blinkFactor) : 1;
+  if (eyeScaleY < 0.25) {
+    ctx.strokeStyle = '#0F172A';
+    ctx.lineWidth = 3.2;
+    ctx.beginPath();
+    ctx.arc(-14, -12, 5.2, 0.15 * Math.PI, 0.85 * Math.PI);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(14, -12, 5.2, 0.15 * Math.PI, 0.85 * Math.PI);
+    ctx.stroke();
+  } else {
+    ctx.fillStyle = '#0F172A';
+    ctx.beginPath();
+    ctx.ellipse(-14, -12, 4.8, 4.8 * eyeScaleY, 0, 0, Math.PI * 2);
+    ctx.ellipse(14, -12, 4.8, 4.8 * eyeScaleY, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#FFFFFF';
+    ctx.beginPath();
+    ctx.arc(-15.5, -13.5, 1.7, 0, Math.PI * 2);
+    ctx.arc(12.5, -13.5, 1.7, 0, Math.PI * 2);
+    ctx.fill();
+  }
 
-  // Mouth expression
-  if (expression === 'happy') {
+  // Mouth expression (smooth lip-sync when lipSync state is active)
+  if (lipSync && lipSync.isSpeaking && lipSync.mouthOpen > 0.08) {
+    const mw = 11.5 * lipSync.mouthWidth;
+    const mh = 3.5 + lipSync.mouthOpen * 11;
+    ctx.fillStyle = '#9F1239';
+    ctx.beginPath();
+    if (lipSync.mouthRound > 0.55) {
+      ctx.ellipse(0, 3, mw * 0.72, mh * 0.85, 0, 0, Math.PI * 2);
+    } else {
+      ctx.moveTo(-mw, -1);
+      ctx.quadraticCurveTo(0, 1, mw, -1);
+      ctx.bezierCurveTo(mw * 0.9, mh + 2, -mw * 0.9, mh + 2, -mw, -1);
+    }
+    ctx.fill();
+    if (lipSync.mouthOpen > 0.45 && lipSync.mouthRound < 0.5) {
+      ctx.fillStyle = '#FB7185';
+      ctx.beginPath();
+      ctx.ellipse(0, mh * 0.62, mw * 0.48, Math.max(2, mh * 0.25), 0, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  } else if (expression === 'happy') {
     ctx.fillStyle = '#E11D48';
     ctx.beginPath();
     ctx.arc(0, -1, 13, 0.08 * Math.PI, 0.92 * Math.PI);
@@ -547,6 +585,263 @@ function drawCharacterAvatar(
     ctx.fillText(nameTag, 0, 93, pillW - 16);
   }
 
+  ctx.restore();
+}
+
+/**
+ * Draws a silky-smooth, speech-synced @Gimmys-style 2D cartoon mascot:
+ * - Warm shaded round tan head with thick ink outlines
+ * - Blinking oval eyes & expressive eyebrows
+ * - Continuous viseme-interpolated D-shape / oval lip-sync mouth
+ * - Crisp white tunic torso + articulated Bezier stick arms with 4-finger cartoon hands
+ * - Planted stick legs with gentle conversational breathing
+ */
+function drawCartoonHostCharacter(
+  ctx: CanvasRenderingContext2D,
+  time: number,
+  cues: TranscriptCue[] = [],
+) {
+  const lip = computeSpeechLipSyncState(cues, time);
+  const ink = '#0F172A';
+
+  ctx.save();
+
+  // Helper to draw a fanned 4-finger cartoon hand at wrist (wx, wy) pointing along angle
+  const drawCartoonHand = (wx: number, wy: number, baseAngle: number, spreadFlip = 1) => {
+    const fingerOffsets = [-0.46, -0.14, 0.18, 0.52];
+    const fingerLens = [26, 33, 31, 24];
+    ctx.save();
+    ctx.strokeStyle = ink;
+    ctx.lineWidth = 5.4;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    fingerOffsets.forEach((off, idx) => {
+      const a = baseAngle + off * spreadFlip;
+      const len = fingerLens[idx];
+      const fx = wx + Math.cos(a) * len;
+      const fy = wy + Math.sin(a) * len;
+      const cx = wx + Math.cos(a - 0.08 * spreadFlip) * (len * 0.52);
+      const cy = wy + Math.sin(a - 0.08 * spreadFlip) * (len * 0.52);
+      ctx.beginPath();
+      ctx.moveTo(wx, wy);
+      ctx.quadraticCurveTo(cx, cy, fx, fy);
+      ctx.stroke();
+    });
+    ctx.restore();
+  };
+
+  // Helper to draw smooth articulated Bezier arm from shoulder to elbow to wrist
+  const drawArticulatedArm = (
+    sx: number,
+    sy: number,
+    upperAngle: number,
+    elbowDelta: number,
+    dir: -1 | 1,
+    drawHandOnEnd: boolean,
+  ) => {
+    const upperLen = 104;
+    const foreLen = 98;
+    const a1 = dir === -1 ? Math.PI * 0.62 + upperAngle * 0.55 : Math.PI * 0.38 - upperAngle * 0.55;
+    const ex = sx + Math.cos(a1) * upperLen;
+    const ey = sy + Math.sin(a1) * upperLen;
+    const a2 = a1 + (dir === -1 ? 0.34 + elbowDelta * 0.45 : -0.34 - elbowDelta * 0.45);
+    const wx = ex + Math.cos(a2) * foreLen;
+    const wy = ey + Math.sin(a2) * foreLen;
+
+    ctx.save();
+    ctx.strokeStyle = ink;
+    ctx.lineWidth = 6.8;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.beginPath();
+    ctx.moveTo(sx, sy);
+    ctx.quadraticCurveTo(ex + dir * 4, ey, wx, wy);
+    ctx.stroke();
+    ctx.restore();
+
+    if (drawHandOnEnd) {
+      drawCartoonHand(wx, wy, a2, dir);
+    }
+  };
+
+  // 1. Stick Legs (planted at bottom so feet never float/jump awkwardly)
+  ctx.save();
+  ctx.strokeStyle = ink;
+  ctx.lineWidth = 7;
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(-40, 194);
+  ctx.quadraticCurveTo(-46, 266, -42, 336);
+  ctx.moveTo(40, 194);
+  ctx.quadraticCurveTo(46, 266, 42, 336);
+  ctx.stroke();
+  // Minimalist feet tips
+  ctx.beginPath();
+  ctx.moveTo(-42, 336);
+  ctx.lineTo(-56, 338);
+  ctx.moveTo(42, 336);
+  ctx.lineTo(56, 338);
+  ctx.stroke();
+  ctx.restore();
+
+  // 2. Gentle breathing torso & arms container
+  ctx.save();
+  ctx.translate(0, lip.headBobY);
+
+  // Left arm (viewer-left, signature @Gimmys expressive open-palm arm reaching out)
+  drawArticulatedArm(-72, 16, lip.leftShoulderAngle, lip.leftElbowAngle, -1, true);
+
+  // Soft drop shadow beneath tunic bottom
+  ctx.fillStyle = 'rgba(15, 23, 42, 0.08)';
+  ctx.beginPath();
+  ctx.ellipse(0, 206, 98, 12, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // White bell/dome tunic body with crisp cool shading on right edge + thick black outline
+  ctx.save();
+  ctx.beginPath();
+  ctx.moveTo(-66, -24);
+  ctx.bezierCurveTo(-104, 34, -112, 140, -104, 186);
+  ctx.quadraticCurveTo(0, 212, 104, 186);
+  ctx.bezierCurveTo(112, 140, 104, 34, 66, -24);
+  ctx.closePath();
+
+  const tunicGrad = ctx.createLinearGradient(-105, -20, 105, 195);
+  tunicGrad.addColorStop(0, '#FFFFFF');
+  tunicGrad.addColorStop(0.66, '#F8FAFC');
+  tunicGrad.addColorStop(1, '#DCE6F2');
+  ctx.fillStyle = tunicGrad;
+  ctx.fill();
+
+  ctx.strokeStyle = ink;
+  ctx.lineWidth = 8.5;
+  ctx.lineJoin = 'round';
+  ctx.stroke();
+  ctx.restore();
+
+  // Viewer-right arm (curves neatly inward along the side of the tunic like @Gimmys)
+  ctx.save();
+  const rSway = Math.sin(time * 1.45) * 6;
+  ctx.strokeStyle = ink;
+  ctx.lineWidth = 6.8;
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(86, 46);
+  ctx.quadraticCurveTo(112, 124 + rSway * 0.4, 70, 198 + rSway * 0.3);
+  ctx.stroke();
+  if (lip.gestureMode === 'cheer' || lip.gestureMode === 'explain') {
+    drawArticulatedArm(72, 16, lip.rightShoulderAngle, lip.rightElbowAngle, 1, true);
+  }
+  ctx.restore();
+
+  // 3. Round Tan Head rotating smoothly around neck pivot
+  ctx.save();
+  ctx.translate(0, -34);
+  ctx.rotate(lip.headTiltRad);
+  ctx.translate(0, -124);
+
+  const headR = 132;
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(0, 0, headR, 0, Math.PI * 2);
+  const skinGrad = ctx.createRadialGradient(-44, -56, 18, 12, 18, headR * 1.15);
+  skinGrad.addColorStop(0, '#ECC094');
+  skinGrad.addColorStop(0.58, '#DDA46F');
+  skinGrad.addColorStop(1, '#C5844E');
+  ctx.fillStyle = skinGrad;
+  ctx.fill();
+  ctx.strokeStyle = ink;
+  ctx.lineWidth = 8.8;
+  ctx.stroke();
+  ctx.restore();
+
+  // Expressive eyebrows
+  const browY = -48 - lip.browLift * 10;
+  ctx.strokeStyle = ink;
+  ctx.lineWidth = 5.4;
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(-64, browY + 4);
+  ctx.quadraticCurveTo(-45, browY - 7, -26, browY + 3);
+  ctx.moveTo(26, browY + 3);
+  ctx.quadraticCurveTo(45, browY - 7, 64, browY + 4);
+  ctx.stroke();
+
+  // Crisp oval dark eyes with smooth natural blinking
+  const eyeScaleY = Math.max(0.08, 1 - lip.blinkFactor);
+  if (eyeScaleY < 0.24) {
+    ctx.strokeStyle = ink;
+    ctx.lineWidth = 5.5;
+    ctx.beginPath();
+    ctx.arc(-44, -18, 14, 0.1 * Math.PI, 0.9 * Math.PI);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(44, -18, 14, 0.1 * Math.PI, 0.9 * Math.PI);
+    ctx.stroke();
+  } else {
+    ctx.fillStyle = ink;
+    ctx.beginPath();
+    ctx.ellipse(-44, -18, 11.5, 14.5 * eyeScaleY, 0, 0, Math.PI * 2);
+    ctx.ellipse(44, -18, 11.5, 14.5 * eyeScaleY, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // Smooth syllable/viseme lip-synced mouth
+  const mouthY = 36;
+  const openAmt = lip.mouthOpen;
+  if (openAmt <= 0.09) {
+    // Gentle resting smile or pressed bilabial m/b/p
+    ctx.strokeStyle = ink;
+    ctx.lineWidth = 6.2;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    if (lip.viseme === 'closed') {
+      ctx.moveTo(-26, mouthY + 4);
+      ctx.quadraticCurveTo(0, mouthY + 7, 26, mouthY + 4);
+    } else {
+      ctx.arc(0, mouthY - 8, 28, 0.16 * Math.PI, 0.84 * Math.PI);
+    }
+    ctx.stroke();
+  } else {
+    const mw = 40 * lip.mouthWidth;
+    const mh = 12 + openAmt * 38;
+    ctx.save();
+    ctx.beginPath();
+    if (lip.mouthRound > 0.55) {
+      // Smooth rounded 'oh' / 'oo' aperture
+      const rx = mw * (0.72 - 0.14 * lip.mouthRound);
+      const ry = Math.max(10, mh * 0.62);
+      ctx.ellipse(0, mouthY + ry * 0.45, rx, ry, 0, 0, Math.PI * 2);
+    } else {
+      // Signature @Gimmys D-shaped open mouth: smooth arched upper lip & deep rounded lower curve
+      ctx.moveTo(-mw, mouthY);
+      ctx.quadraticCurveTo(0, mouthY + 5, mw, mouthY);
+      ctx.bezierCurveTo(
+        mw * 0.96,
+        mouthY + mh * 1.18,
+        -mw * 0.96,
+        mouthY + mh * 1.18,
+        -mw,
+        mouthY,
+      );
+      ctx.closePath();
+    }
+    ctx.fillStyle = ink;
+    ctx.fill();
+
+    // Subtle warm tongue gleam inside wide openings
+    if (openAmt > 0.42 && lip.mouthRound < 0.58) {
+      ctx.clip();
+      ctx.fillStyle = '#E11D48';
+      ctx.beginPath();
+      ctx.ellipse(0, mouthY + mh * 0.88, mw * 0.56, mh * 0.36, 0, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  ctx.restore(); // end head
+  ctx.restore(); // end torso/bob
   ctx.restore();
 }
 
@@ -1848,6 +2143,7 @@ const VARIANTS_WITH_NATIVE_LABELS = new Set<string>([
   'css-grammar-equation',
   'bs-badge-cluster',
   'bs-modal-quiz',
+  'cartoon-host',
   'dynamic-scene',
   'custom-vector',
 ]);
@@ -1960,10 +2256,11 @@ function drawIllustrationProp(
   props: IllustrationPropProps,
   time: number,
   elStartTime = 0,
+  cues: TranscriptCue[] = [],
 ) {
   const elElapsed = Math.max(0, time - elStartTime);
   const floatRamp = easeOutCubic(clamp01(elElapsed / 0.5));
-  const floatOffset = Math.sin(elElapsed * 2.1) * 6 * floatRamp;
+  const floatOffset = props.variant === 'cartoon-host' ? 0 : Math.sin(elElapsed * 2.1) * 6 * floatRamp;
   ctx.save();
   ctx.translate(0, floatOffset);
 
@@ -2716,11 +3013,14 @@ function drawIllustrationProp(
         ctx.fillText(box.subtitle, bx, 76, bw - 36);
       }
     });
+  } else if (props.variant === 'cartoon-host') {
+    drawCartoonHostCharacter(ctx, time, cues);
   } else if (props.variant === 'avatar-speech') {
     const speech = props.data?.speechText || 'Could I have some water, please?';
     const reaction = props.data?.reactionText || 'Polite!';
+    const lip = computeSpeechLipSyncState(cues, time);
 
-    // Modern speaker avatar on left
+    // Modern speaker avatar on left with smooth speech lip-sync + natural blink
     ctx.save();
     ctx.fillStyle = '#DBEAFE';
     ctx.beginPath();
@@ -2735,6 +3035,7 @@ function drawIllustrationProp(
       hairStyle: 'side',
       expression: reaction.includes('blunt') ? 'curious' : 'smile',
       scale: 0.92,
+      lipSync: lip,
     });
 
     // Speech bubble on right
@@ -5148,8 +5449,9 @@ function drawKaraokeCard(
   const stageH = renderOpts?.stageH ?? STAGE_HEIGHT;
   const subCfg = renderOpts?.subtitleConfig;
   const isPlain = renderOpts?.compositionId === 'plain' || props.variant === 'plain-shadow';
+  const isYellowPill = props.variant === 'yellow-pill';
   const boxStyle = subCfg?.boxStyle ?? (isPlain ? 'clean' : 'card');
-  const isCleanBox = boxStyle === 'clean';
+  const isCleanBox = boxStyle === 'clean' && !isYellowPill;
   const isDarkBar = props.variant === 'dark-bar' || isPlain;
 
   const minDim = Math.min(stageW, stageH);
@@ -5256,9 +5558,10 @@ function drawKaraokeCard(
 
   const mainTextH = lines.length * lineH;
   const totalContentH = mainTextH + helperBlockH;
-  const cardH = Math.max(112, totalContentH + (isCleanBox ? 32 : 60));
-  const cardRadius =
-    boxStyle === 'pill' && lines.length === 1 && helperLines.length === 0
+  const cardH = Math.max(112, totalContentH + (isCleanBox ? 32 : 56));
+  const cardRadius = isYellowPill
+    ? 28
+    : boxStyle === 'pill' && lines.length === 1 && helperLines.length === 0
       ? Math.round(cardH / 2)
       : isDarkBar
         ? 28
@@ -5269,22 +5572,42 @@ function drawKaraokeCard(
   const y = -cardH / 2;
 
   if (!isCleanBox) {
-    fillCardWithShadow(
-      ctx,
-      x,
-      y,
-      pillW,
-      cardH,
-      cardRadius,
-      isDarkBar ? 'rgba(15, 23, 42, 0.84)' : '#FFFFFF',
-      isDarkBar ? 0.28 : 0.11,
-    );
-    ctx.save();
-    ctx.strokeStyle = isDarkBar ? 'rgba(148, 163, 184, 0.28)' : '#E2E8F0';
-    ctx.lineWidth = 2;
-    drawRoundedRectPath(ctx, x, y, pillW, cardH, cardRadius);
-    ctx.stroke();
-    ctx.restore();
+    if (isYellowPill) {
+      const yGrad = ctx.createLinearGradient(x, y, x, y + cardH);
+      yGrad.addColorStop(0, '#FDE047');
+      yGrad.addColorStop(1, '#FACC15');
+      ctx.save();
+      ctx.shadowColor = 'rgba(15, 23, 42, 0.18)';
+      ctx.shadowBlur = 24;
+      ctx.shadowOffsetY = 8;
+      ctx.fillStyle = yGrad;
+      drawRoundedRectPath(ctx, x, y, pillW, cardH, cardRadius);
+      ctx.fill();
+      ctx.restore();
+      ctx.save();
+      ctx.strokeStyle = '#EAB308';
+      ctx.lineWidth = 2.5;
+      drawRoundedRectPath(ctx, x, y, pillW, cardH, cardRadius);
+      ctx.stroke();
+      ctx.restore();
+    } else {
+      fillCardWithShadow(
+        ctx,
+        x,
+        y,
+        pillW,
+        cardH,
+        cardRadius,
+        isDarkBar ? 'rgba(15, 23, 42, 0.84)' : '#FFFFFF',
+        isDarkBar ? 0.28 : 0.11,
+      );
+      ctx.save();
+      ctx.strokeStyle = isDarkBar ? 'rgba(148, 163, 184, 0.28)' : '#E2E8F0';
+      ctx.lineWidth = 2;
+      drawRoundedRectPath(ctx, x, y, pillW, cardH, cardRadius);
+      ctx.stroke();
+      ctx.restore();
+    }
   }
 
   ctx.font = `700 ${fontSize}px ${FONT_DISPLAY}`;
@@ -5404,12 +5727,15 @@ export function renderIllustrationVariantThumbnail(
   primitivesOverride?: VectorPrimitive[],
 ): void {
   ctx.clearRect(0, 0, width, height);
-  ctx.fillStyle = '#F8FAFC';
+  ctx.fillStyle = variant === 'cartoon-host' ? '#93DCFC' : '#F8FAFC';
   ctx.fillRect(0, 0, width, height);
 
   ctx.save();
   ctx.translate(width / 2, height / 2);
-  const scale = Math.min(width / 920, height / 340);
+  const scale =
+    variant === 'cartoon-host'
+      ? Math.min(width / 460, height / 760)
+      : Math.min(width / 920, height / 340);
   ctx.scale(scale, scale);
 
   if (primitivesOverride && primitivesOverride.length > 0) {
@@ -5547,6 +5873,36 @@ export function renderProjectFrame(
     }
   }
 
+  if (project.compositionId === 'cartoon-host' && !project.backgroundImage) {
+    // Crisp @Gimmys sky-blue diagonal gradient backdrop with soft ambient light bands
+    const skyGrad = ctx.createLinearGradient(0, 0, stageW * 0.9, stageH);
+    skyGrad.addColorStop(0, '#72CFF8');
+    skyGrad.addColorStop(0.5, '#AEE5FD');
+    skyGrad.addColorStop(1, '#DFF4FF');
+    ctx.fillStyle = skyGrad;
+    ctx.fillRect(0, 0, stageW, stageH);
+
+    ctx.save();
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.18)';
+    ctx.beginPath();
+    ctx.moveTo(0, stageH * 0.08);
+    ctx.lineTo(stageW, stageH * -0.08);
+    ctx.lineTo(stageW, stageH * 0.14);
+    ctx.lineTo(0, stageH * 0.3);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.12)';
+    ctx.beginPath();
+    ctx.moveTo(0, stageH * 0.62);
+    ctx.lineTo(stageW, stageH * 0.44);
+    ctx.lineTo(stageW, stageH * 0.66);
+    ctx.lineTo(0, stageH * 0.84);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+  }
+
   // 2. Sort elements by zIndex & resolve aspect layout
   const sorted = [...project.elements].sort((a, b) => a.layout.zIndex - b.layout.zIndex);
   const layoutMap = resolveElementLayoutForAspect(
@@ -5600,10 +5956,10 @@ export function renderProjectFrame(
         if (fitScale < 0.999) {
           ctx.save();
           ctx.scale(fitScale, fitScale);
-          drawIllustrationProp(ctx, el.props, time, el.startTime);
+          drawIllustrationProp(ctx, el.props, time, el.startTime, project.cues);
           ctx.restore();
         } else {
-          drawIllustrationProp(ctx, el.props, time, el.startTime);
+          drawIllustrationProp(ctx, el.props, time, el.startTime, project.cues);
         }
         break;
       }

@@ -202,6 +202,14 @@ export const VECTOR_COMPONENT_CATALOG: VectorComponentMeta[] = [
     keywords: /(friend|family|casual|classmate|colleague|hang out|友達|家族|同僚|先生)/i,
     defaultIcon: 'chat',
   },
+  {
+    variant: 'cartoon-host',
+    category: 'dialogue',
+    label: 'Nhân vật Hoạt Hình Lip-Sync (@Gimmys)',
+    description: 'Nhân vật hoạt hình nét mực dày nhép miệng khớp từng từ và cử động tay mượt',
+    keywords: /\b(cartoon|host|mascot|gimmys|lip.?sync|avatar|presenter)\b/i,
+    defaultIcon: 'mic',
+  },
 
   // ── Grammar & Structure @englishpracticing168 infographics ─────────────────
   {

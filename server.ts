@@ -265,6 +265,7 @@ async function removeOutputMeta(relativePath: string): Promise<void> {
   }
 }
 
+const JOBS_ASYNC_DIR = path.join(STUDIO_TMP_ROOT, 'async-jobs');
 const jobs = new Map<string, RenderJob>();
 const activeJobProcs = new Map<string, ChildProcess>();
 const studioJobs = new Map<string, StudioJob>();
@@ -272,6 +273,66 @@ const activeStudioProcs = new Map<string, ChildProcess>();
 const transcribeJobs = new Map<string, TranscribeJobState>();
 const ttsJobs = new Map<string, TtsJobState>();
 const alignJobs = new Map<string, AlignJobState>();
+
+type AsyncJobKind = 'tts' | 'align' | 'transcribe';
+
+function getAsyncJobSnapshotPath(kind: AsyncJobKind, jobId: string): string {
+  return path.join(JOBS_ASYNC_DIR, `${kind}-${jobId}.json`);
+}
+
+function writeAsyncJobSnapshotSync(kind: AsyncJobKind, jobId: string, state: unknown): void {
+  if (!UUID_RE.test(jobId)) return;
+  try {
+    fs.mkdirSync(JOBS_ASYNC_DIR, { recursive: true });
+    const target = getAsyncJobSnapshotPath(kind, jobId);
+    const tmp = `${target}.tmp-${process.pid}-${Date.now()}`;
+    fs.writeFileSync(tmp, JSON.stringify(state), 'utf8');
+    fs.renameSync(tmp, target);
+  } catch {
+    // non-fatal disk persistence fallback
+  }
+}
+
+async function saveAsyncJobSnapshot(kind: AsyncJobKind, jobId: string, state: unknown): Promise<void> {
+  if (!UUID_RE.test(jobId)) return;
+  try {
+    await fs.promises.mkdir(JOBS_ASYNC_DIR, { recursive: true });
+    const target = getAsyncJobSnapshotPath(kind, jobId);
+    const tmp = `${target}.tmp-${process.pid}-${Date.now()}`;
+    await fs.promises.writeFile(tmp, JSON.stringify(state), 'utf8');
+    await fs.promises.rename(tmp, target);
+  } catch {
+    // non-fatal disk persistence fallback
+  }
+}
+
+async function loadAsyncJobSnapshot<T>(
+  kind: AsyncJobKind,
+  jobId: string,
+  memMap: Map<string, T>,
+): Promise<T | null> {
+  if (!UUID_RE.test(jobId)) return null;
+  const cached = memMap.get(jobId);
+  if (cached) return cached;
+  try {
+    const raw = await fs.promises.readFile(getAsyncJobSnapshotPath(kind, jobId), 'utf8');
+    const parsed = JSON.parse(raw) as T;
+    if (parsed && typeof parsed === 'object') {
+      memMap.set(jobId, parsed);
+      return parsed;
+    }
+  } catch {
+    // missing or unreadable
+  }
+  return null;
+}
+
+function scheduleAsyncJobCleanup(kind: AsyncJobKind, jobId: string, memMap: Map<string, any>, ttlMs = 30 * 60 * 1000): void {
+  setTimeout(() => {
+    memMap.delete(jobId);
+    void fs.promises.unlink(getAsyncJobSnapshotPath(kind, jobId)).catch(() => undefined);
+  }, ttlMs).unref();
+}
 
 function getJobDir(jobId: string): string {
   return path.join(RENDER_TMP_ROOT, `ks-render-${jobId}`);
@@ -1152,8 +1213,34 @@ async function startServer(): Promise<void> {
     }
     const isInline = req.query.inline === '1';
     const fileName = path.basename(resolved.filePath);
+    const ext = path.extname(fileName).toLowerCase();
+    const mimeMap: Record<string, string> = {
+      '.txt': 'text/plain; charset=utf-8',
+      '.srt': 'text/plain; charset=utf-8',
+      '.vtt': 'text/vtt; charset=utf-8',
+      '.md': 'text/plain; charset=utf-8',
+      '.json': 'application/json; charset=utf-8',
+      '.mp4': 'video/mp4',
+      '.m4v': 'video/mp4',
+      '.webm': 'video/webm',
+      '.mov': 'video/quicktime',
+      '.mp3': 'audio/mpeg',
+      '.wav': 'audio/wav',
+      '.m4a': 'audio/mp4',
+      '.zip': 'application/zip',
+    };
+    const contentType = mimeMap[ext] || 'application/octet-stream';
+    res.setHeader('Content-Type', contentType);
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
     if (!isInline) {
-      res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(fileName)}`);
+      const stemOnly = fileName.slice(0, fileName.length - ext.length);
+      const asciiStem = stemOnly.replace(/[^a-zA-Z0-9._ -]/g, '').trim() || 'output';
+      const asciiFallback = `${asciiStem}${ext}`;
+      res.setHeader(
+        'Content-Disposition',
+        `attachment; filename="${asciiFallback}"; filename*=UTF-8''${encodeURIComponent(fileName)}`,
+      );
     }
     res.sendFile(resolved.filePath);
   });
@@ -1926,15 +2013,21 @@ async function startServer(): Promise<void> {
       createdAt: Date.now(),
     };
     ttsJobs.set(jobId, jobState);
+    writeAsyncJobSnapshotSync('tts', jobId, jobState);
     res.status(202).json({ ok: true, jobId });
 
     void (async () => {
+      let lastSavedPct = -10;
       try {
         const result = await executeTtsSynthesis(
           body,
           (pct, label) => {
             jobState.progress = pct;
             jobState.stageLabel = label;
+            if (Math.abs(pct - lastSavedPct) >= 12) {
+              lastSavedPct = pct;
+              void saveAsyncJobSnapshot('tts', jobId, jobState);
+            }
           },
           resolvedKeys,
         );
@@ -1942,17 +2035,19 @@ async function startServer(): Promise<void> {
         jobState.progress = 100;
         jobState.stageLabel = 'Tổng hợp Audio hoàn tất!';
         jobState.result = result;
+        await saveAsyncJobSnapshot('tts', jobId, jobState);
       } catch (err) {
         jobState.status = 'error';
         jobState.error = err instanceof Error ? err.message : 'Lỗi tạo Audio TTS.';
+        await saveAsyncJobSnapshot('tts', jobId, jobState);
       } finally {
-        setTimeout(() => ttsJobs.delete(jobId), 15 * 60 * 1000).unref();
+        scheduleAsyncJobCleanup('tts', jobId, ttsJobs);
       }
     })();
   });
 
-  app.get('/api/tts/synthesize/:jobId', (req, res) => {
-    const job = ttsJobs.get(req.params.jobId);
+  app.get('/api/tts/synthesize/:jobId', async (req, res) => {
+    const job = await loadAsyncJobSnapshot('tts', req.params.jobId, ttsJobs);
     if (!job) {
       res.status(404).json({ error: 'Không tìm thấy tác vụ tổng hợp Audio TTS.' });
       return;
@@ -2411,9 +2506,11 @@ async function startServer(): Promise<void> {
           createdAt: Date.now(),
         };
         alignJobs.set(jobId, jobState);
+        writeAsyncJobSnapshotSync('align', jobId, jobState);
         res.status(202).json({ ok: true, jobId });
 
         void (async () => {
+          let lastSavedPct = -10;
           try {
             const out = await executeWhisperAlign(
               audioBuf,
@@ -2423,6 +2520,10 @@ async function startServer(): Promise<void> {
               (pct, lbl) => {
                 jobState.progress = pct;
                 jobState.stageLabel = lbl;
+                if (Math.abs(pct - lastSavedPct) >= 15) {
+                  lastSavedPct = pct;
+                  void saveAsyncJobSnapshot('align', jobId, jobState);
+                }
               },
               { referenceText, alignMode },
             );
@@ -2430,11 +2531,13 @@ async function startServer(): Promise<void> {
             jobState.progress = 100;
             jobState.stageLabel = 'Căn chỉnh từ hoàn tất!';
             jobState.result = out;
+            await saveAsyncJobSnapshot('align', jobId, jobState);
           } catch (err) {
             jobState.status = 'error';
             jobState.error = err instanceof Error ? err.message : 'Lỗi căn chỉnh từ.';
+            await saveAsyncJobSnapshot('align', jobId, jobState);
           } finally {
-            setTimeout(() => alignJobs.delete(jobId), 15 * 60 * 1000).unref();
+            scheduleAsyncJobCleanup('align', jobId, alignJobs);
           }
         })();
       } catch (err) {
@@ -2443,8 +2546,8 @@ async function startServer(): Promise<void> {
     },
   );
 
-  app.get('/api/subtitles/align/:jobId', (req, res) => {
-    const job = alignJobs.get(req.params.jobId);
+  app.get('/api/subtitles/align/:jobId', async (req, res) => {
+    const job = await loadAsyncJobSnapshot('align', req.params.jobId, alignJobs);
     if (!job) {
       res.status(404).json({ error: 'Không tìm thấy tác vụ căn chỉnh Whisper.' });
       return;
@@ -2517,6 +2620,7 @@ async function startServer(): Promise<void> {
         createdAt: Date.now(),
       };
       transcribeJobs.set(jobId, jobState);
+      writeAsyncJobSnapshotSync('transcribe', jobId, jobState);
       res.status(202).json({ ok: true, jobId });
 
       // Run in background so proxy never hits 504 gateway timeout during first-run model downloads
@@ -2699,19 +2803,21 @@ async function startServer(): Promise<void> {
             audioBase64: mp3Buf.length <= 12 * 1024 * 1024 ? mp3Buf.toString('base64') : undefined,
             audioMimeType: 'audio/mpeg',
           };
+          await saveAsyncJobSnapshot('transcribe', jobId, jobState);
         } catch (err) {
           jobState.status = 'error';
           jobState.error = err instanceof Error ? err.message : 'Lỗi bóc tách phụ đề.';
+          await saveAsyncJobSnapshot('transcribe', jobId, jobState);
         } finally {
           await fs.promises.rm(tmpDir, { recursive: true, force: true }).catch(() => undefined);
-          setTimeout(() => transcribeJobs.delete(jobId), 15 * 60 * 1000).unref();
+          scheduleAsyncJobCleanup('transcribe', jobId, transcribeJobs);
         }
       })();
     },
   );
 
-  app.get('/api/subtitles/transcribe/:jobId', (req, res) => {
-    const job = transcribeJobs.get(req.params.jobId);
+  app.get('/api/subtitles/transcribe/:jobId', async (req, res) => {
+    const job = await loadAsyncJobSnapshot('transcribe', req.params.jobId, transcribeJobs);
     if (!job) {
       res.status(404).json({ error: 'Không tìm thấy tác vụ bóc tách phụ đề.' });
       return;

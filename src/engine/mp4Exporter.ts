@@ -29,6 +29,7 @@ export interface ExportVideoResult {
   qualityLabel: string;
   blob?: Blob;
   savedPath?: string;
+  relativePath?: string;
 }
 
 export class ExportAbortedError extends Error {
@@ -53,10 +54,12 @@ function triggerBlobDownload(blob: Blob, fileName: string): void {
   const a = document.createElement('a');
   a.href = url;
   a.download = fileName;
+  a.rel = 'noopener';
+  a.style.display = 'none';
   document.body.appendChild(a);
   a.click();
   a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 1500);
+  setTimeout(() => URL.revokeObjectURL(url), 5000);
 }
 
 function renderScaledProjectFrame(
@@ -873,6 +876,8 @@ export async function exportProjectToVideo(
     savePath?: string;
     sourceTab?: string;
     companionText?: string;
+    customRenderFrame?: (ctx: CanvasRenderingContext2D, time: number, width: number, height: number) => void;
+    onBeforeRenderFrame?: (time: number) => Promise<void>;
   },
 ): Promise<ExportVideoResult> {
   const effectiveAspect = settings.aspectRatio || project.aspectRatio || '9:16';
@@ -913,7 +918,7 @@ export async function exportProjectToVideo(
           ).catch(() => null);
         }
         onProgress({ progress: 1, stageLabel: `Hoàn tất! Đã lưu: ${saved.savedPath}` });
-        return { ...res, savedPath: saved.savedPath };
+        return { ...res, savedPath: saved.savedPath, relativePath: saved.relativePath };
       } catch (err) {
         if (err instanceof ExportAbortedError || options?.signal?.aborted) {
           throw new ExportAbortedError();

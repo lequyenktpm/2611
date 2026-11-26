@@ -50,6 +50,15 @@ export const LAYOUT_COMPOSITIONS: LayoutCompositionMeta[] = [
     signatureVariant: 'cafe-water',
   },
   {
+    id: 'cartoon-host',
+    name: 'Nhân vật Hoạt Hình Lip-Sync (@Gimmys)',
+    shortLabel: 'Hoạt hình Lip-Sync',
+    description:
+      'Nhân vật hoạt hình nền trời xanh cử động tay mượt và nhép miệng khớp từng từ kèm thanh phụ đề vàng nổi bật',
+    recommendedTheme: 'pastel-sunrise',
+    signatureVariant: 'cartoon-host',
+  },
+  {
     id: 'flow-steps',
     name: 'Sơ đồ 3 bước (Flow Steps)',
     shortLabel: 'Sơ đồ 3 bước',
@@ -684,6 +693,18 @@ function buildIllustrationDataForComposition(
       };
     }
 
+    case 'cartoon-host': {
+      return {
+        variant: 'cartoon-host',
+        data: {
+          title: seg.topicLabel,
+          speechText: seg.cardText,
+          reactionText: seg.topicLabel,
+          sceneIcon: contextualIcon,
+        },
+      };
+    }
+
     case 'clock-spotlight': {
       const hint = extractTimeHint(seg.cueText);
       const stepHour = hint?.hour ?? (((8 + segIdx) % 12) || 12);
@@ -865,6 +886,116 @@ export function recomposeProjectWithStyle(
       subtitleConfig: nextSubConfig,
       subtitle: `${project.cues.length} câu thoại · Plain (Chỉ chữ & nền)`,
       elements: resolveProjectOverlaps(themedPlain, { preserveKaraokeY: true }),
+    };
+  }
+
+  if (compositionId === 'cartoon-host') {
+    const subPos = project.subtitleConfig?.position;
+    const targetKaraokeY =
+      subPos === 'top' ? 320 : subPos === 'center' ? 960 : 1515;
+
+    // Top crisp segment topic pill (optional cue context pill)
+    let lastPillEnd = -1;
+    segments.forEach((seg, idx) => {
+      const safeStart = Math.max(0, seg.startTime, lastPillEnd + 0.03);
+      const safeEnd = Math.max(safeStart + 0.45, seg.endTime);
+      const nextSegStart =
+        idx < segments.length - 1 ? Math.max(safeEnd, segments[idx + 1].startTime - 0.03) : project.duration;
+      const pillEnd = Math.max(safeEnd, nextSegStart);
+      if (pillEnd - safeStart >= 0.35 && seg.topicLabel) {
+        newVisuals.push({
+          id: `comp-cartoon-pill-${idx + 1}`,
+          type: 'topic-pill',
+          label: `Chủ đề: ${seg.topicLabel}`,
+          startTime: Number(safeStart.toFixed(2)),
+          endTime: Number(pillEnd.toFixed(2)),
+          enterAnimation: 'pop-up',
+          exitAnimation: 'fade-out',
+          layout: { x: 540, y: 215, width: 460, scale: 1, zIndex: 14 },
+          props: {
+            kind: 'topic-pill',
+            text: seg.topicLabel,
+            bgColor: '#FFFFFF',
+            textColor: '#1D4ED8',
+          },
+        });
+        lastPillEnd = pillEnd;
+      }
+    });
+
+    // Continuous full-duration @Gimmys cartoon mascot synced dynamically to project.cues
+    newVisuals.push({
+      id: 'comp-cartoon-host-main',
+      type: 'illustration-prop',
+      label: 'Nhân vật Hoạt Hình Lip-Sync (@Gimmys)',
+      startTime: 0,
+      endTime: project.duration,
+      enterAnimation: 'fade-scale',
+      exitAnimation: 'fade-out',
+      layout: {
+        x: 540,
+        y: 815,
+        width: 880,
+        scale: 1.24,
+        zIndex: 12,
+      },
+      props: {
+        kind: 'illustration-prop',
+        variant: 'cartoon-host',
+        data: {
+          title: project.title,
+          speechText: project.cues[0]?.text || '',
+        },
+      },
+    });
+
+    const baseKaraoke: SceneElement[] =
+      karaokeEls.length > 0
+        ? karaokeEls
+        : project.cues.map((cue, idx) => ({
+            id: `cartoon-karaoke-${idx + 1}`,
+            type: 'karaoke-card',
+            label: `Sub #${idx + 1}: ${cue.text.slice(0, 26)}`,
+            startTime: cue.start,
+            endTime: cue.end,
+            enterAnimation: 'pop-up',
+            exitAnimation: 'fade-out',
+            layout: { x: 540, y: targetKaraokeY, width: 900, scale: 1, zIndex: 35 },
+            props: {
+              kind: 'karaoke-card',
+              cueId: cue.id,
+              words: cue.words,
+              variant: 'yellow-pill',
+              activeColor: '#B91C1C',
+              inactiveColor: '#334155',
+              spokenColor: '#0F172A',
+            },
+          }));
+
+    const yellowKaraoke = baseKaraoke.map((k) =>
+      k.props.kind === 'karaoke-card'
+        ? {
+            ...k,
+            layout: { ...k.layout, y: targetKaraokeY, width: Math.min(940, k.layout.width || 900) },
+            props: {
+              ...k.props,
+              variant: 'yellow-pill' as const,
+              activeColor: '#B91C1C',
+              inactiveColor: '#334155',
+              spokenColor: '#0F172A',
+            },
+          }
+        : k,
+    );
+
+    return {
+      ...project,
+      theme: nextTheme,
+      compositionId: 'cartoon-host',
+      subtitle: `${project.cues.length} câu thoại · Hoạt hình Lip-Sync (@Gimmys)`,
+      elements: resolveProjectOverlaps([...newVisuals, ...yellowKaraoke], {
+        preserveKaraokeY: Boolean(subPos),
+      }),
     };
   }
 

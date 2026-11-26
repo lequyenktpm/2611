@@ -1089,10 +1089,10 @@ export const AudioSubtitleStudioModal: React.FC<AudioSubtitleStudioModalProps> =
                 </div>
               </div>
 
-              {(provider === 'elevenlabs' || provider === 'gemini') && (
+              {provider === 'elevenlabs' && (
                 <ApiKeyInlineControl
-                  provider={provider === 'elevenlabs' ? 'elevenlabs' : 'gemini'}
-                  hasServerKey={provider === 'elevenlabs' ? hasElevenLabsKey : hasGeminiKey}
+                  provider="elevenlabs"
+                  hasServerKey={hasElevenLabsKey}
                   onSaved={refreshVoices}
                 />
               )}
@@ -1436,8 +1436,8 @@ export const AudioSubtitleStudioModal: React.FC<AudioSubtitleStudioModalProps> =
                     <option value="whisper">Local Whisper (ONNX Built-in)</option>
                     <option value="gemini">
                       {effectiveHasGeminiKey
-                        ? 'Gemini AI (Đã có API Key)'
-                        : 'Gemini AI (Nhập Key bên dưới)'}
+                        ? 'Gemini AI (Đã cấu hình sẵn)'
+                        : 'Gemini AI (Cần cấu hình trên server)'}
                     </option>
                   </select>
                 </div>
@@ -1523,15 +1523,6 @@ export const AudioSubtitleStudioModal: React.FC<AudioSubtitleStudioModalProps> =
                   </div>
                 )}
               </div>
-
-              {sttService === 'gemini' && (
-                <ApiKeyInlineControl
-                  provider="gemini"
-                  hasServerKey={hasGeminiKey}
-                  onSaved={refreshVoices}
-                  compact
-                />
-              )}
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
@@ -1621,7 +1612,7 @@ export const AudioSubtitleStudioModal: React.FC<AudioSubtitleStudioModalProps> =
                       <span>Dịch file gốc (.SRT / .VTT / Script) sang ngôn ngữ đích</span>
                     </div>
                     <p className="text-[11px] text-slate-500 mt-0.5">
-                      Cơ chế dịch: {effectiveHasGeminiKey ? 'Ưu tiên Gemini LLM (đã kết nối Key) & tự dự phòng Google Translate' : 'Dùng Google Translate miễn phí tự động (hoặc nhập Gemini API Key ngay trên app)'}. Nạp file <code className="font-mono">.srt</code>/<code className="font-mono">.vtt</code>/<code className="font-mono">.txt</code> hoặc dán nội dung để dịch ngay.
+                      Cơ chế dịch: Dùng Google Translate miễn phí tự động. Nạp file <code className="font-mono">.srt</code>/<code className="font-mono">.vtt</code>/<code className="font-mono">.txt</code> hoặc dán nội dung để dịch ngay.
                     </p>
                   </div>
                   <div className="flex items-center gap-2">

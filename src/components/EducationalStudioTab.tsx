@@ -34,6 +34,8 @@ import {
   EduKaraokeSize,
   EduWatermarkCorner,
   EduWatermarkOutroConfig,
+  getReadingUiStrings,
+  isDefaultReadingOutroPair,
   KARAOKE_EFFECT_PRESETS,
   READING_BOOK_FRAMES,
   READING_BOOK_PALETTES,
@@ -85,6 +87,7 @@ import {
   StudioBgmPresetId,
 } from '../engine/audioMixHelper';
 import { buildVideoDescription } from '../engine/videoDescriptionBuilder';
+import { downloadTextAsPlainFile, isHtmlPayload } from '../utils/safeFileDownload';
 import { playExportCompleteSound } from '../utils/soundEffects';
 import { parseTranscriptAuto } from '../engine/transcriptParser';
 import {
@@ -603,9 +606,21 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
     async (relativePath: string, fileName: string) => {
       if (!localDirHandle) return false;
       try {
-        const resp = await fetch(`/api/output/download?path=${encodeURIComponent(relativePath)}`);
+        const resp = await fetch(`/api/output/download?path=${encodeURIComponent(relativePath)}`, {
+          credentials: 'same-origin',
+          cache: 'no-store',
+        });
         if (!resp.ok) return false;
-        const blob = await resp.blob();
+        const ct = resp.headers.get('content-type');
+        if (ct && ct.toLowerCase().includes('text/html')) return false;
+        let blob: Blob;
+        if (/\.(txt|srt|vtt|md|json)$/i.test(fileName)) {
+          const text = await resp.text();
+          if (isHtmlPayload(text, ct)) return false;
+          blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+        } else {
+          blob = await resp.blob();
+        }
         const fileHandle = await localDirHandle.getFileHandle(fileName, { create: true });
         const writable = await fileHandle.createWritable();
         await writable.write(blob);
@@ -1716,10 +1731,31 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
       const cleanTitle =
         readingTitle.trim() ||
         READING_STARTER_BY_LANG[(readingLearningLang as ReadingLearningLang) || 'en']?.title ||
-        'Reading Practice';
+        getReadingUiStrings(readingLearningLang).introDefaultTitle;
       setReadingIntroText(buildDefaultIntroForLang(readingLearningLang, cleanTitle));
     }
   }, [readingTitle, readingLearningLang, isReadingIntroCustom, buildDefaultIntroForLang]);
+
+  useEffect(() => {
+    if (subTab !== 'align') return;
+    const localizedOutro = getReadingUiStrings(readingLearningLang);
+    setWatermarkOutro((prev) => {
+      if (!isDefaultReadingOutroPair(prev.outroLine1, prev.outroLine2)) {
+        return prev;
+      }
+      if (
+        prev.outroLine1 === localizedOutro.outroLine1 &&
+        prev.outroLine2 === localizedOutro.outroLine2
+      ) {
+        return prev;
+      }
+      return {
+        ...prev,
+        outroLine1: localizedOutro.outroLine1,
+        outroLine2: localizedOutro.outroLine2,
+      };
+    });
+  }, [subTab, readingLearningLang]);
 
   const outroSpeechText = useMemo(
     () => [watermarkOutro.outroLine1.trim(), watermarkOutro.outroLine2.trim()].filter(Boolean).join('. '),
@@ -1894,7 +1930,7 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
         totalDuration: readingTimeline.effectiveTotalDuration,
         introEnabled: readingIntroEnabled && readingIntroText.trim().length > 0,
         introSeconds: activeIntroSec,
-        introTitle: 'HÔM NAY ĐỌC GÌ? · READING GOAL',
+        introTitle: getReadingUiStrings(readingLearningLang).introBadge,
         introSubtitle: readingIntroText.trim() || readingTitle,
         paletteId: readingPaletteId,
         illustrationStyle: readingIllustration,
@@ -1903,6 +1939,7 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
         background: readingBackground,
         subtitlePosition: mappedReadingSubPos,
         subtitleSize: mappedReadingSubSize,
+        learningLanguage: readingLearningLang,
         watermarkOutro,
       });
     };
@@ -2073,7 +2110,7 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
 
       if (activeIntroText) {
         setReadingTtsProgress(74);
-        setReadingTtsStageLabel('Đang tạo giọng Intro "Hôm nay học gì?"...');
+        setReadingTtsStageLabel('Đang tạo giọng Intro mở đầu bài đọc...');
         const useViVoice =
           hasVietnameseChars(activeIntroText) &&
           (readingProvider === 'auto' || readingProvider === 'edge');
@@ -2443,7 +2480,7 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
               totalDuration: targetTotalDur,
               introEnabled: targetIntroEnabled,
               introSeconds: targetIntroSec,
-              introTitle: 'HÔM NAY ĐỌC GÌ? · READING GOAL',
+              introTitle: getReadingUiStrings(readingLearningLang).introBadge,
               introSubtitle: targetIntroSub,
               paletteId: readingPaletteId,
               illustrationStyle: readingIllustration,
@@ -2452,6 +2489,7 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
               background: readingBackground,
               subtitlePosition: mappedReadingSubPos,
               subtitleSize: mappedReadingSubSize,
+              learningLanguage: readingLearningLang,
               watermarkOutro: targetWatermark,
             });
           },
@@ -3736,13 +3774,6 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
                     </div>
                   </div>
 
-                  <ApiKeyInlineControl
-                    provider="gemini"
-                    hasServerKey={hasReadingGeminiKey}
-                    onSaved={refreshReadingVoices}
-                    compact
-                  />
-
                   {/* Topic Hint (Optional) + Genre/Format + Language + Level */}
                   <div className="grid grid-cols-1 sm:grid-cols-12 gap-2.5 pt-2 border-t border-indigo-100">
                     <div className="sm:col-span-6">
@@ -4088,9 +4119,9 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
                   )}
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-start">
+                <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 items-start">
                   {/* Left Controls */}
-                  <div className="md:col-span-7 space-y-3">
+                  <div className="lg:col-span-6 space-y-3">
                     <div className="grid grid-cols-2 gap-2.5">
                       <div>
                         <label htmlFor="reading-palette-select" className="block text-[11px] font-semibold text-slate-700 mb-1">
@@ -4491,11 +4522,11 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
                       />
                     </div>
 
-                    {/* Intro "Hôm nay học gì?", Spoken Outro & Background Music */}
+                    {/* Intro mở đầu theo ngôn ngữ học, Spoken Outro & Background Music */}
                     <div className="p-3 rounded-xl bg-indigo-50/50 border border-indigo-200 space-y-2">
                       <div className="flex flex-wrap items-center justify-between gap-2">
                         <span className="text-[11px] font-bold text-indigo-950">
-                          Intro (&quot;Hôm nay học gì?&quot;) · Outro có lời · Nhạc nền
+                          Intro mở đầu (theo ngôn ngữ học) · Outro có lời · Nhạc nền
                         </span>
                         <div className="flex flex-wrap items-center gap-3 text-[11px] text-slate-700">
                           <label className="inline-flex items-center gap-1.5 font-semibold cursor-pointer">
@@ -4631,8 +4662,331 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
                       </div>
                     </div>
 
-                    {/* TTS / Audio + Fast Forced Align & Whisper */}
-                    <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 space-y-2.5">
+                    {/* Video Frame Aspect Ratio + Resolution + Quality + FPS + Export (End of Left Column) */}
+                    <div className="space-y-3" data-testid="reading-bottom-half-panels">
+                      <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 space-y-2.5">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <span className="text-xs font-bold text-slate-800">
+                            Cấu hình khung hình &amp; chất lượng Video Reading Along
+                          </span>
+                          <span className="text-[11px] font-mono text-slate-600 tabular-nums">
+                            {resolvedReadingDims.width}×{resolvedReadingDims.height} · {resolvedReadingDims.fps}fps
+                          </span>
+                        </div>
+                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+                          <div>
+                            <label className="block text-[11px] font-semibold text-slate-700 mb-1">
+                              Khung hình (Tỷ lệ)
+                            </label>
+                            <select
+                              value={readingAspect}
+                              onChange={(e) => setReadingAspect(e.target.value as ExportAspectRatioId)}
+                              className="w-full px-2.5 py-1.5 text-xs bg-white border border-slate-200 rounded-lg"
+                            >
+                              {ASPECT_RATIO_OPTIONS.map((opt) => (
+                                <option key={opt.id} value={opt.id}>
+                                  {opt.label}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                          <div>
+                            <label className="block text-[11px] font-semibold text-slate-700 mb-1">
+                              Độ phân giải
+                            </label>
+                            <select
+                              value={readingResolution}
+                              onChange={(e) => setReadingResolution(e.target.value as ExportResolutionId)}
+                              className="w-full px-2.5 py-1.5 text-xs bg-white border border-slate-200 rounded-lg"
+                            >
+                              <option value="540p">540p (Nhanh)</option>
+                              <option value="720p">720p (HD Chuẩn)</option>
+                              <option value="1080p">1080p (Full HD)</option>
+                              <option value="1440p">1440p (2K Siêu nét)</option>
+                            </select>
+                          </div>
+                          <div>
+                            <label className="block text-[11px] font-semibold text-slate-700 mb-1">
+                              Chất lượng nén
+                            </label>
+                            <select
+                              value={readingQuality}
+                              onChange={(e) => setReadingQuality(e.target.value as ExportQualityId)}
+                              className="w-full px-2.5 py-1.5 text-xs bg-white border border-slate-200 rounded-lg"
+                            >
+                              <option value="standard">Tiêu chuẩn</option>
+                              <option value="high">Cao (Nét chữ rõ)</option>
+                              <option value="ultra">Ultra (Rất nét)</option>
+                            </select>
+                          </div>
+                          <div>
+                            <label className="block text-[11px] font-semibold text-slate-700 mb-1">
+                              Khung hình/giây (FPS)
+                            </label>
+                            <select
+                              value={readingFps}
+                              onChange={(e) => setReadingFps(Number(e.target.value) as ExportFpsOption)}
+                              className="w-full px-2.5 py-1.5 text-xs bg-white border border-slate-200 rounded-lg"
+                            >
+                              <option value={24}>24 fps</option>
+                              <option value={30}>30 fps</option>
+                              <option value={60}>60 fps (Mượt)</option>
+                            </select>
+                          </div>
+                        </div>
+                      </div>
+
+                      {alignError && (
+                        <p className="text-xs text-rose-700 bg-rose-50 border border-rose-200 rounded-lg p-2.5">
+                          {alignError}
+                        </p>
+                      )}
+
+                      {readingExportStatus && (
+                        <div className="p-2.5 rounded-lg bg-indigo-50 border border-indigo-200 text-xs text-indigo-800 space-y-1.5">
+                          <div className="flex items-center justify-between font-medium">
+                            <span>{readingExportStatus}</span>
+                            {isExportingReadingMp4 && (
+                              <span className="font-mono">{Math.round(readingExportProgress * 100)}%</span>
+                            )}
+                          </div>
+                          {isExportingReadingMp4 && (
+                            <div className="w-full h-1.5 bg-indigo-200 rounded-full overflow-hidden">
+                              <div
+                                className="h-full bg-indigo-600 transition-all"
+                                style={{ width: `${Math.round(readingExportProgress * 100)}%` }}
+                              />
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      <div className="flex flex-wrap items-center gap-2">
+                        {isExportingReadingMp4 ? (
+                          <button
+                            type="button"
+                            onClick={() => readingAbortRef.current?.abort()}
+                            className="inline-flex items-center gap-1.5 px-4 py-2.5 text-xs font-bold text-white bg-rose-600 rounded-lg hover:bg-rose-700"
+                          >
+                            <Square className="w-3.5 h-3.5 fill-current" />
+                            <span>Hủy xuất MP4</span>
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            disabled={!readingText.trim()}
+                            onClick={() => void handleExportReadingAlongMp4()}
+                            className="inline-flex items-center gap-2 px-5 py-2.5 text-xs font-bold text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 disabled:opacity-50"
+                          >
+                            <Sparkles className="w-4 h-4" />
+                            <span>Xuất Reading Along MP4</span>
+                          </button>
+                        )}
+
+                        {alignResult && (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => downloadTextAsPlainFile(alignResult.srt, 'aligned.srt')}
+                              className="inline-flex items-center gap-1 px-3 py-2 text-xs font-semibold bg-white border border-slate-200 rounded-lg hover:bg-slate-50"
+                            >
+                              <Download className="w-3.5 h-3.5" />
+                              <span>Tải .SRT</span>
+                            </button>
+                            {onSendAudioCuesToStudio && (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  onSendAudioCuesToStudio(
+                                    alignFile,
+                                    alignResult.cues,
+                                    readingTitle || alignFile?.name.replace(/\.[^.]+$/, '') || 'Aligned Lesson',
+                                  )
+                                }
+                                className="inline-flex items-center gap-1 px-3 py-2 text-xs font-semibold text-indigo-700 bg-indigo-50 border border-indigo-200 rounded-lg hover:bg-indigo-100"
+                              >
+                                <Play className="w-3.5 h-3.5 fill-current" />
+                                <span>Nạp sang Studio 9:16</span>
+                              </button>
+                            )}
+                          </>
+                        )}
+                      </div>
+                    </div>
+
+                  </div>
+
+                  {/* Right Column: Live Book + Pointer Preview AND Audio TTS/Align */}
+                  <div className="lg:col-span-6 space-y-3" data-testid="reading-right-column">
+                    <div className="bg-slate-900 rounded-xl p-3 text-white space-y-2.5">
+                      <div className="flex flex-wrap items-center justify-between gap-1.5 text-[11px]">
+                        <span className="font-bold text-indigo-300">BOOK + POINTER PREVIEW</span>
+                        <div className="flex items-center gap-1.5">
+                          {readingTimeline.hasOutro && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const targetSec = Math.min(
+                                  readingTimeline.effectiveTotalDuration - 0.1,
+                                  readingTimeline.outroStart + 0.05,
+                                );
+                                setAlignCurrentSec(targetSec);
+                                setIsPlayingReadingPreview(true);
+                                if (
+                                  alignAudioRef.current &&
+                                  alignAudioUrl &&
+                                  alignAudioDur > readingTimeline.outroStart + 0.1
+                                ) {
+                                  alignAudioRef.current.currentTime = Math.min(targetSec, alignAudioDur);
+                                  void alignAudioRef.current.play().catch(() => undefined);
+                                } else {
+                                  alignAudioRef.current?.pause();
+                                }
+                              }}
+                              className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-amber-500 hover:bg-amber-400 text-slate-950 text-[10px] font-bold"
+                            >
+                              <Eye className="w-2.5 h-2.5" />
+                              <span>Xem thử Outro</span>
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (isPlayingReadingPreview) {
+                                setIsPlayingReadingPreview(false);
+                                alignAudioRef.current?.pause();
+                              } else {
+                                const startAt =
+                                  alignCurrentSec >= readingTimeline.effectiveTotalDuration - 0.05
+                                    ? 0
+                                    : alignCurrentSec;
+                                if (startAt !== alignCurrentSec) {
+                                  setAlignCurrentSec(startAt);
+                                }
+                                setIsPlayingReadingPreview(true);
+                                if (alignAudioRef.current && alignAudioUrl) {
+                                  const audioLimit = Math.max(
+                                    readingTimeline.contentEnd,
+                                    alignAudioDur || readingTimeline.effectiveTotalDuration,
+                                  );
+                                  if (startAt < audioLimit) {
+                                    alignAudioRef.current.currentTime = Math.min(startAt, audioLimit);
+                                    void alignAudioRef.current.play().catch(() => undefined);
+                                  }
+                                }
+                              }
+                            }}
+                            className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded bg-indigo-600 hover:bg-indigo-500 text-white text-[10px] font-semibold"
+                          >
+                            {isPlayingReadingPreview ? (
+                              <>
+                                <Pause className="w-2.5 h-2.5" />
+                                <span>Tạm dừng</span>
+                              </>
+                            ) : (
+                              <>
+                                <Play className="w-2.5 h-2.5 fill-current" />
+                                <span>Phát thử trang sách</span>
+                              </>
+                            )}
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className={`${previewCanvasDims.cls} mx-auto rounded-lg overflow-hidden bg-slate-950 border border-slate-800`}>
+                        <canvas
+                          ref={readingCanvasRef}
+                          data-testid="reading-along-canvas"
+                          width={previewCanvasDims.w}
+                          height={previewCanvasDims.h}
+                          className="w-full h-full object-contain"
+                        />
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="range"
+                          aria-label="Thanh tua xem trước Reading Along"
+                          min={0}
+                          max={readingTimeline.effectiveTotalDuration}
+                          step={0.05}
+                          value={Math.min(alignCurrentSec, readingTimeline.effectiveTotalDuration)}
+                          onChange={(e) => {
+                            const t = Number(e.target.value);
+                            setAlignCurrentSec(t);
+                            if (alignAudioRef.current && alignAudioUrl) {
+                              const audioLimit = Math.max(
+                                readingTimeline.contentEnd,
+                                alignAudioDur || readingTimeline.effectiveTotalDuration,
+                              );
+                              if (t < audioLimit) {
+                                alignAudioRef.current.currentTime = Math.min(
+                                  t,
+                                  alignAudioRef.current.duration || t,
+                                );
+                              } else {
+                                alignAudioRef.current.pause();
+                              }
+                            }
+                          }}
+                          className="flex-1 accent-indigo-400 h-1"
+                        />
+                        <span className="text-[10px] font-mono text-slate-300 tabular-nums">
+                          {alignCurrentSec.toFixed(1)}s / {readingTimeline.effectiveTotalDuration.toFixed(1)}s
+                        </span>
+                      </div>
+                      {(readingTimeline.hasIntro || readingTimeline.hasOutro) && (
+                        <div className="text-[10px] text-slate-400 flex flex-wrap items-center justify-between gap-1">
+                          <span>
+                            {readingTimeline.hasIntro
+                              ? `Intro: 0→${readingTimeline.introEnd.toFixed(1)}s · `
+                              : ''}
+                            Chữ kết thúc: {readingTimeline.lastWordEnd.toFixed(1)}s
+                          </span>
+                          {readingTimeline.hasOutro && (
+                            <span className="text-amber-300">
+                              Outro: {readingTimeline.outroStart.toFixed(1)}s (không đè chữ)
+                            </span>
+                          )}
+                        </div>
+                      )}
+
+                      {alignAudioUrl && (
+                        <audio
+                          ref={alignAudioRef}
+                          controls
+                          src={alignAudioUrl}
+                          onLoadedMetadata={(e) => {
+                            if (Number.isFinite(e.currentTarget.duration)) {
+                              setAlignAudioDur(e.currentTarget.duration);
+                            }
+                          }}
+                          onTimeUpdate={(e) => {
+                            if (!e.currentTarget.paused) {
+                              setAlignCurrentSec(e.currentTarget.currentTime);
+                            }
+                          }}
+                          onEnded={() => {
+                            if (
+                              readingTimeline.hasOutro &&
+                              alignCurrentSec < readingTimeline.effectiveTotalDuration - 0.15
+                            ) {
+                              setAlignCurrentSec((prev) => Math.max(prev, readingTimeline.contentEnd));
+                              setIsPlayingReadingPreview(true);
+                            } else {
+                              setIsPlayingReadingPreview(false);
+                            }
+                          }}
+                          className="w-full h-8"
+                        />
+                      )}
+                    </div>
+
+                    {/* TTS / Audio + Fast Forced Align & Whisper (Moved to Right Column below Preview) */}
+                    <div
+                      data-testid="reading-audio-tts-card"
+                      className="p-3 rounded-xl bg-slate-50 border border-slate-200 space-y-2.5"
+                    >
                       <div className="flex flex-wrap items-center justify-between gap-2">
                         <span className="text-[11px] font-bold text-slate-800">
                           Audio giọng đọc (Xuất TTS hoặc Nạp file có sẵn)
@@ -4674,9 +5028,6 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
                           </option>
                           <option value="google">Google Translate TTS (Miễn phí)</option>
                           <option value="polly">Amazon Polly (Miễn phí)</option>
-                          <option value="gemini">
-                            Gemini Flash TTS ({effectiveReadingGeminiKey ? 'Đã có Key' : 'Nhập Key ngay dưới'})
-                          </option>
                         </select>
                         <select
                           aria-label="Giọng đọc bài đọc"
@@ -4696,14 +5047,10 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
                         </select>
                       </div>
 
-                      {(readingProvider === 'elevenlabs' || readingProvider === 'gemini') && (
+                      {readingProvider === 'elevenlabs' && (
                         <ApiKeyInlineControl
-                          provider={readingProvider === 'elevenlabs' ? 'elevenlabs' : 'gemini'}
-                          hasServerKey={
-                            readingProvider === 'elevenlabs'
-                              ? hasReadingElevenLabsKey
-                              : hasReadingGeminiKey
-                          }
+                          provider="elevenlabs"
+                          hasServerKey={hasReadingElevenLabsKey}
                           onSaved={refreshReadingVoices}
                           compact
                         />
@@ -4821,338 +5168,18 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
                         </button>
                       )}
                     </div>
-                  </div>
 
-                  {/* Right Live Book + Pointer Preview */}
-                  <div className="md:col-span-5 bg-slate-900 rounded-xl p-3 text-white space-y-2.5">
-                    <div className="flex flex-wrap items-center justify-between gap-1.5 text-[11px]">
-                      <span className="font-bold text-indigo-300">BOOK + POINTER PREVIEW</span>
-                      <div className="flex items-center gap-1.5">
-                        {readingTimeline.hasOutro && (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              const targetSec = Math.min(
-                                readingTimeline.effectiveTotalDuration - 0.1,
-                                readingTimeline.outroStart + 0.05,
-                              );
-                              setAlignCurrentSec(targetSec);
-                              setIsPlayingReadingPreview(true);
-                              if (
-                                alignAudioRef.current &&
-                                alignAudioUrl &&
-                                alignAudioDur > readingTimeline.outroStart + 0.1
-                              ) {
-                                alignAudioRef.current.currentTime = Math.min(targetSec, alignAudioDur);
-                                void alignAudioRef.current.play().catch(() => undefined);
-                              } else {
-                                alignAudioRef.current?.pause();
-                              }
-                            }}
-                            className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-amber-500 hover:bg-amber-400 text-slate-950 text-[10px] font-bold"
-                          >
-                            <Eye className="w-2.5 h-2.5" />
-                            <span>Xem thử Outro</span>
-                          </button>
-                        )}
-                        <button
-                          type="button"
-                          onClick={() => {
-                            if (isPlayingReadingPreview) {
-                              setIsPlayingReadingPreview(false);
-                              alignAudioRef.current?.pause();
-                            } else {
-                              const startAt =
-                                alignCurrentSec >= readingTimeline.effectiveTotalDuration - 0.05
-                                  ? 0
-                                  : alignCurrentSec;
-                              if (startAt !== alignCurrentSec) {
-                                setAlignCurrentSec(startAt);
-                              }
-                              setIsPlayingReadingPreview(true);
-                              if (alignAudioRef.current && alignAudioUrl) {
-                                const audioLimit = Math.max(
-                                  readingTimeline.contentEnd,
-                                  alignAudioDur || readingTimeline.effectiveTotalDuration,
-                                );
-                                if (startAt < audioLimit) {
-                                  alignAudioRef.current.currentTime = Math.min(startAt, audioLimit);
-                                  void alignAudioRef.current.play().catch(() => undefined);
-                                }
-                              }
-                            }
-                          }}
-                          className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded bg-indigo-600 hover:bg-indigo-500 text-white text-[10px] font-semibold"
-                        >
-                          {isPlayingReadingPreview ? (
-                            <>
-                              <Pause className="w-2.5 h-2.5" />
-                              <span>Tạm dừng</span>
-                            </>
-                          ) : (
-                            <>
-                              <Play className="w-2.5 h-2.5 fill-current" />
-                              <span>Phát thử trang sách</span>
-                            </>
-                          )}
-                        </button>
-                      </div>
-                    </div>
+                    {/* Right Column Lower Cards: Output Folder + Watermark & Outro (pulled tight beneath Audio TTS) */}
+                    <div className="space-y-3" data-testid="reading-bottom-right-panels">
+                      {renderOutputFolderControl()}
 
-                    <div className={`${previewCanvasDims.cls} mx-auto rounded-lg overflow-hidden bg-slate-950 border border-slate-800`}>
-                      <canvas
-                        ref={readingCanvasRef}
-                        data-testid="reading-along-canvas"
-                        width={previewCanvasDims.w}
-                        height={previewCanvasDims.h}
-                        className="w-full h-full object-contain"
+                      <WatermarkOutroSection
+                        config={watermarkOutro}
+                        onChange={setWatermarkOutro}
+                        title="Watermark & Outro (Tùy chọn · Reading Along MP4)"
                       />
                     </div>
-
-                    <div className="flex items-center gap-2">
-                      <input
-                        type="range"
-                        aria-label="Thanh tua xem trước Reading Along"
-                        min={0}
-                        max={readingTimeline.effectiveTotalDuration}
-                        step={0.05}
-                        value={Math.min(alignCurrentSec, readingTimeline.effectiveTotalDuration)}
-                        onChange={(e) => {
-                          const t = Number(e.target.value);
-                          setAlignCurrentSec(t);
-                          if (alignAudioRef.current && alignAudioUrl) {
-                            const audioLimit = Math.max(
-                              readingTimeline.contentEnd,
-                              alignAudioDur || readingTimeline.effectiveTotalDuration,
-                            );
-                            if (t < audioLimit) {
-                              alignAudioRef.current.currentTime = Math.min(
-                                t,
-                                alignAudioRef.current.duration || t,
-                              );
-                            } else {
-                              alignAudioRef.current.pause();
-                            }
-                          }
-                        }}
-                        className="flex-1 accent-indigo-400 h-1"
-                      />
-                      <span className="text-[10px] font-mono text-slate-300 tabular-nums">
-                        {alignCurrentSec.toFixed(1)}s / {readingTimeline.effectiveTotalDuration.toFixed(1)}s
-                      </span>
-                    </div>
-                    {(readingTimeline.hasIntro || readingTimeline.hasOutro) && (
-                      <div className="text-[10px] text-slate-400 flex flex-wrap items-center justify-between gap-1">
-                        <span>
-                          {readingTimeline.hasIntro
-                            ? `Intro: 0→${readingTimeline.introEnd.toFixed(1)}s · `
-                            : ''}
-                          Chữ kết thúc: {readingTimeline.lastWordEnd.toFixed(1)}s
-                        </span>
-                        {readingTimeline.hasOutro && (
-                          <span className="text-amber-300">
-                            Outro: {readingTimeline.outroStart.toFixed(1)}s (không đè chữ)
-                          </span>
-                        )}
-                      </div>
-                    )}
-
-                    {alignAudioUrl && (
-                      <audio
-                        ref={alignAudioRef}
-                        controls
-                        src={alignAudioUrl}
-                        onLoadedMetadata={(e) => {
-                          if (Number.isFinite(e.currentTarget.duration)) {
-                            setAlignAudioDur(e.currentTarget.duration);
-                          }
-                        }}
-                        onTimeUpdate={(e) => {
-                          if (!e.currentTarget.paused) {
-                            setAlignCurrentSec(e.currentTarget.currentTime);
-                          }
-                        }}
-                        onEnded={() => {
-                          if (
-                            readingTimeline.hasOutro &&
-                            alignCurrentSec < readingTimeline.effectiveTotalDuration - 0.15
-                          ) {
-                            setAlignCurrentSec((prev) => Math.max(prev, readingTimeline.contentEnd));
-                            setIsPlayingReadingPreview(true);
-                          } else {
-                            setIsPlayingReadingPreview(false);
-                          }
-                        }}
-                        className="w-full h-8"
-                      />
-                    )}
                   </div>
-                </div>
-
-                {/* Video Frame Aspect Ratio + Resolution + Quality + FPS */}
-                <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 space-y-2.5">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <span className="text-xs font-bold text-slate-800">
-                      Cấu hình khung hình &amp; chất lượng Video Reading Along
-                    </span>
-                    <span className="text-[11px] font-mono text-slate-600 tabular-nums">
-                      {resolvedReadingDims.width}×{resolvedReadingDims.height} · {resolvedReadingDims.fps}fps
-                    </span>
-                  </div>
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
-                    <div>
-                      <label className="block text-[11px] font-semibold text-slate-700 mb-1">
-                        Khung hình (Tỷ lệ)
-                      </label>
-                      <select
-                        value={readingAspect}
-                        onChange={(e) => setReadingAspect(e.target.value as ExportAspectRatioId)}
-                        className="w-full px-2.5 py-1.5 text-xs bg-white border border-slate-200 rounded-lg"
-                      >
-                        {ASPECT_RATIO_OPTIONS.map((opt) => (
-                          <option key={opt.id} value={opt.id}>
-                            {opt.label}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                    <div>
-                      <label className="block text-[11px] font-semibold text-slate-700 mb-1">
-                        Độ phân giải
-                      </label>
-                      <select
-                        value={readingResolution}
-                        onChange={(e) => setReadingResolution(e.target.value as ExportResolutionId)}
-                        className="w-full px-2.5 py-1.5 text-xs bg-white border border-slate-200 rounded-lg"
-                      >
-                        <option value="540p">540p (Nhanh)</option>
-                        <option value="720p">720p (HD Chuẩn)</option>
-                        <option value="1080p">1080p (Full HD)</option>
-                        <option value="1440p">1440p (2K Siêu nét)</option>
-                      </select>
-                    </div>
-                    <div>
-                      <label className="block text-[11px] font-semibold text-slate-700 mb-1">
-                        Chất lượng nén
-                      </label>
-                      <select
-                        value={readingQuality}
-                        onChange={(e) => setReadingQuality(e.target.value as ExportQualityId)}
-                        className="w-full px-2.5 py-1.5 text-xs bg-white border border-slate-200 rounded-lg"
-                      >
-                        <option value="standard">Tiêu chuẩn</option>
-                        <option value="high">Cao (Nét chữ rõ)</option>
-                        <option value="ultra">Ultra (Rất nét)</option>
-                      </select>
-                    </div>
-                    <div>
-                      <label className="block text-[11px] font-semibold text-slate-700 mb-1">
-                        Khung hình/giây (FPS)
-                      </label>
-                      <select
-                        value={readingFps}
-                        onChange={(e) => setReadingFps(Number(e.target.value) as ExportFpsOption)}
-                        className="w-full px-2.5 py-1.5 text-xs bg-white border border-slate-200 rounded-lg"
-                      >
-                        <option value={24}>24 fps</option>
-                        <option value={30}>30 fps</option>
-                        <option value={60}>60 fps (Mượt)</option>
-                      </select>
-                    </div>
-                  </div>
-                </div>
-
-                {renderOutputFolderControl()}
-
-                <WatermarkOutroSection
-                  config={watermarkOutro}
-                  onChange={setWatermarkOutro}
-                  title="Watermark & Outro (Tùy chọn · Reading Along MP4)"
-                />
-
-                {alignError && (
-                  <p className="text-xs text-rose-700 bg-rose-50 border border-rose-200 rounded-lg p-2.5">
-                    {alignError}
-                  </p>
-                )}
-
-                {readingExportStatus && (
-                  <div className="p-2.5 rounded-lg bg-indigo-50 border border-indigo-200 text-xs text-indigo-800 space-y-1.5">
-                    <div className="flex items-center justify-between font-medium">
-                      <span>{readingExportStatus}</span>
-                      {isExportingReadingMp4 && (
-                        <span className="font-mono">{Math.round(readingExportProgress * 100)}%</span>
-                      )}
-                    </div>
-                    {isExportingReadingMp4 && (
-                      <div className="w-full h-1.5 bg-indigo-200 rounded-full overflow-hidden">
-                        <div
-                          className="h-full bg-indigo-600 transition-all"
-                          style={{ width: `${Math.round(readingExportProgress * 100)}%` }}
-                        />
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                <div className="flex flex-wrap items-center gap-2">
-                  {isExportingReadingMp4 ? (
-                    <button
-                      type="button"
-                      onClick={() => readingAbortRef.current?.abort()}
-                      className="inline-flex items-center gap-1.5 px-4 py-2.5 text-xs font-bold text-white bg-rose-600 rounded-lg hover:bg-rose-700"
-                    >
-                      <Square className="w-3.5 h-3.5 fill-current" />
-                      <span>Hủy xuất MP4</span>
-                    </button>
-                  ) : (
-                    <button
-                      type="button"
-                      disabled={!readingText.trim()}
-                      onClick={() => void handleExportReadingAlongMp4()}
-                      className="inline-flex items-center gap-2 px-5 py-2.5 text-xs font-bold text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 disabled:opacity-50"
-                    >
-                      <Sparkles className="w-4 h-4" />
-                      <span>Xuất Reading Along MP4</span>
-                    </button>
-                  )}
-
-                  {alignResult && (
-                    <>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          const blob = new Blob([alignResult.srt], { type: 'text/plain;charset=utf-8' });
-                          const url = URL.createObjectURL(blob);
-                          const a = document.createElement('a');
-                          a.href = url;
-                          a.download = 'aligned.srt';
-                          a.click();
-                          setTimeout(() => URL.revokeObjectURL(url), 4000);
-                        }}
-                        className="inline-flex items-center gap-1 px-3 py-2 text-xs font-semibold bg-white border border-slate-200 rounded-lg hover:bg-slate-50"
-                      >
-                        <Download className="w-3.5 h-3.5" />
-                        <span>Tải .SRT</span>
-                      </button>
-                      {onSendAudioCuesToStudio && (
-                        <button
-                          type="button"
-                          onClick={() =>
-                            onSendAudioCuesToStudio(
-                              alignFile,
-                              alignResult.cues,
-                              readingTitle || alignFile?.name.replace(/\.[^.]+$/, '') || 'Aligned Lesson',
-                            )
-                          }
-                          className="inline-flex items-center gap-1 px-3 py-2 text-xs font-semibold text-indigo-700 bg-indigo-50 border border-indigo-200 rounded-lg hover:bg-indigo-100"
-                        >
-                          <Play className="w-3.5 h-3.5 fill-current" />
-                          <span>Nạp sang Studio 9:16</span>
-                        </button>
-                      )}
-                    </>
-                  )}
                 </div>
 
                 {alignResult && alignResult.words.length > 0 && (

@@ -949,10 +949,10 @@ export const AutomationPipelinePanel: React.FC<AutomationPipelinePanelProps> = (
                     </button>
                   </div>
 
-                  {(inlineProvider === 'elevenlabs' || inlineProvider === 'gemini') && (
+                  {inlineProvider === 'elevenlabs' && (
                     <ApiKeyInlineControl
-                      provider={inlineProvider === 'elevenlabs' ? 'elevenlabs' : 'gemini'}
-                      hasServerKey={inlineProvider === 'elevenlabs' ? hasElevenLabsKey : hasGeminiKey}
+                      provider="elevenlabs"
+                      hasServerKey={hasElevenLabsKey}
                       onSaved={refreshTtsVoices}
                       compact
                     />
