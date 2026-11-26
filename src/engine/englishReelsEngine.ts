@@ -303,10 +303,26 @@ export function inferLearningLangFromCards(
   if (/[\u3040-\u30ff\u31f0-\u31ff]/.test(sample)) return 'ja';
   if (/[\u4e00-\u9faf\u3400-\u4dbf]/.test(sample)) return 'zh';
   if (/[\uac00-\ud7af\u1100-\u11ff]/.test(sample)) return 'ko';
-  if (/\b(?:s'il vous plaît|bonjour|merci|au revoir|c'est|je voudrais)\b|[çœæ]/i.test(sample)) {
+  if (
+    /[çœæëïîûùàéèêô]/i.test(sample) &&
+    /\b(?:s'il vous plaît|bonjour|merci|au revoir|c'est|je voudrais|vous|nous|avec|pourquoi|très|aujourd'hui|est-ce)\b/i.test(
+      sample,
+    )
+  ) {
     return 'fr';
   }
-  if (/[¿¡ñ]|\b(?:por favor|muchas gracias|buenos días|perdón)\b/i.test(sample)) {
+  if (
+    /\b(?:s'il vous plaît|bonjour|merci|au revoir|c'est|je voudrais|aujourd'hui|bonsoir)\b|[çœæ]/i.test(
+      sample,
+    )
+  ) {
+    return 'fr';
+  }
+  if (
+    /[¿¡ñ]|\b(?:por favor|muchas gracias|buenos días|buenas tardes|perdón|mañana|después|también|porque|cuando|hola|gracias|quiero|puedo|tengo|están|todos)\b/i.test(
+      sample,
+    )
+  ) {
     return 'es';
   }
   return 'en';
@@ -832,10 +848,15 @@ export function getQuizCardSpeechParts(
 
 const CREATOR_CARD_ROTATION_VARIANTS: IllustrationVariant[] = [
   'css-magnifying-word',
+  'p168-grammar-formula',
   'contrast-pair-cards',
+  'p168-situation-cards',
   'phrase-icon-split',
+  'p168-slider-compare',
   'css-flashcard-flip',
+  'p168-pronunciation-matrix',
   'trio-icon-cards',
+  'p168-story-dialogue',
   'bs-badge-cluster',
   'dialogue-upgrade',
   'css-sticky-note',
@@ -893,7 +914,7 @@ function defaultVisualForCard(
   }
   if (card.type === 'quiz') {
     return {
-      variant: pickNonRepeatingVariant('bs-accordion-faq', prevVariant, idx),
+      variant: pickNonRepeatingVariant(idx % 2 === 1 ? 'p168-step-quiz-formula' : 'bs-accordion-faq', prevVariant, idx),
       title: card.title || `Quiz Challenge #${idx}`,
       subtitle: card.translation || locale.listenChooseSubtext,
       speechText: card.content,
@@ -903,8 +924,11 @@ function defaultVisualForCard(
   if (card.type === 'translation') {
     const trPool: IllustrationVariant[] = [
       'css-flashcard-flip',
+      'p168-grammar-formula',
       'contrast-pair-cards',
+      'p168-slider-compare',
       'phrase-icon-split',
+      'p168-situation-cards',
       'dialogue-upgrade',
       'css-magnifying-word',
       'css-sticky-note',
@@ -926,13 +950,27 @@ function defaultVisualForCard(
       combined,
     );
   const hasGrammarCue =
-    /\bgrammar\b|\btense\b|\bverb\s*\+|\bpreposition\b|\bstructure\b|\brule\b/i.test(combined);
+    /\bgrammar\b|\btense\b|\bverb\s*\+|\bpreposition\b|\bstructure\b|\brule\b|\bused to\b|\bformula\b/i.test(
+      combined,
+    );
+  const hasPronCue =
+    /(\bed\b|\/t\/|\/d\/|\/ɪd\/|pronunciation|syllable|ending sound)/i.test(combined);
   const hasDegreeCue =
     /\bmore\s+\w+\b|\bpolite\b|\bformal\b|\bstronger\b|\blevel\b|\bbetter\b/i.test(combined);
 
+  if (hasPronCue) {
+    return {
+      variant: pickNonRepeatingVariant('p168-pronunciation-matrix', prevVariant, idx),
+      title: card.title,
+      subtitle: [card.phonetic, card.translation].filter(Boolean).join(' · ') || card.content,
+      speechText: card.example || card.content,
+      sceneIcon: 'mic',
+    };
+  }
+
   if (hasContrastCue) {
     const preferred: IllustrationVariant =
-      idx % 2 === 0 ? 'contrast-pair-cards' : 'dialogue-upgrade';
+      idx % 3 === 0 ? 'p168-slider-compare' : idx % 2 === 0 ? 'contrast-pair-cards' : 'dialogue-upgrade';
     return {
       variant: pickNonRepeatingVariant(preferred, prevVariant, idx),
       title: card.title,
@@ -945,7 +983,7 @@ function defaultVisualForCard(
 
   if (hasGrammarCue) {
     return {
-      variant: pickNonRepeatingVariant('css-grammar-equation', prevVariant, idx),
+      variant: pickNonRepeatingVariant(idx % 2 === 0 ? 'p168-grammar-formula' : 'css-grammar-equation', prevVariant, idx),
       title: card.title,
       subtitle: [card.phonetic, card.translation].filter(Boolean).join(' · ') || card.content,
       formula: card.indexLabel || card.badge || 'KEY RULE',
@@ -981,11 +1019,15 @@ function defaultVisualForCard(
     }
     const creatorPool: IllustrationVariant[] = [
       'css-magnifying-word',
+      'p168-grammar-formula',
       'phrase-icon-split',
+      'p168-situation-cards',
       'css-flashcard-flip',
+      'p168-slider-compare',
       'bs-badge-cluster',
       'contrast-pair-cards',
       'trio-icon-cards',
+      'p168-story-dialogue',
       'css-sticky-note',
       'bs-alert-tip',
     ];
@@ -1640,19 +1682,23 @@ export function buildEnglishReelsWebAiPrompt(params: {
     `3. ${targetLangConstraint}`,
     `4. ${exampleTimelinePromptHint}`,
     '',
-    '# QUY TẮC VÀNG CHO GIỌNG ĐỌC TTS ("ttsText", "explanationSpeech", "ttsAnswerText")',
-    '- `"ttsText"` và `"ttsAnswerText"` PHẢI hoàn toàn tự nhiên để TTS đọc thành giọng giáo viên — không trộn lẫn 2 ngôn ngữ trong cùng một câu.',
-    '- TUYỆT ĐỐI KHÔNG đưa ký tự `&` (viết thành `and`), IPA `/.../`, emoji, URL, hay ký hiệu markdown vào `ttsText` / `explanationSpeech` / `ttsAnswerText`.',
+    '# QUY TẮC VÀNG CHO GIỌNG ĐỌC TTS ("ttsText", "explanationSpeech", "ttsAnswerText", "learningLang")',
+    '- **NHẬN DIỆN ĐÚNG NGÔN NGỮ NGUỒN (`"learningLang"`)**: Tự động phát hiện ngôn ngữ đang học trong `# NỘI DUNG GỐC` (`en` = Tiếng Anh, `es` = Tây Ban Nha, `fr` = Pháp, `ja` = Nhật, `zh` = Trung, `ko` = Hàn) và ghi rõ vào `"learningLang"`.',
+    '- **100% THUẦN NGÔN NGỮ TRONG TỪNG TRƯỜNG TTS (CẤM ĐẶT LỜI DẪN TIẾNG ANH NẾU NGUỒN KHÔNG PHẢI TIẾNG ANH!)**:',
+    '  + Toàn bộ `"ttsText"` và `"ttsAnswerText"` PHẢI viết **100% thuần ngôn ngữ nguồn (`learningLang`)** — nếu nguồn là tiếng Tây Ban Nha / Pháp / Nhật / Trung / Hàn, lời dẫn mở đầu, chuyển phần và công bố đáp án trong `"ttsText"` / `"ttsAnswerText"` CŨNG PHẢI viết bằng đúng ngôn ngữ đó (TUYỆT ĐỐI KHÔNG chèn mẫu câu tiếng Anh kiểu `"Welcome to today\'s lesson"` hay `"Take five seconds to think"` khi bài học không phải tiếng Anh!).',
+    `  + Toàn bộ \`"explanationSpeech"\` PHẢI viết **100% thuần ${locale.targetLanguageLabel}** để giọng giải thích riêng đọc, không trộn từ ngoại ngữ khác vào cùng câu.`,
+    '- TUYỆT ĐỐI KHÔNG đưa ký tự `&` (viết thành `and` / `y` / `và`), IPA `/.../`, Pinyin/Romaji, emoji, URL, hay ký hiệu markdown vào `ttsText` / `explanationSpeech` / `ttsAnswerText`.',
     ...(includeQuiz !== 'none'
       ? [
-          '- Riêng thẻ `quiz` (nếu bài có quiz): `"ttsText"` bắt đầu bằng lời dẫn Quiz tự nhiên, đọc câu hỏi + phương án + `"Take five seconds to think."` và đặt `"thinkSec": 5`.',
+          '- Riêng thẻ `quiz` (nếu bài có quiz): `"ttsText"` đọc câu hỏi + phương án + lời mời suy nghĩ 5 giây bằng **đúng ngôn ngữ `learningLang`** và đặt `"thinkSec": 5`.',
         ]
       : []),
     '',
-    `# ĐỊNH DẠNG JSON CỐ ĐỊNH BẮT BUỘC TRẢ VỀ (MINH HỌA SCHEMA CHO NGÔN NGỮ: ${locale.targetLanguageLabel} — PHẢI THAY BẰNG NỘI DUNG THẬT TỪ NGUỒN)`,
+    `# ĐỊNH DẠNG JSON CỐ ĐỊNH BẮT BUỘC TRẢ VỀ (MINH HỌA SCHEMA — PHẢI THAY BẰNG NỘI DUNG THẬT TỪ NGUỒN VÀ ĐÚNG NGÔN NGỮ "learningLang")`,
     '```json',
     '{',
     '  "title": "<Tiêu đề ngắn gọn, ĐÚNG NỘI DUNG bài học thực tế bên dưới>",',
+    '  "learningLang": "<en | ja | zh | ko | fr | es — tự động nhận diện từ nội dung nguồn>",',
     '  "mode": "reading | quiz | vocab",',
     '  "cards": [',
     '    {',
@@ -2790,6 +2836,7 @@ export function buildTranslationChallengePrompt(params: {
       ? `   - \`"explanationSpeech"\`: Brief 1-sentence spoken tip in **${explainLangName}** explaining why native speakers say it this way (played after the ${repeatCount} repeats).`
       : `   - \`"explanationSpeech"\`: "" (keep empty so audio focuses 100% on Prompt -> Countdown -> ${repeatCount}x Repeats).`,
     `   - \`"thinkSec": ${thinkSec}\`, \`"repeatCount": ${repeatCount}\``,
+    `   - **100% THUẦN NGÔN NGỮ CHO TTS**: \`"speech"\` chỉ chứa đúng **${langOption.nativeName}** (không trộn tiếng Việt hay ký hiệu lạ); \`"explanationSpeech"\` chỉ chứa đúng **${explainLangName}** (không chêm cụm từ dài bằng ngoại ngữ khiến TTS đọc lệch giọng).`,
     `3. **Recap Outro Card (\`type: "outro"\`)**: \`"speech": ""\`, encouraging closing in \`"explanationSpeech"\` in **${explainLangName}**, and \`visual\` labels written in **${langOption.nativeName}**.`,
     '',
     TYPOGRAPHY_MOBILE_READABILITY_PROMPT_BLOCK,
@@ -3972,6 +4019,11 @@ function resolveVisualPayloadForReelCard(
     else if (compositionId === 'cartoon-host') chosenVariant = 'cartoon-host';
     else if (compositionId === 'clock-spotlight') chosenVariant = 'clock-face';
     else if (compositionId === 'phrase-icon-split') chosenVariant = 'phrase-icon-split';
+    else if (compositionId === 'p168-quiz-formula') chosenVariant = 'p168-step-quiz-formula';
+    else if (compositionId === 'p168-grammar-formula') chosenVariant = 'p168-grammar-formula';
+    else if (compositionId === 'p168-pronunciation') chosenVariant = 'p168-pronunciation-matrix';
+    else if (compositionId === 'p168-situations') chosenVariant = 'p168-situation-cards';
+    else if (compositionId === 'p168-slider-compare') chosenVariant = 'p168-slider-compare';
   }
 
   const baseLabels = custom?.labels || fallback.labels;
@@ -3990,6 +4042,7 @@ function resolveVisualPayloadForReelCard(
     value: custom?.value ?? fallback.value,
     formula: custom?.formula || fallback.formula,
     speechText: custom?.speechText || fallback.speechText || card.content,
+    highlightWord: custom?.highlightWord || fallback.highlightWord || card.title,
     sceneIcon: custom?.sceneIcon || fallback.sceneIcon || ctxFallback.sceneIcon,
     customPrimitives: custom?.customPrimitives,
   };
@@ -4057,6 +4110,44 @@ function resolveVisualPayloadForReelCard(
       color: cols[i % cols.length],
       sceneIcon: icons[i % icons.length],
     }));
+  } else if (chosenVariant === 'p168-step-quiz-formula') {
+    data.title = data.title || `Question ${idx + 1}`;
+    data.speechText = custom?.speechText || card.content;
+    data.labels = baseLabels && baseLabels.length >= 2 ? baseLabels : [card.title, 'Key Form'];
+    data.formula = data.formula || `${data.labels[0]}  /  ${data.labels[1] || 'Option B'}`;
+  } else if (chosenVariant === 'p168-grammar-formula') {
+    data.formula = data.formula || `${card.title} + Pattern`;
+    data.speechText = custom?.speechText || card.example || card.content;
+    data.labels = baseLabels && baseLabels.length >= 2 ? baseLabels : [card.title, 'Core Structure', 'Natural Example'];
+  } else if (chosenVariant === 'p168-pronunciation-matrix' && (!data.nodes || data.nodes.length < 2)) {
+    const src = baseLabels && baseLabels.length >= 2 ? baseLabels : ['/t/', '/d/', '/ɪd/'];
+    const cols = ['#0EA5E9', '#10B981', '#8B5CF6'];
+    data.nodes = src.slice(0, 3).map((lbl, i) => ({
+      label: lbl,
+      sublabel: i === 0 ? 'Clear' : i === 1 ? 'Voiced' : 'Syllable',
+      color: cols[i % cols.length],
+    }));
+  } else if (chosenVariant === 'p168-situation-cards' && (!data.nodes || data.nodes.length < 2)) {
+    const src = baseLabels && baseLabels.length >= 2 ? baseLabels : ['With Friends', 'At Work', 'Softly'];
+    const cols = ['#2563EB', '#059669', '#D97706'];
+    const icons: IllustrationSceneIcon[] = ['chat', 'briefcase', 'handshake'];
+    data.nodes = src.slice(0, 3).map((lbl, i) => ({
+      label: lbl,
+      sublabel: i === 0 ? 'Casual' : i === 1 ? 'Polite' : 'Gentle',
+      color: cols[i % cols.length],
+      sceneIcon: icons[i % icons.length],
+    }));
+  } else if (chosenVariant === 'p168-slider-compare') {
+    const vsSplit = (baseTitle || card.title).split(/\s+(?:vs\.?|→|->|\/)\s+/i).filter(Boolean);
+    const leftLbl = (baseLabels && baseLabels[0]) || vsSplit[0] || 'Standard';
+    const rightLbl = (baseLabels && baseLabels[1]) || vsSplit[1] || card.title;
+    data.labels = [leftLbl, rightLbl];
+    data.value = typeof data.value === 'number' ? data.value : (idx + 1) / Math.max(1, total);
+  } else if (chosenVariant === 'p168-story-dialogue' && (!data.nodes || data.nodes.length < 2)) {
+    data.nodes = [
+      { label: card.title, color: '#4F46E5' },
+      { label: card.translation || 'Natural Context', color: '#059669' },
+    ];
   }
 
   return { variant: chosenVariant, data };

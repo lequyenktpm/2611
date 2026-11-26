@@ -396,7 +396,7 @@ ${sourceBlock}
 - Định dạng ưu tiên: **${formatMeta.label}** — ${formatMeta.promptHint}
 
 # YÊU CẦU NGÔN NGỮ, TRÌNH ĐỘ & ĐỘ DÀI
-- Ngôn ngữ bài đọc: **${meta.nameVi}** (${meta.nativeName}).
+- Ngôn ngữ bài đọc: **${meta.nameVi}** (${meta.nativeName}). **BẮT BUỘC 100% THUẦN 1 NGÔN NGỮ DUY NHẤT (${meta.nativeName})** trong cả \`title\` và \`text\` — TUYỆT ĐỐI KHÔNG chèn tiếng Việt, tiếng Anh giải thích, bản dịch trong ngoặc, hay từ ngoại ngữ khác ngôn ngữ bài đọc.
 - Trình độ: ${describeReadingLevel(level, meta)}
 - Thời lượng render mục tiêu: **${estimatedMinutesLabel}** → Độ dài mục tiêu khoảng **${targetCount} ${meta.unit === 'chars' ? `ký tự ${meta.nativeName}` : `từ ${meta.nativeName}`}**${durationMinutes && durationMinutes >= 2 ? ' (mở rộng câu chuyện/bài phân tích đủ sâu và phong phú kiến thức cho đúng số phút mong muốn)' : ''}.
 - ${meta.noPronunciationNote}
@@ -406,7 +406,7 @@ ${sourceBlock}
 # ĐỊNH DẠNG ĐẦU RA BẮT BUỘC (CHỈ TRẢ VỀ 1 KHỐI JSON)
 \`\`\`json
 {
-  "title": "Tiêu đề ngắn gọn, khơi gợi tò mò & cảm xúc bằng ${meta.nativeName} (VD: '${meta.exampleTitle}')",
+  "title": "Tiêu đề ngắn gọn, khơi gợi tò mò & cảm xúc 100% bằng ${meta.nativeName} (VD: '${meta.exampleTitle}')",
   "topicBadge": "${meta.badgeSystem} ${level} · READING",
   "level": "${level}",
   "text": "${meta.exampleText}"

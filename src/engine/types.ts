@@ -225,6 +225,12 @@ export type BuiltinIllustrationVariant =
   | 'bs-badge-cluster'
   | 'css-magnifying-word'
   | 'bs-modal-quiz'
+  | 'p168-step-quiz-formula'
+  | 'p168-grammar-formula'
+  | 'p168-pronunciation-matrix'
+  | 'p168-situation-cards'
+  | 'p168-slider-compare'
+  | 'p168-story-dialogue'
   | 'cartoon-host'
   | 'dynamic-scene';
 
@@ -319,6 +325,11 @@ export type LayoutCompositionId =
   | 'avatar-dialogue'
   | 'clock-spotlight'
   | 'phrase-icon-split'
+  | 'p168-quiz-formula'
+  | 'p168-grammar-formula'
+  | 'p168-pronunciation'
+  | 'p168-situations'
+  | 'p168-slider-compare'
   | 'word-reveal'
   | '3d-shapes'
   | 'custom';

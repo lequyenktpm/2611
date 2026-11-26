@@ -124,6 +124,12 @@ export function estimateElementHalfExtents(el: SceneElement): {
         variant === 'css-grammar-equation' ||
         variant === 'bs-badge-cluster' ||
         variant === 'bs-modal-quiz' ||
+        variant === 'p168-step-quiz-formula' ||
+        variant === 'p168-grammar-formula' ||
+        variant === 'p168-pronunciation-matrix' ||
+        variant === 'p168-situation-cards' ||
+        variant === 'p168-slider-compare' ||
+        variant === 'p168-story-dialogue' ||
         variant === 'cartoon-host' ||
         variant === 'dynamic-scene' ||
         variant === 'custom-vector';
@@ -147,7 +153,19 @@ export function estimateElementHalfExtents(el: SceneElement): {
       } else if (variant === 'avatar-speech') {
         baseHalfH = 116;
       } else if (variant === 'cartoon-host') {
-        baseHalfH = 355;
+        baseHalfH = 440;
+      } else if (
+        variant === 'p168-step-quiz-formula' ||
+        variant === 'p168-situation-cards'
+      ) {
+        baseHalfH = 212;
+      } else if (
+        variant === 'p168-grammar-formula' ||
+        variant === 'p168-pronunciation-matrix' ||
+        variant === 'p168-slider-compare' ||
+        variant === 'p168-story-dialogue'
+      ) {
+        baseHalfH = 198;
       } else if (variant === 'phrase-icon-split') {
         baseHalfH = 222;
       } else if (

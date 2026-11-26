@@ -1201,6 +1201,7 @@ export const BatchQueueModal: React.FC<BatchQueueModalProps> = ({
             voice: voiceMeta.defaultVoice,
             lang: voiceMeta.voiceLang,
             rate: reelBatchRate,
+            autoSplitLanguages: false,
             alignWithWhisper: true,
             onProgress: (pct, lbl) => {
               updateAiItem(item.id, {
@@ -1225,8 +1226,9 @@ export const BatchQueueModal: React.FC<BatchQueueModalProps> = ({
               provider: 'auto',
               voice: voiceMeta.defaultVoice,
               lang: voiceMeta.voiceLang,
+              autoSplitLanguages: false,
               rate: reelBatchRate,
-              segments: [{ id: 'batch-reading-intro', text: introSubText, pauseAfterSec: 0 }],
+              segments: [{ id: 'batch-reading-intro', text: introSubText, pauseAfterSec: 0, autoSplit: false }],
             });
             if (introRes.audioBase64) {
               partsToConcat.push({
@@ -1255,8 +1257,9 @@ export const BatchQueueModal: React.FC<BatchQueueModalProps> = ({
               provider: 'auto',
               voice: voiceMeta.defaultVoice,
               lang: voiceMeta.voiceLang,
+              autoSplitLanguages: false,
               rate: reelBatchRate,
-              segments: [{ id: 'batch-reading-outro', text: outroSpeech, pauseAfterSec: 0 }],
+              segments: [{ id: 'batch-reading-outro', text: outroSpeech, pauseAfterSec: 0, autoSplit: false }],
             });
             if (outroRes.audioBase64) {
               partsToConcat.push({

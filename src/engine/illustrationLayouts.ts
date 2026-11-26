@@ -132,6 +132,51 @@ export const LAYOUT_COMPOSITIONS: LayoutCompositionMeta[] = [
     signatureVariant: 'phrase-icon-split',
   },
   {
+    id: 'p168-quiz-formula',
+    name: 'Đố Vui Công Thức (@168 Quiz + Formula)',
+    shortLabel: '@168 Đố Vui',
+    description:
+      'Thẻ câu hỏi điền khuyết kèm nút tròn A/B/C và công thức màu [A] / [B] nổi bật phong cách @englishpracticing168',
+    recommendedTheme: 'warm-paper',
+    signatureVariant: 'p168-step-quiz-formula',
+  },
+  {
+    id: 'p168-grammar-formula',
+    name: 'Công Thức Ngữ Pháp (@168 Grammar)',
+    shortLabel: '@168 Công thức',
+    description:
+      'Khung màu xanh/tím đóng khung công thức [S + used to + V] kèm nhãn phân biệt nghĩa rõ ràng như @englishpracticing168',
+    recommendedTheme: 'soft-lavender',
+    signatureVariant: 'p168-grammar-formula',
+  },
+  {
+    id: 'p168-pronunciation',
+    name: 'Bảng Quy Tắc Phát Âm (@168 Pronunciation)',
+    shortLabel: '@168 Phát âm',
+    description:
+      'Bảng chia 3 cột quy tắc phát âm (/t/, /d/, /ɪd/ hoặc trọng âm) kèm ví dụ tô màu chữ cái đầu/cuối',
+    recommendedTheme: 'pastel-sunrise',
+    signatureVariant: 'p168-pronunciation-matrix',
+  },
+  {
+    id: 'p168-situations',
+    name: 'Thẻ Tình Huống Giao Tiếp (@168 Situations)',
+    shortLabel: '@168 Tình huống',
+    description:
+      'Khung tiêu đề màu kết hợp 3 thẻ tình huống đời sống (Bạn bè, Công sở, Từ chối khéo) với icon vector',
+    recommendedTheme: 'mint-breeze',
+    signatureVariant: 'p168-situation-cards',
+  },
+  {
+    id: 'p168-slider-compare',
+    name: 'Thanh Trượt So Sánh Thì (@168 Slider)',
+    shortLabel: '@168 Thanh trượt',
+    description:
+      'Thanh trượt đối chiếu sắc thái / thì ngữ pháp (Quá khứ vs Hiện tại hoàn thành) kèm nút highlight lớn',
+    recommendedTheme: 'warm-paper',
+    signatureVariant: 'p168-slider-compare',
+  },
+  {
     id: 'word-reveal',
     name: '⚡ Word Reveal Typography (@xun52000)',
     shortLabel: 'Word Reveal',
@@ -253,6 +298,21 @@ export function pickCompositionFromContext(text: string): LayoutCompositionId {
     trio.words.filter((w) => new RegExp(`\\b${w.replace(/\s+/g, '\\s+')}\\b`, 'i').test(t)).length >= 2,
   );
   if (trioHit) return 'phrase-icon-split';
+  if (/(\bed\b|\/t\/|\/d\/|\/ɪd\/|ending sound|voiced|voiceless|pronunciation|phát âm)/.test(t)) {
+    return 'p168-pronunciation';
+  }
+  if (/(used to|subject \+|formula|grammar rule|công thức|v-ing|\+\s*to\s*\+|noun)/.test(t)) {
+    return 'p168-grammar-formula';
+  }
+  if (/(question\s*\d|quiz|fill in|blank|choose the|lend.*borrow|borrow.*lend|điền vào)/.test(t)) {
+    return 'p168-quiz-formula';
+  }
+  if (/(slider|difference between|past simple|present perfect|versus|so sánh thì)/.test(t)) {
+    return 'p168-slider-compare';
+  }
+  if (/(situation|with friends|at work|say no|softly|polite way|trong công việc|tình huống)/.test(t)) {
+    return 'p168-situations';
+  }
   if (/\b(\d{1,2}:\d{2}|o'clock|clock|twenty past|half past)\b/.test(t)) return 'clock-spotlight';
   if (/(don't say|stop saying|instead of|upgrade|boring|natural|rude|polite)/.test(t)) return 'dialogue-upgrade';
   if (/(step|first|then|finally|ladder|level 1|level 2)/.test(t)) return 'flow-steps';
@@ -800,6 +860,108 @@ function buildIllustrationDataForComposition(
       };
     }
 
+    case 'p168-quiz-formula': {
+      const strip0 = stripItems[0]?.label || 'Option A';
+      const strip1 = stripItems[1]?.label || 'Option B';
+      return {
+        variant: 'p168-step-quiz-formula',
+        data: {
+          title: `Question ${segIdx + 1}`,
+          speechText: seg.cardText,
+          labels: [strip0, strip1, stripItems[2]?.label || 'Choose'],
+          formula: `${strip0}  /  ${strip1}`,
+          highlightWord: seg.emphasisWord || strip0,
+          subtitle: seg.subtext || seg.topicLabel,
+          value: progress,
+          sceneIcon: contextualIcon,
+        },
+      };
+    }
+
+    case 'p168-grammar-formula': {
+      const formulaParts = stripItems.slice(0, 3).map((s) => s.label);
+      return {
+        variant: 'p168-grammar-formula',
+        data: {
+          title: seg.topicLabel || 'Grammar Pattern',
+          formula: formulaParts.length >= 2 ? formulaParts.join(' + ') : cleanShortPhrase(seg.cardText, 5, 28),
+          speechText: seg.cardText,
+          subtitle: seg.subtext || 'Past habit or natural pattern',
+          labels: formulaParts.length >= 2 ? formulaParts : ['Subject', 'Pattern', 'Verb'],
+          highlightWord: seg.emphasisWord || formulaParts[0],
+          sceneIcon: contextualIcon,
+        },
+      };
+    }
+
+    case 'p168-pronunciation': {
+      const cols = stripItems.slice(0, 3);
+      return {
+        variant: 'p168-pronunciation-matrix',
+        data: {
+          title: seg.topicLabel || 'Pronunciation Rules',
+          subtitle: cleanShortPhrase(seg.cardText, 6, 36),
+          nodes:
+            cols.length >= 2
+              ? cols.map((c, idx) => ({
+                  label: c.label,
+                  sublabel: c.sublabel || (idx === 0 ? '/t/' : idx === 1 ? '/d/' : '/ɪd/'),
+                  color: c.accentColor || (idx === 0 ? '#0EA5E9' : idx === 1 ? '#10B981' : '#8B5CF6'),
+                }))
+              : [
+                  { label: 'Voiceless', sublabel: '/t/', color: '#0EA5E9' },
+                  { label: 'Voiced', sublabel: '/d/', color: '#10B981' },
+                  { label: 't / d end', sublabel: '/ɪd/', color: '#8B5CF6' },
+                ],
+          labels: ['asked · helped', 'played · called', 'wanted · needed'],
+          value: progress,
+          sceneIcon: 'mic',
+        },
+      };
+    }
+
+    case 'p168-situations': {
+      const cardIcons: IllustrationSceneIcon[] = ['chat', 'briefcase', 'handshake'];
+      const cardColors = ['#2563EB', '#059669', '#D97706'];
+      return {
+        variant: 'p168-situation-cards',
+        data: {
+          title: seg.topicLabel || 'Everyday Situations',
+          subtitle: cleanShortPhrase(seg.cardText, 6, 34),
+          nodes: (stripItems.length >= 2 ? stripItems : [
+            { label: 'With Friends', sublabel: 'Warm & casual', accentColor: '#2563EB' },
+            { label: 'At Work', sublabel: 'Polite & clear', accentColor: '#059669' },
+            { label: 'Soft Refusal', sublabel: 'Kind & gentle', accentColor: '#D97706' },
+          ])
+            .slice(0, 3)
+            .map((it, idx) => ({
+              label: it.label,
+              sublabel: it.sublabel || 'Natural use',
+              color: it.accentColor || cardColors[idx % cardColors.length],
+              sceneIcon: pickContextualSceneIcon(`${it.label} ${it.sublabel || ''}`, cardIcons[idx % cardIcons.length]),
+            })),
+          sceneIcon: contextualIcon,
+        },
+      };
+    }
+
+    case 'p168-slider-compare': {
+      const leftItem = stripItems[0];
+      const rightItem = stripItems[stripItems.length - 1] ?? stripItems[1];
+      return {
+        variant: 'p168-slider-compare',
+        data: {
+          title: seg.topicLabel || 'Key Comparison',
+          labels: [leftItem?.label || 'Option A', rightItem?.label || 'Option B'],
+          speechText: seg.cardText,
+          subtitle: seg.subtext || 'Compare meaning & nuance',
+          highlightWord: seg.emphasisWord || rightItem?.label || 'Natural',
+          value: seg.badge === 'cross' ? 0.18 : Math.min(0.92, Math.max(0.25, progress)),
+          sceneIcon: contextualIcon,
+        },
+      };
+    }
+
     case 'word-reveal':
     case '3d-shapes': {
       const resolved = resolveContextualVisualForCue(seg.cueText, seg.cardText, 'degree-scale');
@@ -891,37 +1053,7 @@ export function recomposeProjectWithStyle(
 
   if (compositionId === 'cartoon-host') {
     const subPos = project.subtitleConfig?.position;
-    const targetKaraokeY =
-      subPos === 'top' ? 320 : subPos === 'center' ? 960 : 1515;
-
-    // Top crisp segment topic pill (optional cue context pill)
-    let lastPillEnd = -1;
-    segments.forEach((seg, idx) => {
-      const safeStart = Math.max(0, seg.startTime, lastPillEnd + 0.03);
-      const safeEnd = Math.max(safeStart + 0.45, seg.endTime);
-      const nextSegStart =
-        idx < segments.length - 1 ? Math.max(safeEnd, segments[idx + 1].startTime - 0.03) : project.duration;
-      const pillEnd = Math.max(safeEnd, nextSegStart);
-      if (pillEnd - safeStart >= 0.35 && seg.topicLabel) {
-        newVisuals.push({
-          id: `comp-cartoon-pill-${idx + 1}`,
-          type: 'topic-pill',
-          label: `Chủ đề: ${seg.topicLabel}`,
-          startTime: Number(safeStart.toFixed(2)),
-          endTime: Number(pillEnd.toFixed(2)),
-          enterAnimation: 'pop-up',
-          exitAnimation: 'fade-out',
-          layout: { x: 540, y: 215, width: 460, scale: 1, zIndex: 14 },
-          props: {
-            kind: 'topic-pill',
-            text: seg.topicLabel,
-            bgColor: '#FFFFFF',
-            textColor: '#1D4ED8',
-          },
-        });
-        lastPillEnd = pillEnd;
-      }
-    });
+    const targetKaraokeY = subPos === 'top' ? 320 : 1515;
 
     // Continuous full-duration @Gimmys cartoon mascot synced dynamically to project.cues
     newVisuals.push({
@@ -934,9 +1066,9 @@ export function recomposeProjectWithStyle(
       exitAnimation: 'fade-out',
       layout: {
         x: 540,
-        y: 815,
+        y: subPos === 'top' ? 985 : 905,
         width: 880,
-        scale: 1.24,
+        scale: 1.08,
         zIndex: 12,
       },
       props: {
@@ -992,9 +1124,17 @@ export function recomposeProjectWithStyle(
       ...project,
       theme: nextTheme,
       compositionId: 'cartoon-host',
+      subtitleConfig:
+        subPos === 'center'
+          ? {
+              position: 'bottom',
+              size: project.subtitleConfig?.size || 'md',
+              boxStyle: 'card',
+            }
+          : project.subtitleConfig,
       subtitle: `${project.cues.length} câu thoại · Hoạt hình Lip-Sync (@Gimmys)`,
       elements: resolveProjectOverlaps([...newVisuals, ...yellowKaraoke], {
-        preserveKaraokeY: Boolean(subPos),
+        preserveKaraokeY: subPos === 'top' || subPos === 'bottom',
       }),
     };
   }
@@ -1246,6 +1386,71 @@ export function recomposeProjectWithStyle(
         cardY: 980,
         pillBg: '#EEF2FF',
         pillColor: '#4338CA',
+        showToneMeter: false,
+      },
+      'p168-quiz-formula': {
+        showStrip: false,
+        stripY: 175,
+        pillY: 220,
+        illY: 590,
+        cardY: 1020,
+        pillBg: '#FEF3C7',
+        pillColor: '#92400E',
+        cardBg: '#FFFFFF',
+        cardText: '#0F172A',
+        emphasisColor: '#D97706',
+        showToneMeter: false,
+      },
+      'p168-grammar-formula': {
+        showStrip: true,
+        stripY: 175,
+        pillY: 315,
+        illY: 595,
+        cardY: 1015,
+        pillBg: '#E0E7FF',
+        pillColor: '#3730A3',
+        cardBg: '#FFFFFF',
+        cardText: '#0F172A',
+        emphasisColor: '#4F46E5',
+        showToneMeter: false,
+      },
+      'p168-pronunciation': {
+        showStrip: false,
+        stripY: 175,
+        pillY: 215,
+        illY: 585,
+        cardY: 1025,
+        pillBg: '#E0F2FE',
+        pillColor: '#0369A1',
+        cardBg: '#FFFFFF',
+        cardText: '#0F172A',
+        emphasisColor: '#0284C7',
+        showToneMeter: false,
+      },
+      'p168-situations': {
+        showStrip: false,
+        stripY: 175,
+        pillY: 215,
+        illY: 585,
+        cardY: 1025,
+        pillBg: '#DCFCE7',
+        pillColor: '#166534',
+        cardBg: '#FFFFFF',
+        cardText: '#0F172A',
+        emphasisColor: '#059669',
+        showToneMeter: false,
+      },
+      'p168-slider-compare': {
+        showStrip: true,
+        stripY: 172,
+        pillY: 310,
+        illY: 595,
+        cardY: 1020,
+        pillBg: '#FCE7F3',
+        pillColor: '#9D174D',
+        cardBg: '#FFFFFF',
+        cardText: '#0F172A',
+        emphasisColor: '#DB2777',
         showToneMeter: false,
       },
     };

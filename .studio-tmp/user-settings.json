@@ -1,24 +1,24 @@
 {
-  "activeTab": "studio",
+  "activeTab": "edu-studio",
   "studio": {
     "aspectRatio": "9:16",
     "resolution": "540p",
     "quality": "standard",
     "fps": 24,
-    "theme": "studio-slate",
-    "compositionId": "plain",
+    "theme": "pastel-sunrise",
+    "compositionId": "cartoon-host",
     "backgroundPresetId": "",
     "subtitleConfig": {
-      "position": "center",
+      "position": "bottom",
       "size": "lg",
-      "boxStyle": "clean"
+      "boxStyle": "card"
     },
     "learningScrimOpacity": 0.45,
     "bgmPreset": "soft-rain",
     "bgmVolume": 0.03,
     "descriptionStyle": "auto"
   },
-  "updatedAt": 1795713724365,
+  "updatedAt": 1795732229639,
   "reels": {
     "reelCreationMode": "creator",
     "creatorTopicHint": "",

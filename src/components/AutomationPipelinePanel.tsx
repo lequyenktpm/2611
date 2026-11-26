@@ -170,7 +170,7 @@ export const AutomationPipelinePanel: React.FC<AutomationPipelinePanelProps> = (
   onCancelExportVideo,
 }) => {
   const [initialSaved] = useState(() => loadPersistedSettings().studio);
-  const [step, setStep] = useState<1 | 2 | 3>(2);
+  const [step, setStep] = useState<1 | 2 | 3>(1);
   const [dbVersion, setDbVersion] = useState(0);
   const [rawTranscript, setRawTranscript] = useState<string>(() =>
     cuesToBlockTranscript(project.cues),
@@ -224,7 +224,7 @@ export const AutomationPipelinePanel: React.FC<AutomationPipelinePanelProps> = (
   const [hasGeminiKey, setHasGeminiKey] = useState(false);
   const [hasElevenLabsKey, setHasElevenLabsKey] = useState(false);
   const [inlineProvider, setInlineProvider] = useState(
-    () => initialSaved?.inlineProvider || 'auto',
+    () => initialSaved?.inlineProvider || 'edge',
   );
   const [inlineVoice, setInlineVoice] = useState(
     () => initialSaved?.inlineVoice || 'en-US-JennyNeural',
@@ -280,10 +280,11 @@ export const AutomationPipelinePanel: React.FC<AutomationPipelinePanelProps> = (
       if (typeof s.inlineWhisperSync === 'boolean') setInlineWhisperSync(s.inlineWhisperSync);
     };
     const onReset = () => {
+      setStep(1);
       setPromptStyle('tiktok-cards');
       setTargetDurationMinutes(1);
       setCompositionMode('ai-decide');
-      setInlineProvider('auto');
+      setInlineProvider('edge');
       setInlineVoice('en-US-JennyNeural');
       setInlineSecondaryVoice('vi-VN-HoaiMyNeural');
       setInlineRate(1.0);
@@ -874,6 +875,9 @@ export const AutomationPipelinePanel: React.FC<AutomationPipelinePanelProps> = (
                       className="min-w-[165px] px-2.5 py-1.5 text-xs bg-white border border-slate-200 rounded-lg"
                     >
                       <option value="auto">Tự động miễn phí (Edge → Google)</option>
+                      {!ttsProviders.some((p) => p.id === 'edge') && (
+                        <option value="edge">Microsoft Edge Neural TTS (Miễn phí · Chất lượng cao)</option>
+                      )}
                       {ttsProviders.map((p) => (
                         <option key={p.id} value={p.id}>
                           {p.name}

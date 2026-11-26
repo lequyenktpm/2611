@@ -17,6 +17,7 @@ import {
   ComparisonStripProps,
   DynamicSceneSpec,
   ElementLayout,
+  IllustrationPropData,
   IllustrationPropProps,
   IllustrationSceneIcon,
   KaraokeCardProps,
@@ -600,6 +601,7 @@ function drawCartoonHostCharacter(
   ctx: CanvasRenderingContext2D,
   time: number,
   cues: TranscriptCue[] = [],
+  propData?: IllustrationPropData,
 ) {
   const lip = computeSpeechLipSyncState(cues, time);
   const ink = '#0F172A';
@@ -607,12 +609,12 @@ function drawCartoonHostCharacter(
   ctx.save();
 
   // Helper to draw a fanned 4-finger cartoon hand at wrist (wx, wy) pointing along angle
-  const drawCartoonHand = (wx: number, wy: number, baseAngle: number, spreadFlip = 1) => {
-    const fingerOffsets = [-0.46, -0.14, 0.18, 0.52];
-    const fingerLens = [26, 33, 31, 24];
+  const drawCartoonHand = (wx: number, wy: number, baseAngle: number, spreadFlip = 1, compact = false) => {
+    const fingerOffsets = compact ? [-0.26, 0, 0.26] : [-0.46, -0.14, 0.18, 0.52];
+    const fingerLens = compact ? [19, 23, 19] : [26, 33, 31, 24];
     ctx.save();
     ctx.strokeStyle = ink;
-    ctx.lineWidth = 5.4;
+    ctx.lineWidth = compact ? 4.8 : 5.4;
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
     fingerOffsets.forEach((off, idx) => {
@@ -639,18 +641,18 @@ function drawCartoonHostCharacter(
     dir: -1 | 1,
     drawHandOnEnd: boolean,
   ) => {
-    const upperLen = 104;
-    const foreLen = 98;
-    const a1 = dir === -1 ? Math.PI * 0.62 + upperAngle * 0.55 : Math.PI * 0.38 - upperAngle * 0.55;
+    const upperLen = 100;
+    const foreLen = 92;
+    const a1 = dir === -1 ? Math.PI * 0.62 + upperAngle * 0.52 : Math.PI * 0.38 - upperAngle * 0.52;
     const ex = sx + Math.cos(a1) * upperLen;
     const ey = sy + Math.sin(a1) * upperLen;
-    const a2 = a1 + (dir === -1 ? 0.34 + elbowDelta * 0.45 : -0.34 - elbowDelta * 0.45);
+    const a2 = a1 + (dir === -1 ? 0.34 + elbowDelta * 0.42 : -0.34 - elbowDelta * 0.42);
     const wx = ex + Math.cos(a2) * foreLen;
     const wy = ey + Math.sin(a2) * foreLen;
 
     ctx.save();
     ctx.strokeStyle = ink;
-    ctx.lineWidth = 6.8;
+    ctx.lineWidth = 6.6;
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
     ctx.beginPath();
@@ -664,32 +666,75 @@ function drawCartoonHostCharacter(
     }
   };
 
-  // 1. Stick Legs (planted at bottom so feet never float/jump awkwardly)
+  // Helper to draw sleek bent-elbow hip-resting arm matching reference silhouette
+  const drawHipRestingArm = (dir: -1 | 1, sway: number) => {
+    const sx = dir * 74;
+    const sy = 10;
+    const ex = dir * 124 + sway * dir * 0.35;
+    const ey = 112;
+    const wx = dir * 90 + sway * dir * 0.2;
+    const wy = 200;
+    ctx.save();
+    ctx.strokeStyle = ink;
+    ctx.lineWidth = 6.6;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.beginPath();
+    ctx.moveTo(sx, sy);
+    ctx.lineTo(ex, ey);
+    ctx.lineTo(wx, wy);
+    ctx.stroke();
+    ctx.restore();
+    drawCartoonHand(wx, wy, Math.PI * 0.5 + dir * 0.14, dir, true);
+  };
+
+  // 0. Ground radial shadow under shoes
+  ctx.save();
+  const floorShadow = ctx.createRadialGradient(0, 344, 14, 0, 344, 155);
+  floorShadow.addColorStop(0, 'rgba(12, 62, 128, 0.28)');
+  floorShadow.addColorStop(0.6, 'rgba(12, 62, 128, 0.12)');
+  floorShadow.addColorStop(1, 'rgba(12, 62, 128, 0)');
+  ctx.fillStyle = floorShadow;
+  ctx.beginPath();
+  ctx.ellipse(0, 344, 155, 22, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+
+  // 1. Stick Legs + crisp black oval shoes
   ctx.save();
   ctx.strokeStyle = ink;
-  ctx.lineWidth = 7;
+  ctx.lineWidth = 6.8;
   ctx.lineCap = 'round';
   ctx.beginPath();
   ctx.moveTo(-40, 194);
-  ctx.quadraticCurveTo(-46, 266, -42, 336);
+  ctx.quadraticCurveTo(-45, 266, -42, 336);
   ctx.moveTo(40, 194);
-  ctx.quadraticCurveTo(46, 266, 42, 336);
+  ctx.quadraticCurveTo(45, 266, 42, 336);
   ctx.stroke();
-  // Minimalist feet tips
+
+  // Solid black oval shoes
+  ctx.fillStyle = ink;
   ctx.beginPath();
-  ctx.moveTo(-42, 336);
-  ctx.lineTo(-56, 338);
-  ctx.moveTo(42, 336);
-  ctx.lineTo(56, 338);
-  ctx.stroke();
+  ctx.ellipse(-52, 339, 27, 11, -0.18, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.ellipse(52, 339, 27, 11, 0.18, 0, Math.PI * 2);
+  ctx.fill();
   ctx.restore();
 
   // 2. Gentle breathing torso & arms container
   ctx.save();
   ctx.translate(0, lip.headBobY);
 
-  // Left arm (viewer-left, signature @Gimmys expressive open-palm arm reaching out)
-  drawArticulatedArm(-72, 16, lip.leftShoulderAngle, lip.leftElbowAngle, -1, true);
+  const lSway = Math.sin(time * 1.35) * 4;
+  const rSway = Math.sin(time * 1.45 + 0.8) * 4;
+
+  // Arms: iconic symmetrical bent-elbow hip-resting pose at rest; animated explain gesture during emphatic speech
+  if (lip.gestureMode === 'cheer' || (lip.gestureMode === 'explain' && lip.mouthOpen > 0.28)) {
+    drawArticulatedArm(-72, 14, lip.leftShoulderAngle, lip.leftElbowAngle, -1, true);
+  } else {
+    drawHipRestingArm(-1, lSway);
+  }
 
   // Soft drop shadow beneath tunic bottom
   ctx.fillStyle = 'rgba(15, 23, 42, 0.08)';
@@ -700,89 +745,81 @@ function drawCartoonHostCharacter(
   // White bell/dome tunic body with crisp cool shading on right edge + thick black outline
   ctx.save();
   ctx.beginPath();
-  ctx.moveTo(-66, -24);
-  ctx.bezierCurveTo(-104, 34, -112, 140, -104, 186);
-  ctx.quadraticCurveTo(0, 212, 104, 186);
-  ctx.bezierCurveTo(112, 140, 104, 34, 66, -24);
+  ctx.moveTo(-62, -24);
+  ctx.bezierCurveTo(-98, 34, -106, 140, -98, 186);
+  ctx.quadraticCurveTo(0, 212, 98, 186);
+  ctx.bezierCurveTo(106, 140, 98, 34, 62, -24);
   ctx.closePath();
 
-  const tunicGrad = ctx.createLinearGradient(-105, -20, 105, 195);
+  const tunicGrad = ctx.createLinearGradient(-102, -20, 102, 195);
   tunicGrad.addColorStop(0, '#FFFFFF');
-  tunicGrad.addColorStop(0.66, '#F8FAFC');
-  tunicGrad.addColorStop(1, '#DCE6F2');
+  tunicGrad.addColorStop(0.68, '#F8FAFC');
+  tunicGrad.addColorStop(1, '#D5E1EF');
   ctx.fillStyle = tunicGrad;
   ctx.fill();
 
   ctx.strokeStyle = ink;
-  ctx.lineWidth = 8.5;
+  ctx.lineWidth = 8.4;
   ctx.lineJoin = 'round';
   ctx.stroke();
   ctx.restore();
 
-  // Viewer-right arm (curves neatly inward along the side of the tunic like @Gimmys)
-  ctx.save();
-  const rSway = Math.sin(time * 1.45) * 6;
-  ctx.strokeStyle = ink;
-  ctx.lineWidth = 6.8;
-  ctx.lineCap = 'round';
-  ctx.beginPath();
-  ctx.moveTo(86, 46);
-  ctx.quadraticCurveTo(112, 124 + rSway * 0.4, 70, 198 + rSway * 0.3);
-  ctx.stroke();
-  if (lip.gestureMode === 'cheer' || lip.gestureMode === 'explain') {
-    drawArticulatedArm(72, 16, lip.rightShoulderAngle, lip.rightElbowAngle, 1, true);
+  if (lip.gestureMode === 'cheer') {
+    drawArticulatedArm(72, 14, lip.rightShoulderAngle, lip.rightElbowAngle, 1, true);
+  } else {
+    drawHipRestingArm(1, rSway);
   }
-  ctx.restore();
 
-  // 3. Round Tan Head rotating smoothly around neck pivot
+  // 3. Slightly oval Tan Head rotating smoothly around neck pivot
   ctx.save();
   ctx.translate(0, -34);
   ctx.rotate(lip.headTiltRad);
   ctx.translate(0, -124);
 
-  const headR = 132;
+  const headRx = 124;
+  const headRy = 128;
   ctx.save();
   ctx.beginPath();
-  ctx.arc(0, 0, headR, 0, Math.PI * 2);
-  const skinGrad = ctx.createRadialGradient(-44, -56, 18, 12, 18, headR * 1.15);
+  ctx.ellipse(0, 0, headRx, headRy, 0, 0, Math.PI * 2);
+  const skinGrad = ctx.createRadialGradient(-42, -54, 18, 10, 16, headRy * 1.15);
   skinGrad.addColorStop(0, '#ECC094');
   skinGrad.addColorStop(0.58, '#DDA46F');
   skinGrad.addColorStop(1, '#C5844E');
   ctx.fillStyle = skinGrad;
   ctx.fill();
   ctx.strokeStyle = ink;
-  ctx.lineWidth = 8.8;
+  ctx.lineWidth = 8.6;
   ctx.stroke();
   ctx.restore();
 
   // Expressive eyebrows
-  const browY = -48 - lip.browLift * 10;
+  const browY = -46 - lip.browLift * 10;
   ctx.strokeStyle = ink;
-  ctx.lineWidth = 5.4;
+  ctx.lineWidth = 5.2;
   ctx.lineCap = 'round';
   ctx.beginPath();
-  ctx.moveTo(-64, browY + 4);
-  ctx.quadraticCurveTo(-45, browY - 7, -26, browY + 3);
-  ctx.moveTo(26, browY + 3);
-  ctx.quadraticCurveTo(45, browY - 7, 64, browY + 4);
+  ctx.moveTo(-54, browY + 4);
+  ctx.quadraticCurveTo(-37, browY - 7, -20, browY + 3);
+  ctx.moveTo(20, browY + 3);
+  ctx.quadraticCurveTo(37, browY - 7, 54, browY + 4);
   ctx.stroke();
 
   // Crisp oval dark eyes with smooth natural blinking
   const eyeScaleY = Math.max(0.08, 1 - lip.blinkFactor);
   if (eyeScaleY < 0.24) {
     ctx.strokeStyle = ink;
-    ctx.lineWidth = 5.5;
+    ctx.lineWidth = 5.4;
     ctx.beginPath();
-    ctx.arc(-44, -18, 14, 0.1 * Math.PI, 0.9 * Math.PI);
+    ctx.arc(-37, -18, 12, 0.1 * Math.PI, 0.9 * Math.PI);
     ctx.stroke();
     ctx.beginPath();
-    ctx.arc(44, -18, 14, 0.1 * Math.PI, 0.9 * Math.PI);
+    ctx.arc(37, -18, 12, 0.1 * Math.PI, 0.9 * Math.PI);
     ctx.stroke();
   } else {
     ctx.fillStyle = ink;
     ctx.beginPath();
-    ctx.ellipse(-44, -18, 11.5, 14.5 * eyeScaleY, 0, 0, Math.PI * 2);
-    ctx.ellipse(44, -18, 11.5, 14.5 * eyeScaleY, 0, 0, Math.PI * 2);
+    ctx.ellipse(-37, -18, 10.5, 13.5 * eyeScaleY, 0, 0, Math.PI * 2);
+    ctx.ellipse(37, -18, 10.5, 13.5 * eyeScaleY, 0, 0, Math.PI * 2);
     ctx.fill();
   }
 
@@ -790,30 +827,27 @@ function drawCartoonHostCharacter(
   const mouthY = 36;
   const openAmt = lip.mouthOpen;
   if (openAmt <= 0.09) {
-    // Gentle resting smile or pressed bilabial m/b/p
     ctx.strokeStyle = ink;
     ctx.lineWidth = 6.2;
     ctx.lineCap = 'round';
     ctx.beginPath();
     if (lip.viseme === 'closed') {
-      ctx.moveTo(-26, mouthY + 4);
-      ctx.quadraticCurveTo(0, mouthY + 7, 26, mouthY + 4);
+      ctx.moveTo(-25, mouthY + 4);
+      ctx.quadraticCurveTo(0, mouthY + 6, 25, mouthY + 4);
     } else {
-      ctx.arc(0, mouthY - 8, 28, 0.16 * Math.PI, 0.84 * Math.PI);
+      ctx.arc(0, mouthY - 8, 27, 0.16 * Math.PI, 0.84 * Math.PI);
     }
     ctx.stroke();
   } else {
-    const mw = 40 * lip.mouthWidth;
-    const mh = 12 + openAmt * 38;
+    const mw = 38 * lip.mouthWidth;
+    const mh = 12 + openAmt * 36;
     ctx.save();
     ctx.beginPath();
     if (lip.mouthRound > 0.55) {
-      // Smooth rounded 'oh' / 'oo' aperture
       const rx = mw * (0.72 - 0.14 * lip.mouthRound);
       const ry = Math.max(10, mh * 0.62);
       ctx.ellipse(0, mouthY + ry * 0.45, rx, ry, 0, 0, Math.PI * 2);
     } else {
-      // Signature @Gimmys D-shaped open mouth: smooth arched upper lip & deep rounded lower curve
       ctx.moveTo(-mw, mouthY);
       ctx.quadraticCurveTo(0, mouthY + 5, mw, mouthY);
       ctx.bezierCurveTo(
@@ -829,7 +863,6 @@ function drawCartoonHostCharacter(
     ctx.fillStyle = ink;
     ctx.fill();
 
-    // Subtle warm tongue gleam inside wide openings
     if (openAmt > 0.42 && lip.mouthRound < 0.58) {
       ctx.clip();
       ctx.fillStyle = '#E11D48';
@@ -842,6 +875,121 @@ function drawCartoonHostCharacter(
 
   ctx.restore(); // end head
   ctx.restore(); // end torso/bob
+
+  // 4. Optional signature @Gimmys golden-yellow outlined headline & speech bubble above head (canvas mode)
+  if (propData && (propData.title || propData.speechText || cues.length > 0)) {
+    const activeCue = cues.find((c) => time >= c.start && time <= c.end) ?? cues[0];
+    const bubbleText = (activeCue?.text || propData.speechText || '').trim();
+
+    let bubbleTopY = -440;
+    if (bubbleText) {
+      const fittedBubble = fitWrappedTextBlock(ctx, bubbleText, 640, 118, {
+        fontWeight: 800,
+        maxFontSize: 42,
+        minFontSize: 22,
+        maxLines: 2,
+        lineHeightRatio: 1.24,
+      });
+      ctx.save();
+      ctx.font = `800 ${fittedBubble.fontSize}px ${FONT_DISPLAY}`;
+      const maxBubbleLineW = fittedBubble.lines.reduce(
+        (acc, ln) => Math.max(acc, ctx.measureText(ln).width),
+        0,
+      );
+      ctx.restore();
+      const bW = Math.min(730, Math.max(380, maxBubbleLineW + 96));
+      const bH = Math.max(108, fittedBubble.lines.length * fittedBubble.lineHeight + 50);
+      const bx = -bW / 2;
+      const by = -346 - bH;
+      bubbleTopY = by;
+
+      // Slate-blue offset shadow beneath yellow-bordered bubble
+      ctx.save();
+      ctx.fillStyle = 'rgba(30, 64, 110, 0.34)';
+      drawRoundedRectPath(ctx, bx + 12, by + 12, bW, bH, 22);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.moveTo(-14, by + bH + 10);
+      ctx.lineTo(10, by + bH + 44);
+      ctx.lineTo(36, by + bH + 10);
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+
+      // White fill + thick #FACC15 golden-yellow border + pointer tail
+      ctx.save();
+      ctx.fillStyle = '#FFFFFF';
+      ctx.strokeStyle = '#FACC15';
+      ctx.lineWidth = 8.5;
+      ctx.lineJoin = 'round';
+      drawRoundedRectPath(ctx, bx, by, bW, bH, 22);
+      ctx.fill();
+      ctx.stroke();
+
+      ctx.beginPath();
+      ctx.moveTo(-20, by + bH - 4);
+      ctx.lineTo(0, by + bH + 30);
+      ctx.lineTo(24, by + bH - 4);
+      ctx.closePath();
+      ctx.fillStyle = '#FFFFFF';
+      ctx.fill();
+      ctx.beginPath();
+      ctx.moveTo(-20, by + bH);
+      ctx.lineTo(0, by + bH + 30);
+      ctx.lineTo(24, by + bH);
+      ctx.strokeStyle = '#FACC15';
+      ctx.lineWidth = 8.5;
+      ctx.stroke();
+
+      // Bubble spoken sentence text
+      ctx.font = `800 ${fittedBubble.fontSize}px ${FONT_DISPLAY}`;
+      ctx.fillStyle = '#1E293B';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      const bStartY = by + bH / 2 - ((fittedBubble.lines.length - 1) * fittedBubble.lineHeight) / 2;
+      fittedBubble.lines.forEach((ln, li) => {
+        ctx.fillText(ln, 0, bStartY + li * fittedBubble.lineHeight, bW - 56);
+      });
+      ctx.restore();
+    }
+
+    if (propData.title) {
+      const cleanTitle = propData.title.trim();
+      const fittedTitle = fitWrappedTextBlock(ctx, cleanTitle, 780, 124, {
+        fontWeight: 900,
+        maxFontSize: 64,
+        minFontSize: 32,
+        maxLines: 2,
+        lineHeightRatio: 1.14,
+      });
+      ctx.save();
+      ctx.font = `900 ${fittedTitle.fontSize}px ${FONT_DISPLAY}`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      const halfTitleH = ((fittedTitle.lines.length - 1) * fittedTitle.lineHeight) / 2 + fittedTitle.fontSize * 0.55;
+      const titleCenterY = Math.min(-555, bubbleTopY - 36 - halfTitleH);
+      const titleStartY = titleCenterY - ((fittedTitle.lines.length - 1) * fittedTitle.lineHeight) / 2;
+      const tGrad = ctx.createLinearGradient(0, titleCenterY - 40, 0, titleCenterY + 40);
+      tGrad.addColorStop(0, '#FEF08A');
+      tGrad.addColorStop(0.55, '#FACC15');
+      tGrad.addColorStop(1, '#F97316');
+      fittedTitle.lines.forEach((ln, li) => {
+        const ly = titleStartY + li * fittedTitle.lineHeight;
+        ctx.save();
+        ctx.shadowColor = 'rgba(250, 204, 21, 0.55)';
+        ctx.shadowBlur = 18;
+        ctx.strokeStyle = '#3B1D0A';
+        ctx.lineWidth = 14;
+        ctx.lineJoin = 'round';
+        ctx.strokeText(ln, 0, ly, 780);
+        ctx.restore();
+        ctx.fillStyle = tGrad;
+        ctx.fillText(ln, 0, ly, 780);
+      });
+      ctx.restore();
+    }
+  }
+
   ctx.restore();
 }
 
@@ -2143,6 +2291,12 @@ const VARIANTS_WITH_NATIVE_LABELS = new Set<string>([
   'css-grammar-equation',
   'bs-badge-cluster',
   'bs-modal-quiz',
+  'p168-step-quiz-formula',
+  'p168-grammar-formula',
+  'p168-pronunciation-matrix',
+  'p168-situation-cards',
+  'p168-slider-compare',
+  'p168-story-dialogue',
   'cartoon-host',
   'dynamic-scene',
   'custom-vector',
@@ -3014,7 +3168,7 @@ function drawIllustrationProp(
       }
     });
   } else if (props.variant === 'cartoon-host') {
-    drawCartoonHostCharacter(ctx, time, cues);
+    drawCartoonHostCharacter(ctx, time, cues, props.data);
   } else if (props.variant === 'avatar-speech') {
     const speech = props.data?.speechText || 'Could I have some water, please?';
     const reaction = props.data?.reactionText || 'Polite!';
@@ -4749,6 +4903,490 @@ function drawIllustrationProp(
     ctx.fillStyle = '#15803D';
     const bY = 70 - ((fittedB.lines.length - 1) * fittedB.lineHeight) / 2;
     fittedB.lines.forEach((ln, li) => ctx.fillText(ln, 195, bY + li * fittedB.lineHeight, 324));
+  } else if (props.variant === 'p168-step-quiz-formula') {
+    // 5-step progress stepper + Question pill + Question prompt + (A)/(B) options + 2 rule bars
+    fillCardWithShadow(ctx, -420, -204, 840, 408, 30, '#FFFFFF', 0.11);
+    ctx.strokeStyle = '#DCE6F7';
+    ctx.lineWidth = 2;
+    drawRoundedRectPath(ctx, -420, -204, 840, 408, 30);
+    ctx.stroke();
+
+    // Top 5-step progress track
+    const stepX = [-260, -130, 0, 130, 260];
+    ctx.strokeStyle = '#CBD5E1';
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.moveTo(stepX[0], -164);
+    ctx.lineTo(stepX[4], -164);
+    ctx.stroke();
+    ctx.strokeStyle = '#22C55E';
+    ctx.beginPath();
+    ctx.moveTo(stepX[0], -164);
+    ctx.lineTo(stepX[1], -164);
+    ctx.stroke();
+    stepX.forEach((sx, si) => {
+      const done = si === 0;
+      const active = si === 1;
+      ctx.fillStyle = done ? '#22C55E' : active ? '#3B82F6' : '#FFFFFF';
+      ctx.beginPath();
+      ctx.arc(sx, -164, 21, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = done ? '#16A34A' : active ? '#2563EB' : '#CBD5E1';
+      ctx.lineWidth = 3;
+      ctx.stroke();
+      ctx.font = `800 19px ${FONT_DISPLAY}`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillStyle = done || active ? '#FFFFFF' : '#64748B';
+      ctx.fillText(done ? '✓' : String(si + 1), sx, -163);
+    });
+
+    // Blue Question badge pill
+    const badgeTxt = props.data?.formula || 'Question 1';
+    ctx.fillStyle = '#3B82F6';
+    drawRoundedRectPath(ctx, -116, -124, 232, 46, 23);
+    ctx.fill();
+    ctx.font = `800 22px ${FONT_DISPLAY}`;
+    ctx.fillStyle = '#FFFFFF';
+    ctx.fillText(badgeTxt, 0, -101, 210);
+
+    // Question card
+    ctx.fillStyle = '#F8FAFC';
+    drawRoundedRectPath(ctx, -370, -64, 740, 74, 20);
+    ctx.fill();
+    const qPrompt = props.data?.title || 'Can you ____ me your pen?';
+    const fittedQ = fitWrappedTextBlock(ctx, qPrompt, 700, 62, {
+      fontWeight: 800,
+      maxFontSize: 30,
+      minFontSize: 18,
+      maxLines: 2,
+      lineHeightRatio: 1.18,
+    });
+    ctx.font = `800 ${fittedQ.fontSize}px ${FONT_DISPLAY}`;
+    ctx.fillStyle = '#0F172A';
+    const qY = -27 - ((fittedQ.lines.length - 1) * fittedQ.lineHeight) / 2;
+    fittedQ.lines.forEach((ln, li) => ctx.fillText(ln, 0, qY + li * fittedQ.lineHeight, 700));
+
+    // Choice buttons (A) vs (B)
+    const rawLabels = props.data?.labels ?? [];
+    const optA = rawLabels[0] || 'A  lend';
+    const optB = rawLabels[1] || 'B  borrow';
+    ctx.fillStyle = '#ECFDF5';
+    drawRoundedRectPath(ctx, -356, 20, 336, 56, 18);
+    ctx.fill();
+    ctx.strokeStyle = '#22C55E';
+    ctx.lineWidth = 3;
+    ctx.stroke();
+
+    ctx.fillStyle = '#EFF6FF';
+    drawRoundedRectPath(ctx, 20, 20, 336, 56, 18);
+    ctx.fill();
+    ctx.strokeStyle = '#BFDBFE';
+    ctx.lineWidth = 2.5;
+    ctx.stroke();
+
+    ctx.font = `800 24px ${FONT_DISPLAY}`;
+    ctx.fillStyle = '#15803D';
+    ctx.fillText(optA, -188, 48, 304);
+    ctx.fillStyle = '#1D4ED8';
+    ctx.fillText(optB, 188, 48, 304);
+
+    // 2 Side-by-side rule formula cards neatly aligned beneath (A) & (B)
+    const rule1 = rawLabels[2] || props.data?.subtitle || 'lend = give to someone';
+    const rule2 = rawLabels[3] || props.data?.speechText || 'borrow = get from someone';
+    const ruleConfigs = [
+      { text: rule1, x: -356, cx: -188, bg: '#E0F2FE', border: '#BAE6FD', fg: '#0369A1' },
+      { text: rule2, x: 20, cx: 188, bg: '#EEF2FF', border: '#C7D2FE', fg: '#3730A3' },
+    ];
+    ruleConfigs.forEach((rc) => {
+      ctx.fillStyle = rc.bg;
+      drawRoundedRectPath(ctx, rc.x, 94, 336, 76, 16);
+      ctx.fill();
+      ctx.strokeStyle = rc.border;
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+      const fittedRule = fitWrappedTextBlock(ctx, rc.text, 304, 62, {
+        fontWeight: 700,
+        maxFontSize: 21,
+        minFontSize: 15,
+        maxLines: 2,
+        lineHeightRatio: 1.18,
+      });
+      ctx.font = `700 ${fittedRule.fontSize}px ${FONT_SANS}`;
+      ctx.fillStyle = rc.fg;
+      const startRuleY = 132 - ((fittedRule.lines.length - 1) * fittedRule.lineHeight) / 2;
+      fittedRule.lines.forEach((ln, li) =>
+        ctx.fillText(ln, rc.cx, startRuleY + li * fittedRule.lineHeight, 304),
+      );
+    });
+  } else if (props.variant === 'p168-grammar-formula') {
+    // 3 top switching tabs + blue Rule pill + [Part A] + [Part B] equation + icon circle + takeaway
+    fillCardWithShadow(ctx, -420, -192, 840, 384, 30, '#FFFFFF', 0.11);
+    ctx.strokeStyle = '#DBEAFE';
+    ctx.lineWidth = 2;
+    drawRoundedRectPath(ctx, -420, -192, 840, 384, 30);
+    ctx.stroke();
+
+    const tabs = props.data?.labels?.slice(0, 3) ?? ['Pattern 1', 'Pattern 2', 'Pattern 3'];
+    const tabW = 236;
+    const tabXs = [-252, 0, 252];
+    tabs.forEach((tb, ti) => {
+      const tx = tabXs[ti];
+      const active = ti === 0;
+      ctx.fillStyle = active ? '#3B82F6' : '#EFF6FF';
+      drawRoundedRectPath(ctx, tx - tabW / 2, -168, tabW, 48, 20);
+      ctx.fill();
+      ctx.font = `800 22px ${FONT_DISPLAY}`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillStyle = active ? '#FFFFFF' : '#1E40AF';
+      ctx.fillText(tb, tx, -144, tabW - 22);
+    });
+
+    // Blue Rule banner pill
+    ctx.fillStyle = '#2563EB';
+    drawRoundedRectPath(ctx, -180, -104, 360, 46, 23);
+    ctx.fill();
+    ctx.font = `800 23px ${FONT_DISPLAY}`;
+    ctx.fillStyle = '#FFFFFF';
+    ctx.fillText(props.data?.formula || 'KEY GRAMMAR RULE', 0, -81, 330);
+
+    // Equation row [A] + [B]
+    const partA = props.data?.highlightWord || props.data?.title || 'used to';
+    const partB = props.data?.speechText || 'base verb';
+    ctx.fillStyle = '#DBEAFE';
+    drawRoundedRectPath(ctx, -350, -34, 300, 68, 20);
+    ctx.fill();
+    ctx.strokeStyle = '#60A5FA';
+    ctx.lineWidth = 2.5;
+    ctx.stroke();
+
+    ctx.fillStyle = '#ECFDF5';
+    drawRoundedRectPath(ctx, 50, -34, 300, 68, 20);
+    ctx.fill();
+    ctx.strokeStyle = '#6EE7B7';
+    ctx.stroke();
+
+    ctx.font = `800 34px ${FONT_DISPLAY}`;
+    ctx.fillStyle = '#334155';
+    ctx.fillText('+', 0, 0);
+
+    ctx.font = `800 26px ${FONT_DISPLAY}`;
+    ctx.fillStyle = '#1D4ED8';
+    ctx.fillText(partA, -200, 0, 276);
+    ctx.fillStyle = '#047857';
+    ctx.fillText(partB, 200, 0, 276);
+
+    // Central circular icon badge
+    ctx.fillStyle = '#FFF7ED';
+    ctx.beginPath();
+    ctx.arc(0, 86, 40, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = '#FDBA74';
+    ctx.lineWidth = 3;
+    ctx.stroke();
+    ctx.save();
+    ctx.translate(0, 86);
+    ctx.scale(0.42, 0.42);
+    drawSceneIcon(ctx, props.data?.sceneIcon || 'book');
+    ctx.restore();
+
+    // Concise bottom takeaway
+    const takeaway = props.data?.subtitle || 'Simple pattern for clear communication';
+    ctx.font = `700 24px ${FONT_SANS}`;
+    ctx.fillStyle = '#334155';
+    ctx.fillText(takeaway, 0, 158, 760);
+  } else if (props.variant === 'p168-pronunciation-matrix') {
+    // 3 side-by-side rounded sound/category columns with colored top pills & example list
+    const cols = (props.data?.nodes ?? []).slice(0, 3);
+    const items =
+      cols.length >= 2
+        ? cols
+        : [
+            { label: 'T sound', sublabel: 'k · p · s', color: '#3B82F6' },
+            { label: 'D sound', sublabel: 'l · n · v', color: '#6366F1' },
+            { label: 'ID', sublabel: 't · d', color: '#DB2777' },
+          ];
+    const extraExamples = props.data?.labels ?? [];
+    const cw = items.length === 2 ? 380 : 262;
+    const gap = 22;
+    const startX = -((items.length * cw + (items.length - 1) * gap) / 2);
+
+    items.forEach((col, ci) => {
+      const cx = startX + ci * (cw + gap) + cw / 2;
+      const accent = col.color || (ci === 0 ? '#3B82F6' : ci === 1 ? '#6366F1' : '#DB2777');
+      fillCardWithShadow(ctx, cx - cw / 2, -172, cw, 344, 28, '#FFFFFF', 0.1);
+      ctx.strokeStyle = ci === 2 ? '#F9A8D4' : '#BFDBFE';
+      ctx.lineWidth = 3;
+      drawRoundedRectPath(ctx, cx - cw / 2, -172, cw, 344, 28);
+      ctx.stroke();
+
+      // Top colored header pill
+      ctx.fillStyle = accent;
+      drawRoundedRectPath(ctx, cx - cw * 0.4, -148, cw * 0.8, 52, 22);
+      ctx.fill();
+      ctx.font = `800 25px ${FONT_DISPLAY}`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillStyle = '#FFFFFF';
+      ctx.fillText(col.label, cx, -122, cw * 0.72);
+
+      // Sublabel phonetic rule
+      ctx.font = `700 22px ${FONT_SANS}`;
+      ctx.fillStyle = '#64748B';
+      ctx.fillText(col.sublabel || `Group ${ci + 1}`, cx, -64, cw - 28);
+
+      // Divider
+      ctx.strokeStyle = '#E2E8F0';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(cx - cw * 0.36, -34);
+      ctx.lineTo(cx + cw * 0.36, -34);
+      ctx.stroke();
+
+      // Example chip inside column
+      const exampleWord = extraExamples[ci] || props.data?.title || col.label;
+      ctx.fillStyle = '#F8FAFC';
+      drawRoundedRectPath(ctx, cx - cw * 0.41, -12, cw * 0.82, 136, 18);
+      ctx.fill();
+      const fittedEx = fitWrappedTextBlock(ctx, exampleWord, cw * 0.74, 114, {
+        fontWeight: 800,
+        maxFontSize: 28,
+        minFontSize: 18,
+        maxLines: 3,
+        lineHeightRatio: 1.24,
+      });
+      ctx.font = `800 ${fittedEx.fontSize}px ${FONT_DISPLAY}`;
+      ctx.fillStyle = '#0F172A';
+      const exY = 56 - ((fittedEx.lines.length - 1) * fittedEx.lineHeight) / 2;
+      fittedEx.lines.forEach((ln, li) => ctx.fillText(ln, cx, exY + li * fittedEx.lineHeight, cw * 0.74));
+    });
+  } else if (props.variant === 'p168-situation-cards') {
+    // 3-circle milestone header + Step pill + headline + 2 stacked Casual / Formal context cards
+    fillCardWithShadow(ctx, -420, -204, 840, 408, 30, '#FFFFFF', 0.11);
+    ctx.strokeStyle = '#E0F2FE';
+    ctx.lineWidth = 2;
+    drawRoundedRectPath(ctx, -420, -204, 840, 408, 30);
+    ctx.stroke();
+
+    // 3 milestone circles
+    const msX = [-210, 0, 210];
+    ctx.strokeStyle = '#CBD5E1';
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.moveTo(msX[0], -162);
+    ctx.lineTo(msX[2], -162);
+    ctx.stroke();
+    msX.forEach((mx, mi) => {
+      ctx.fillStyle = mi === 0 ? '#FB7185' : mi === 1 ? '#38BDF8' : '#34D399';
+      ctx.beginPath();
+      ctx.arc(mx, -162, 22, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.font = `800 20px ${FONT_DISPLAY}`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillStyle = '#FFFFFF';
+      ctx.fillText(mi < 2 ? '✓' : '3', mx, -161);
+    });
+
+    // Step pill & Headline
+    ctx.fillStyle = '#38BDF8';
+    drawRoundedRectPath(ctx, -90, -124, 180, 42, 21);
+    ctx.fill();
+    ctx.font = `800 21px ${FONT_DISPLAY}`;
+    ctx.fillStyle = '#FFFFFF';
+    ctx.fillText(props.data?.formula || 'Step 2', 0, -103, 160);
+
+    ctx.font = `800 32px ${FONT_DISPLAY}`;
+    ctx.fillStyle = '#0F172A';
+    ctx.fillText(props.data?.title || 'Say no, but softly.', 0, -54, 760);
+
+    // 2 Context scenario cards stacked cleanly
+    const cNodes = props.data?.nodes ?? [];
+    const scenarios = [
+      {
+        title: cNodes[0]?.label || 'With friends:',
+        quote: cNodes[0]?.sublabel || props.data?.labels?.[0] || '"I\'d love to, but I can\'t."',
+        bg: '#EFF6FF',
+        accent: '#2563EB',
+        icon: 'chat' as IllustrationSceneIcon,
+      },
+      {
+        title: cNodes[1]?.label || 'At work:',
+        quote: cNodes[1]?.sublabel || props.data?.labels?.[1] || '"I\'m afraid I can\'t make it."',
+        bg: '#FFF7ED',
+        accent: '#EA580C',
+        icon: 'briefcase' as IllustrationSceneIcon,
+      },
+    ];
+    scenarios.forEach((sc, si) => {
+      const sy = -12 + si * 102;
+      fillCardWithShadow(ctx, -360, sy, 720, 86, 22, '#F8FAFC', 0.06);
+      ctx.strokeStyle = '#E2E8F0';
+      ctx.lineWidth = 2;
+      drawRoundedRectPath(ctx, -360, sy, 720, 86, 22);
+      ctx.stroke();
+
+      ctx.fillStyle = sc.bg;
+      drawRoundedRectPath(ctx, -340, sy + 15, 56, 56, 16);
+      ctx.fill();
+      ctx.save();
+      ctx.translate(-312, sy + 43);
+      ctx.scale(0.38, 0.38);
+      drawSceneIcon(ctx, sc.icon);
+      ctx.restore();
+
+      ctx.textAlign = 'left';
+      ctx.font = `800 22px ${FONT_DISPLAY}`;
+      ctx.fillStyle = sc.accent;
+      ctx.fillText(sc.title, -264, sy + 27, 580);
+
+      ctx.font = `700 25px ${FONT_SANS}`;
+      ctx.fillStyle = '#0F172A';
+      ctx.fillText(sc.quote, -264, sy + 60, 580);
+    });
+  } else if (props.variant === 'p168-slider-compare') {
+    // 2 top contrast pills + white horizontal glowing slider track + guiding question + solid blue bold choice pill
+    fillCardWithShadow(ctx, -420, -192, 840, 384, 30, '#FFFFFF', 0.11);
+    ctx.strokeStyle = '#E2E8F0';
+    ctx.lineWidth = 2;
+    drawRoundedRectPath(ctx, -420, -192, 840, 384, 30);
+    ctx.stroke();
+
+    const optLeft = props.data?.labels?.[0] || 'Past simple';
+    const optRight = props.data?.labels?.[1] || 'Present perfect';
+    const sliderVal = clamp01(props.data?.value ?? 0.72);
+    const activeRight = sliderVal >= 0.5;
+
+    ctx.fillStyle = !activeRight ? '#3B82F6' : '#F1F5F9';
+    drawRoundedRectPath(ctx, -356, -162, 336, 54, 22);
+    ctx.fill();
+    ctx.fillStyle = activeRight ? '#3B82F6' : '#F1F5F9';
+    drawRoundedRectPath(ctx, 20, -162, 336, 54, 22);
+    ctx.fill();
+
+    ctx.font = `800 24px ${FONT_DISPLAY}`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = !activeRight ? '#FFFFFF' : '#475569';
+    ctx.fillText(optLeft, -188, -135, 310);
+    ctx.fillStyle = activeRight ? '#FFFFFF' : '#475569';
+    ctx.fillText(optRight, 188, -135, 310);
+
+    // Slider bar
+    ctx.fillStyle = '#E2E8F0';
+    drawRoundedRectPath(ctx, -300, -48, 600, 16, 8);
+    ctx.fill();
+    const grad = ctx.createLinearGradient(-300, 0, 300, 0);
+    grad.addColorStop(0, '#93C5FD');
+    grad.addColorStop(1, '#2563EB');
+    ctx.fillStyle = grad;
+    drawRoundedRectPath(ctx, -300, -48, 600 * sliderVal, 16, 8);
+    ctx.fill();
+
+    const kx = -300 + 600 * sliderVal;
+    ctx.save();
+    ctx.shadowColor = 'rgba(37, 99, 235, 0.45)';
+    ctx.shadowBlur = 18;
+    ctx.fillStyle = '#FFFFFF';
+    ctx.beginPath();
+    ctx.arc(kx, -40, 20, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = '#2563EB';
+    ctx.lineWidth = 6;
+    ctx.stroke();
+    ctx.restore();
+
+    ctx.font = `700 21px ${FONT_SANS}`;
+    ctx.fillStyle = '#64748B';
+    ctx.fillText(optLeft.toLowerCase(), -275, -8, 180);
+    ctx.fillText(optRight.toLowerCase(), 275, -8, 180);
+
+    // Guiding title
+    ctx.font = `700 25px ${FONT_SANS}`;
+    ctx.fillStyle = '#1E293B';
+    ctx.fillText(props.data?.formula || "Here's how to choose:", 0, 56, 720);
+
+    // Solid bold choice CTA pill
+    const chosenAnswer = props.data?.highlightWord || props.data?.title || (activeRight ? optRight : optLeft);
+    fillCardWithShadow(ctx, -280, 92, 560, 68, 28, '#2563EB', 0.16);
+    ctx.font = `800 30px ${FONT_DISPLAY}`;
+    ctx.fillStyle = '#FFFFFF';
+    ctx.fillText(chosenAnswer, 0, 126, 520);
+  } else if (props.variant === 'p168-story-dialogue') {
+    // Story | Question | Detail header + Avatar speech quote card + highlighted phrase capsule
+    fillCardWithShadow(ctx, -420, -192, 840, 384, 30, '#FFFFFF', 0.11);
+    ctx.strokeStyle = '#FED7AA';
+    ctx.lineWidth = 2;
+    drawRoundedRectPath(ctx, -420, -192, 840, 384, 30);
+    ctx.stroke();
+
+    const sTabs = props.data?.labels?.slice(0, 3) ?? ['Story', 'Question', 'Detail'];
+    const sTabXs = [-232, 0, 232];
+    sTabs.forEach((st, si) => {
+      const tx = sTabXs[si];
+      ctx.fillStyle = si === 0 ? '#3B82F6' : '#F8FAFC';
+      drawRoundedRectPath(ctx, tx - 96, -166, 192, 42, 21);
+      ctx.fill();
+      ctx.font = `800 20px ${FONT_DISPLAY}`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillStyle = si === 0 ? '#FFFFFF' : '#475569';
+      ctx.fillText(st, tx, -145, 172);
+    });
+
+    // Narration line
+    ctx.font = `700 26px ${FONT_SANS}`;
+    ctx.fillStyle = '#0F172A';
+    ctx.fillText(props.data?.title || 'Her roommate leans in,', 0, -90, 740);
+
+    // Character avatar left
+    const lip = computeSpeechLipSyncState(cues, time);
+    drawCharacterAvatar(ctx, {
+      x: -265,
+      y: 8,
+      shirtColor: '#3B82F6',
+      hairColor: '#1E293B',
+      hairStyle: 'bob',
+      expression: 'curious',
+      scale: 0.78,
+      lipSync: lip,
+    });
+    ctx.fillStyle = '#3B82F6';
+    drawRoundedRectPath(ctx, -345, 70, 160, 32, 16);
+    ctx.fill();
+    ctx.font = `800 18px ${FONT_DISPLAY}`;
+    ctx.fillStyle = '#FFFFFF';
+    ctx.fillText(props.data?.reactionText || 'Speaker', -265, 86, 146);
+
+    // Speech dialogue bubble right
+    fillCardWithShadow(ctx, -145, -48, 520, 134, 24, '#F8FAFC', 0.06);
+    ctx.strokeStyle = '#93C5FD';
+    ctx.lineWidth = 2.5;
+    drawRoundedRectPath(ctx, -145, -48, 520, 134, 24);
+    ctx.stroke();
+
+    const dialogueTxt = props.data?.speechText || '"Why? What happened? Did someone tell a joke?"';
+    const fittedDlg = fitWrappedTextBlock(ctx, dialogueTxt, 480, 114, {
+      fontWeight: 700,
+      maxFontSize: 27,
+      minFontSize: 18,
+      maxLines: 3,
+      lineHeightRatio: 1.24,
+    });
+    ctx.font = `700 ${fittedDlg.fontSize}px ${FONT_SANS}`;
+    ctx.fillStyle = '#0F172A';
+    const dStartY = 19 - ((fittedDlg.lines.length - 1) * fittedDlg.lineHeight) / 2;
+    fittedDlg.lines.forEach((ln, li) => ctx.fillText(ln, 115, dStartY + li * fittedDlg.lineHeight, 480));
+
+    // Bottom highlight pill takeaway
+    const keyHighlight = props.data?.highlightWord || props.data?.subtitle || 'Natural everyday reaction';
+    ctx.fillStyle = '#DBEAFE';
+    drawRoundedRectPath(ctx, -340, 118, 680, 50, 25);
+    ctx.fill();
+    ctx.font = `800 24px ${FONT_DISPLAY}`;
+    ctx.fillStyle = '#1D4ED8';
+    ctx.fillText(keyHighlight, 0, 143, 640);
   } else if (props.variant === 'dynamic-scene' && props.data?.dynamicScene) {
     drawDynamicScene(ctx, props.data.dynamicScene, time);
   } else {
@@ -5874,32 +6512,27 @@ export function renderProjectFrame(
   }
 
   if (project.compositionId === 'cartoon-host' && !project.backgroundImage) {
-    // Crisp @Gimmys sky-blue diagonal gradient backdrop with soft ambient light bands
-    const skyGrad = ctx.createLinearGradient(0, 0, stageW * 0.9, stageH);
-    skyGrad.addColorStop(0, '#72CFF8');
-    skyGrad.addColorStop(0.5, '#AEE5FD');
-    skyGrad.addColorStop(1, '#DFF4FF');
+    // Crisp bright sky-blue gradient backdrop matching Gimmy's visual style
+    const skyGrad = ctx.createLinearGradient(0, 0, 0, stageH);
+    skyGrad.addColorStop(0, '#78C6FF');
+    skyGrad.addColorStop(0.55, '#59B2FF');
+    skyGrad.addColorStop(1, '#82CCFF');
     ctx.fillStyle = skyGrad;
     ctx.fillRect(0, 0, stageW, stageH);
 
     ctx.save();
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.18)';
-    ctx.beginPath();
-    ctx.moveTo(0, stageH * 0.08);
-    ctx.lineTo(stageW, stageH * -0.08);
-    ctx.lineTo(stageW, stageH * 0.14);
-    ctx.lineTo(0, stageH * 0.3);
-    ctx.closePath();
-    ctx.fill();
-
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.12)';
-    ctx.beginPath();
-    ctx.moveTo(0, stageH * 0.62);
-    ctx.lineTo(stageW, stageH * 0.44);
-    ctx.lineTo(stageW, stageH * 0.66);
-    ctx.lineTo(0, stageH * 0.84);
-    ctx.closePath();
-    ctx.fill();
+    const centerGlow = ctx.createRadialGradient(
+      stageW * 0.5,
+      stageH * 0.54,
+      60,
+      stageW * 0.5,
+      stageH * 0.54,
+      stageW * 0.72,
+    );
+    centerGlow.addColorStop(0, 'rgba(255, 255, 255, 0.20)');
+    centerGlow.addColorStop(1, 'rgba(255, 255, 255, 0)');
+    ctx.fillStyle = centerGlow;
+    ctx.fillRect(0, 0, stageW, stageH);
     ctx.restore();
   }
 

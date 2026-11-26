@@ -95,6 +95,11 @@ ${compositionList}
 
 Quy tắc chọn (ưu tiên từ trên xuống):
 - Bài đối chiếu 2–3 từ gần nghĩa (Look/See/Watch, Say/Tell/Talk, Hear/Listen...) → "phrase-icon-split"
+- Quiz điền khuyết / chọn đáp án kèm công thức [A / B] → "p168-quiz-formula"
+- Giải thích công thức ngữ pháp [S + used to + V] → "p168-grammar-formula"
+- Quy tắc phát âm (/t/, /d/, /ɪd/, ending sounds, trọng âm) → "p168-pronunciation"
+- Các tình huống giao tiếp (Bạn bè, Công sở, Từ chối khéo) → "p168-situations"
+- So sánh hai thì hoặc thanh trượt đối chiếu → "p168-slider-compare"
 - Có giờ / clock / o'clock → "clock-spotlight"
 - Nâng cấp câu boring → natural / don't say → "dialogue-upgrade"
 - Các bước 1-2-3 / ladder → "flow-steps"
@@ -195,6 +200,12 @@ Mỗi element dùng \`position: { "x": 0..1, "y": 0..1, "width": 0..1, "height":
 - **Chống chồng hình trong cùng Scene**: Hai element hiển thị trùng thời điểm trong cùng scene KHÔNG được có bounding-box \`position\` giao nhau (trừ \`connector\` nối giữa 2 khối).
 
 ### Bố cục signature @englishpracticing168 (luân phiên đa dạng qua từng scene)
+- **Scene quiz điền khuyết + công thức**: \`variant: "p168-step-quiz-formula"\` (kèm \`formula\`, \`speechText\`, \`labels\`).
+- **Scene công thức ngữ pháp nổi bật**: \`variant: "p168-grammar-formula"\` (kèm \`formula\`, \`speechText\`, \`subtitle\`).
+- **Scene bảng quy tắc phát âm (/t/, /d/, /ɪd/)**: \`variant: "p168-pronunciation-matrix"\` (kèm \`nodes\`, \`labels\`).
+- **Scene thẻ tình huống giao tiếp**: \`variant: "p168-situation-cards"\` (kèm \`title\`, \`nodes\` có \`sceneIcon\`).
+- **Scene thanh trượt so sánh thì / cặp câu**: \`variant: "p168-slider-compare"\` (kèm \`labels: [A, B]\`, \`value\`).
+- **Scene hội thoại truyện ngắn 2 nhân vật**: \`variant: "p168-story-dialogue"\` (kèm \`title\`, \`nodes\`).
 - **Scene đối chiếu 2 từ/2 mẫu câu**: \`variant: "contrast-pair-cards"\` (kèm \`labels: ["Basic", "Natural"]\` hoặc \`formula: "arrow"\` / \`"cross"\`) hoặc \`kind: "object"\` + \`"connector"\`.
 - **Scene 3 khái niệm song song**: \`variant: "trio-icon-cards"\` hoặc \`variant: "phrase-icon-split"\`.
 - **Scene từ vựng trọng tâm**: \`variant: "css-magnifying-word"\` hoặc \`"css-flashcard-flip"\` + \`style.emphasisWord\` trên thẻ \`text\`.

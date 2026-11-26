@@ -109,7 +109,7 @@ export const ComponentDatabaseModal: React.FC<ComponentDatabaseModalProps> = ({
   const [version, setVersion] = useState(0);
   const [activeTab, setActiveTab] = useState<'browse' | 'ai-prompt'>('browse');
   const [searchQuery, setSearchQuery] = useState('');
-  const [categoryFilter, setCategoryFilter] = useState<VectorCategory | 'all' | 'ui-kit'>('all');
+  const [categoryFilter, setCategoryFilter] = useState<VectorCategory | 'all' | 'ui-kit' | 'p168'>('all');
   const [showDeleted, setShowDeleted] = useState(false);
 
   // Selected / Editor state
@@ -157,6 +157,16 @@ export const ComponentDatabaseModal: React.FC<ComponentDatabaseModalProps> = ({
     return catalog.filter((item) => {
       if (categoryFilter === 'ui-kit') {
         if (!item.variant.startsWith('bs-') && !item.variant.startsWith('css-')) return false;
+      } else if (categoryFilter === 'p168') {
+        if (
+          !item.variant.startsWith('p168-') &&
+          item.variant !== 'phrase-icon-split' &&
+          item.variant !== 'contrast-pair-cards' &&
+          item.variant !== 'trio-icon-cards' &&
+          item.variant !== 'dialogue-upgrade'
+        ) {
+          return false;
+        }
       } else if (categoryFilter !== 'all' && item.category !== categoryFilter) {
         return false;
       }
@@ -178,6 +188,19 @@ export const ComponentDatabaseModal: React.FC<ComponentDatabaseModalProps> = ({
   const uiKitCount = useMemo(
     () =>
       catalog.filter((c) => c.variant.startsWith('bs-') || c.variant.startsWith('css-')).length,
+    [catalog],
+  );
+
+  const p168Count = useMemo(
+    () =>
+      catalog.filter(
+        (c) =>
+          c.variant.startsWith('p168-') ||
+          c.variant === 'phrase-icon-split' ||
+          c.variant === 'contrast-pair-cards' ||
+          c.variant === 'trio-icon-cards' ||
+          c.variant === 'dialogue-upgrade',
+      ).length,
     [catalog],
   );
 
@@ -536,6 +559,7 @@ export const ComponentDatabaseModal: React.FC<ComponentDatabaseModalProps> = ({
                 <div className="flex flex-wrap items-center gap-1.5">
                   {[
                     { id: 'all', label: `Tất cả (${catalog.length})` },
+                    { id: 'p168', label: `@168 TikTok (${p168Count})` },
                     { id: 'ui-kit', label: `Bootstrap / CSS (${uiKitCount})` },
                     { id: 'life', label: 'Đời sống' },
                     { id: 'grammar', label: 'Ngữ pháp' },
@@ -547,7 +571,7 @@ export const ComponentDatabaseModal: React.FC<ComponentDatabaseModalProps> = ({
                       key={tab.id}
                       type="button"
                       onClick={() =>
-                        setCategoryFilter(tab.id as VectorCategory | 'all' | 'ui-kit')
+                        setCategoryFilter(tab.id as VectorCategory | 'all' | 'ui-kit' | 'p168')
                       }
                       className={`px-2 py-1 text-[11px] font-semibold rounded-md transition-colors ${
                         categoryFilter === tab.id
@@ -581,6 +605,11 @@ export const ComponentDatabaseModal: React.FC<ComponentDatabaseModalProps> = ({
                   const active = !isCreatingNew && editVariant === item.variant;
                   const isUiKit =
                     item.variant.startsWith('bs-') || item.variant.startsWith('css-');
+                  const isP168 =
+                    item.variant.startsWith('p168-') ||
+                    item.variant === 'phrase-icon-split' ||
+                    item.variant === 'contrast-pair-cards' ||
+                    item.variant === 'trio-icon-cards';
                   return (
                     <button
                       key={item.variant}
@@ -610,18 +639,22 @@ export const ComponentDatabaseModal: React.FC<ComponentDatabaseModalProps> = ({
                                 ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
                                 : item.isOverride
                                   ? 'bg-amber-50 text-amber-700 border border-amber-200'
-                                  : isUiKit
-                                    ? 'bg-indigo-50 text-indigo-700 border border-indigo-200'
-                                    : 'bg-slate-100 text-slate-600'
+                                  : isP168
+                                    ? 'bg-sky-50 text-sky-700 border border-sky-200'
+                                    : isUiKit
+                                      ? 'bg-indigo-50 text-indigo-700 border border-indigo-200'
+                                      : 'bg-slate-100 text-slate-600'
                             }`}
                           >
                             {item.isCustom
                               ? 'Tùy chỉnh'
                               : item.isOverride
                                 ? 'Đã sửa'
-                                : isUiKit
-                                  ? 'CSS / BS5'
-                                  : CATEGORY_LABELS[item.category]}
+                                : isP168
+                                  ? '@168'
+                                  : isUiKit
+                                    ? 'CSS / BS5'
+                                    : CATEGORY_LABELS[item.category]}
                           </span>
                         </div>
                         <div className="text-[11px] font-mono text-indigo-600 truncate mt-0.5">

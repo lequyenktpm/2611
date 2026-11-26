@@ -3867,4 +3867,132 @@ test('cartoon-host @Gimmys composition produces yellow-pill karaoke and 0 visual
   assert.deepEqual(findVisualOverlaps(proj.elements), []);
 });
 
+test('splitMixedLanguageTtsSpans preserves pure Spanish & French stories in 1 TTS voice without switching to Vietnamese or Pinyin', () => {
+  const spanishStory =
+    'Cada mañana Mateo va al mercado. Después toma un café caliente. No hay más pan aquí, pero tú puedes volver mañana.';
+  const esSpans = splitMixedLanguageTtsSpans(spanishStory, {
+    primaryVoice: 'es-ES-ElviraNeural',
+    primaryLang: 'es-ES',
+  });
+  assert.equal(esSpans.length, 1, `Expected 1 single es span, got: ${JSON.stringify(esSpans)}`);
+  assert.equal(esSpans[0].voice, 'es-ES-ElviraNeural');
+
+  const frenchStory =
+    "Bonjour, c'est moi ! Après le café, tu veux aller à la plage aujourd'hui ?";
+  const frSpans = splitMixedLanguageTtsSpans(frenchStory, {
+    primaryVoice: 'fr-FR-DeniseNeural',
+    primaryLang: 'fr-FR',
+  });
+  assert.equal(frSpans.length, 1, `Expected 1 single fr span, got: ${JSON.stringify(frSpans)}`);
+  assert.equal(frSpans[0].voice, 'fr-FR-DeniseNeural');
+
+  const mixedViEs = splitMixedLanguageTtsSpans(
+    'Từ "después" có nghĩa là sau đó trong tiếng Tây Ban Nha.',
+    {
+      primaryVoice: 'es-ES-ElviraNeural',
+      primaryLang: 'es-ES',
+      secondaryVoice: 'vi-VN-HoaiMyNeural',
+      secondaryLang: 'vi-VN',
+    },
+  );
+  assert.ok(
+    mixedViEs.some((s) => s.lang === 'vi' && s.voice === 'vi-VN-HoaiMyNeural'),
+    'Mixed Vietnamese explanation should still route Vietnamese tokens to explainer voice',
+  );
+  assert.ok(
+    mixedViEs.some((s) => s.lang === 'es' && s.text.includes('después')),
+    'Spanish quoted word inside mixed VI sentence should stay Spanish',
+  );
+});
+
+test('inferLearningLangFromCards and AI prompts detect Spanish/French and enforce single-language TTS purity', () => {
+  const inferredEs = inferLearningLangFromCards([
+    {
+      id: 'c1',
+      type: 'vocab',
+      badge: 'SPANISH',
+      title: 'Cada mañana',
+      content: 'Después Mateo va al café cuando todos están aquí.',
+      ttsText: 'Después Mateo va al café cuando todos están aquí.',
+    },
+  ]);
+  assert.equal(inferredEs, 'es');
+
+  const inferredFr = inferLearningLangFromCards([
+    {
+      id: 'c2',
+      type: 'vocab',
+      badge: 'FRENCH',
+      title: "Aujourd'hui",
+      content: "Bonjour, c'est très bon avec du café, merci !",
+      ttsText: "Bonjour, c'est très bon avec du café, merci !",
+    },
+  ]);
+  assert.equal(inferredFr, 'fr');
+
+  const reelsPrompt = buildEnglishReelsWebAiPrompt({
+    sourceText: 'Cada mañana Mateo va al mercado.',
+    mode: 'auto',
+    targetLang: 'Tiếng Việt',
+  });
+  assert.ok(reelsPrompt.includes('"learningLang"'));
+  assert.ok(reelsPrompt.includes('100% THUẦN NGÔN NGỮ'));
+
+  const readingPrompt = buildReadingWebAiPrompt({
+    mode: 'topic',
+    topic: 'Un día en Madrid',
+    learningLanguage: 'es',
+    level: 'A2',
+    durationMinutes: 1.5,
+  });
+  assert.ok(readingPrompt.includes('100% THUẦN 1 NGÔN NGỮ DUY NHẤT'));
+  assert.ok(readingPrompt.includes('Español'));
+});
+
+test('@englishpracticing168 layouts and variants integrate cleanly with 0 overlaps', () => {
+  const p168Variants = [
+    'p168-step-quiz-formula',
+    'p168-grammar-formula',
+    'p168-pronunciation-matrix',
+    'p168-situation-cards',
+    'p168-slider-compare',
+    'p168-story-dialogue',
+  ] as const;
+
+  for (const v of p168Variants) {
+    assert.ok(isKnownIllustrationVariant(v), `Missing variant ${v}`);
+    assert.ok(
+      getEffectiveVectorCatalog().some((entry) => entry.variant === v),
+      `Missing catalog entry for ${v}`,
+    );
+  }
+
+  const p168Comps = [
+    'p168-quiz-formula',
+    'p168-grammar-formula',
+    'p168-pronunciation',
+    'p168-situations',
+    'p168-slider-compare',
+  ] as const;
+
+  for (const compId of p168Comps) {
+    assert.ok(
+      LAYOUT_COMPOSITIONS.some((c) => c.id === compId),
+      `Missing composition ${compId}`,
+    );
+    const recomposed = recomposeProjectWithStyle(PRESET_ED_PRONUNCIATION, compId);
+    assert.equal(recomposed.compositionId, compId);
+    assert.deepEqual(
+      findVisualOverlaps(recomposed.elements),
+      [],
+      `Unexpected overlaps in ${compId}`,
+    );
+  }
+
+  assert.equal(pickCompositionFromContext('Used to + Verb grammar rule formula'), 'p168-grammar-formula');
+  assert.equal(pickCompositionFromContext('Voiced vs voiceless -ed ending sound /t/ /d/'), 'p168-pronunciation');
+  assert.equal(pickCompositionFromContext('3 everyday situations with friends and at work'), 'p168-situations');
+});
+
+
 

@@ -2188,14 +2188,15 @@ export const EnglishReelsTab: React.FC<EnglishReelsTabProps> = ({ onSendToStudio
             activeCard.content,
           cardTarget.lang,
         );
+        const canSplitTarget = enableDualTts && targetLang !== 'none';
         segments.push({
           id: activeCard.id,
           text: cleanSpeech,
           voice: cardTarget.voice,
           lang: cardTarget.lang,
-          autoSplit: roleSeparated
+          autoSplit: canSplitTarget
             ? shouldAutoSplitForTts(cleanSpeech, cardTarget.lang, explVoiceLang)
-            : undefined,
+            : false,
         });
         const explSpeech = resolveCardExplanationSpeech(activeCard);
         if (explSpeech && explSpeech.toLowerCase() !== cleanSpeech.toLowerCase()) {
@@ -2216,8 +2217,9 @@ export const EnglishReelsTab: React.FC<EnglishReelsTabProps> = ({ onSendToStudio
           secondaryVoice: enableDualTts && targetLang !== 'none' ? explanationTtsVoice : undefined,
           secondaryLang: enableDualTts && targetLang !== 'none' ? explVoiceLang : undefined,
           autoSplitLanguages:
-            segments.some((s) => s.autoSplit === true || s.autoSplit === undefined) ||
-            !roleSeparated,
+            enableDualTts &&
+            targetLang !== 'none' &&
+            segments.some((s) => s.autoSplit === true),
           rate: ttsRate,
           segments,
         },
@@ -2361,6 +2363,7 @@ export const EnglishReelsTab: React.FC<EnglishReelsTabProps> = ({ onSendToStudio
         const pos = quizPositionByCard?.get(i) ?? quizOrd;
         const { questionSpeech, answerSpeech, thinkSec } = getQuizCardSpeechParts(c, pos);
         const cleanQ = stripParenthesizedPinyinIfCjk(questionSpeech || 'Quiz question.', cardTarget.lang);
+        const canSplitTarget = enableDualTts && targetLang !== 'none';
         const qIdx = segments.length;
         segments.push({
           id: `${c.id}-q`,
@@ -2368,9 +2371,9 @@ export const EnglishReelsTab: React.FC<EnglishReelsTabProps> = ({ onSendToStudio
           pauseAfterSec: thinkSec,
           voice: cardTarget.voice,
           lang: cardTarget.lang,
-          autoSplit: roleSeparated
+          autoSplit: canSplitTarget
             ? shouldAutoSplitForTts(cleanQ, cardTarget.lang, explVoiceLang)
-            : undefined,
+            : false,
         });
         let aIdx: number | null = null;
         if (answerSpeech) {
@@ -2382,9 +2385,9 @@ export const EnglishReelsTab: React.FC<EnglishReelsTabProps> = ({ onSendToStudio
             pauseAfterSec: 0,
             voice: cardTarget.voice,
             lang: cardTarget.lang,
-            autoSplit: roleSeparated
+            autoSplit: canSplitTarget
               ? shouldAutoSplitForTts(cleanA, cardTarget.lang, explVoiceLang)
-              : undefined,
+              : false,
           });
         }
         let explIdx: number | null = null;
@@ -2423,6 +2426,7 @@ export const EnglishReelsTab: React.FC<EnglishReelsTabProps> = ({ onSendToStudio
           sanitizeTtsSpeech(c.ttsText || c.content || c.title) || 'Next lesson point.',
           cardTarget.lang,
         );
+        const canSplitTarget = enableDualTts && targetLang !== 'none';
         const qIdx = segments.length;
         segments.push({
           id: c.id,
@@ -2430,9 +2434,9 @@ export const EnglishReelsTab: React.FC<EnglishReelsTabProps> = ({ onSendToStudio
           pauseAfterSec: 0,
           voice: cardTarget.voice,
           lang: cardTarget.lang,
-          autoSplit: roleSeparated
+          autoSplit: canSplitTarget
             ? shouldAutoSplitForTts(cleanSpeech, cardTarget.lang, explVoiceLang)
-            : undefined,
+            : false,
         });
         let explIdx: number | null = null;
         if (explSpeech && explSpeech.toLowerCase() !== cleanSpeech.toLowerCase()) {
@@ -2466,9 +2470,9 @@ export const EnglishReelsTab: React.FC<EnglishReelsTabProps> = ({ onSendToStudio
         pauseAfterSec: 0.4,
         voice: oVoice,
         lang: oLang,
-        autoSplit: roleSeparated
+        autoSplit: enableDualTts && targetLang !== 'none'
           ? shouldAutoSplitForTts(extraOutroSpeech, oLang, lessonVoiceLang)
-          : undefined,
+          : false,
       });
     }
 
@@ -2486,8 +2490,9 @@ export const EnglishReelsTab: React.FC<EnglishReelsTabProps> = ({ onSendToStudio
         secondaryVoice: enableDualTts && targetLang !== 'none' ? explanationTtsVoice : undefined,
         secondaryLang: enableDualTts && targetLang !== 'none' ? explVoiceLang : undefined,
         autoSplitLanguages:
-          segments.some((s) => s.autoSplit === true || s.autoSplit === undefined) ||
-          !roleSeparated,
+          enableDualTts &&
+          targetLang !== 'none' &&
+          segments.some((s) => s.autoSplit === true),
         rate: ttsRate,
         segments,
       },

@@ -118,7 +118,7 @@ const RE_LINE_HAS_HANZI = /[\u4e00-\u9faf\u3400-\u4dbf]/;
 const RE_LINE_HAS_KANA = /[\u3040-\u30ff\u31f0-\u31ff]/;
 const RE_LINE_HAS_HANGUL = /[\uac00-\ud7af\u1100-\u11ff]/;
 const RE_LINE_HAS_VI_DIACRITIC =
-  /[ăâđêôơưàáạảãằắặẳẵầấậẩẫèéẹẻẽềếệểễìíịỉĩòóọỏõồốộổỗờớợởỡùúụủũừứựửữỳýỵỷỹĂÂĐÊÔƠƯÀÁẠẢÃẰẮẶẲẴẦẤẬẨẪÈÉẸẺẼỀẾỆỂỄÌÍỊỈĨÒÓỌỎÕỒỐỘỔỖỜỚỢỞỠÙÚỤỦŨỪỨỰỬỮỲÝỴỶỸ]/;
+  /[ăđơưảãạằắẳẵặầấẩẫậẻẽẹềếểễệỉĩịỏõọồốổỗộờớởỡợủũụừứửữựỷỹỵĂĐƠƯẢÃẠẰẮẲẴẶẦẤẨẪẬẺẼẸỀẾỂỄỆỈĨỊỎÕỌỒỐỔỖỘỜỚỞỠỢỦŨỤỪỨỬỮỰỶỸỴ]/;
 const RE_EXPLANATION_PREFIX =
   /^(?:giải thích|nghĩa|dịch|lưu ý|mẹo|mở bài|tổng kết|kết bài|note|meaning|explanation)\s*[:：\-]/i;
 
@@ -136,7 +136,7 @@ export const AudioSubtitleStudioModal: React.FC<AudioSubtitleStudioModalProps> =
   const [hasGeminiKey, setHasGeminiKey] = useState(false);
   const [hasElevenLabsKey, setHasElevenLabsKey] = useState(false);
   const [fasterWhisperAvailable, setFasterWhisperAvailable] = useState(false);
-  const [provider, setProvider] = useState<string>(() => initialSavedModal?.provider || 'auto');
+  const [provider, setProvider] = useState<string>(() => initialSavedModal?.provider || 'edge');
   const [voice, setVoice] = useState<string>(() => initialSavedModal?.voice || 'en-US-JennyNeural');
   const [secondaryVoice, setSecondaryVoice] = useState<string>(
     () => initialSavedModal?.secondaryVoice ?? 'vi-VN-HoaiMyNeural',
@@ -292,7 +292,7 @@ export const AudioSubtitleStudioModal: React.FC<AudioSubtitleStudioModalProps> =
     };
     const onReset = () => {
       setTab('tts');
-      setProvider('auto');
+      setProvider('edge');
       setVoice('en-US-JennyNeural');
       setSecondaryVoice('vi-VN-HoaiMyNeural');
       setRate(1.0);

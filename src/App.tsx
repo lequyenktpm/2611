@@ -519,7 +519,18 @@ export default function App() {
         return;
       }
       setProject((prev) => {
-        const recomposed = recomposeProjectWithStyle(prev, compositionId);
+        const normalizedPrev: LessonProject =
+          prev.compositionId === 'plain' && compositionId !== 'plain'
+            ? {
+                ...prev,
+                subtitleConfig: {
+                  position: 'bottom',
+                  size: prev.subtitleConfig?.size || 'md',
+                  boxStyle: 'card',
+                },
+              }
+            : prev;
+        const recomposed = recomposeProjectWithStyle(normalizedPrev, compositionId);
         if (compositionId === 'plain') {
           return {
             ...recomposed,
@@ -546,7 +557,12 @@ export default function App() {
                     layout: { ...el.layout, manualPosition: false },
                     props: {
                       ...el.props,
-                      variant: isDark ? 'dark-bar' : 'white-card',
+                      variant:
+                        compositionId === 'cartoon-host'
+                          ? 'yellow-pill'
+                          : isDark
+                            ? 'dark-bar'
+                            : 'white-card',
                     },
                   }
                 : el,
@@ -578,9 +594,11 @@ export default function App() {
               variant:
                 nextSub.boxStyle === 'clean'
                   ? 'plain-shadow'
-                  : isDark
-                    ? 'dark-bar'
-                    : 'white-card',
+                  : prev.compositionId === 'cartoon-host'
+                    ? 'yellow-pill'
+                    : isDark
+                      ? 'dark-bar'
+                      : 'white-card',
             },
           };
         }),

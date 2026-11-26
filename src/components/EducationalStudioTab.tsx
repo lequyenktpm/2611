@@ -2094,6 +2094,7 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
         voice: readingVoice,
         lang: baseLang,
         rate: readingTtsRate,
+        autoSplitLanguages: false,
         alignWithWhisper: true,
         whisperModel: alignModel,
         onProgress: (pct, label) => {
@@ -2106,7 +2107,7 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
       const partsToConcat: Array<{ file: File; pauseAfterSec?: number; role: 'intro' | 'body' | 'outro' }> = [];
 
       const hasVietnameseChars = (s: string) =>
-        /[àáạảãâầấậẩẫăằắặẳẵèéẹẻẽêềếệểễìíịỉĩòóọỏõôồốộổỗơờớợởỡùúụủũưừứựửữỳýỵỷỹđ]/i.test(s);
+        /[ăđơưảãạằắẳẵặầấẩẫậẻẽẹềếểễệỉĩịỏõọồốổỗộờớởỡợủũụừứửữựỷỹỵ]/i.test(s);
 
       if (activeIntroText) {
         setReadingTtsProgress(74);
@@ -2118,8 +2119,9 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
           provider: readingProvider,
           voice: useViVoice ? 'vi-VN-HoaiMyNeural' : readingVoice,
           lang: useViVoice ? 'vi-VN' : baseLang,
+          autoSplitLanguages: false,
           rate: readingTtsRate,
-          segments: [{ id: 'reading-intro', text: activeIntroText, pauseAfterSec: 0 }],
+          segments: [{ id: 'reading-intro', text: activeIntroText, pauseAfterSec: 0, autoSplit: false }],
         });
         if (introRes.audioBase64) {
           partsToConcat.push({
@@ -2153,8 +2155,9 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
           provider: readingProvider,
           voice: useViOutro ? 'vi-VN-HoaiMyNeural' : readingVoice,
           lang: useViOutro ? 'vi-VN' : baseLang,
+          autoSplitLanguages: false,
           rate: readingTtsRate,
-          segments: [{ id: 'reading-outro', text: outroText, pauseAfterSec: 0 }],
+          segments: [{ id: 'reading-outro', text: outroText, pauseAfterSec: 0, autoSplit: false }],
         });
         if (outroRes.audioBase64) {
           partsToConcat.push({
