@@ -225,13 +225,19 @@ export function resolveElementLayoutForAspect(
         });
       } else {
         const cIdx = Math.max(0, midCards.findIndex((c) => c.id === el.id));
-        const yPos = midCards.length > 1 ? 410 + cIdx * 240 : 515;
+        const hasCenterLower = midMeters.length > 0 || midQuizOpts.length > 0;
+        const yPos =
+          midCards.length > 1
+            ? 410 + cIdx * 240
+            : hasCenterLower && el.type === 'sentence-card'
+              ? 400
+              : 515;
         out.set(el.id, {
           ...el.layout,
           x: 960,
           y: yPos,
           width: Math.min(1260, Math.round(el.layout.width * 1.25)),
-          scale: 1,
+          scale: hasCenterLower ? 0.95 : 1,
         });
       }
       continue;

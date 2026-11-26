@@ -95,12 +95,15 @@ import {
   buildEnglishReelsWebAiPrompt,
   buildReelCardsRuleBased,
   buildStarterLessonForLanguage,
+  buildTranslationCardsFromInput,
+  buildTranslationChallengePrompt,
   detectReelMode,
   getLevelsForLearningLanguage,
   getQuizCardSpeechParts,
   inferLearningLangFromCards,
   parseEnglishReelsAiJson,
   recommendCreatorItemCount,
+  recommendTranslationItemCount,
   reelCardsToLessonProject,
   sanitizeTtsSpeech,
   splitMultipleExercisesFromText,
@@ -2961,5 +2964,160 @@ Answer: A`,
   assert.ok(hitLowerQuiz, 'Expected hitTestElementLayout to catch lower quiz option area');
   assert.equal(hitLowerQuiz!.element.id, quizStrip!.id);
 });
+
+test('Phản Xạ Dịch Câu: prompt, curated/custom card builder, AI JSON parser, and 3-phase choreography (9:16 & 16:9)', () => {
+  // 1. Recommended item count scales cleanly with duration & think/repeat settings
+  const shortCount = recommendTranslationItemCount(2, 4, 2);
+  const longCount = recommendTranslationItemCount(6, 3, 1);
+  assert.ok(shortCount >= 4 && shortCount <= 12);
+  assert.ok(longCount > shortCount && longCount <= 30);
+
+  // 2. Prompt builder includes ueEyNdbRQ8Y catchy title rules, thinkSec, repeatCount, and custom input vs blank creative
+  const blankPrompt = buildTranslationChallengePrompt({
+    learningLanguage: 'ja',
+    level: 'N4',
+    durationMinutes: 3,
+    itemCount: 8,
+    targetLang: 'Tiếng Việt',
+    thinkSec: 5,
+    repeatCount: 3,
+    includeNuanceTip: true,
+    aspectRatio: '16:9',
+  });
+  assert.ok(blankPrompt.includes('AI CREATIVE MODE'));
+  assert.ok(blankPrompt.includes('CATCHY YOUTUBE-STYLE HOOK TITLE RULE'));
+  assert.ok(blankPrompt.includes('"thinkSec": 5'));
+  assert.ok(blankPrompt.includes('"repeatCount": 3'));
+  assert.ok(blankPrompt.includes('N4'));
+  assert.ok(blankPrompt.includes('16:9 Landscape Widescreen'));
+
+  const customPrompt = buildTranslationChallengePrompt({
+    topicHint: 'Giao tiếp văn phòng',
+    customInputLines: 'Coi chừng cô ấy đấy! | Watch out for her!',
+    learningLanguage: 'en',
+    level: 'B1',
+    durationMinutes: 2,
+    itemCount: 5,
+    targetLang: 'Tiếng Việt',
+    thinkSec: 3,
+    repeatCount: 2,
+    includeNuanceTip: false,
+  });
+  assert.ok(customPrompt.includes('USER PROVIDED WORDS / SENTENCES'));
+  assert.ok(customPrompt.includes('Watch out for her!'));
+  assert.ok(customPrompt.includes('Giao tiếp văn phòng'));
+
+  // 3. Curated & custom deck builder produces catchy YouTube hook title and configured thinkSec/repeatCount
+  const starterZh = buildTranslationCardsFromInput({
+    learningLanguage: 'zh',
+    level: 'HSK 2',
+    itemCount: 4,
+    thinkSec: 3,
+    repeatCount: 3,
+    includeNuanceTip: true,
+  });
+  assert.ok(starterZh.title.includes('【Phản xạ HSK 2】'));
+  assert.equal(starterZh.cards[0].type, 'intro');
+  const zhTrCards = starterZh.cards.filter((c) => c.type === 'translation');
+  assert.equal(zhTrCards.length, 4);
+  assert.equal(zhTrCards[0].thinkSec, 3);
+  assert.equal(zhTrCards[0].repeatCount, 3);
+
+  const customPairs = buildTranslationCardsFromInput({
+    learningLanguage: 'en',
+    level: 'B1',
+    customInputLines: 'Coi chừng cô ấy đấy! | Watch out for her!\nĐể tôi suy nghĩ thêm. | Let me sleep on it.',
+    thinkSec: 4,
+    repeatCount: 2,
+  });
+  const customTrCards = customPairs.cards.filter((c) => c.type === 'translation');
+  assert.equal(customTrCards.length, 2);
+  assert.equal(customTrCards[0].sourcePrompt, 'Coi chừng cô ấy đấy!');
+  assert.equal(customTrCards[0].ttsText, 'Watch out for her!');
+
+  // 4. AI JSON parser preserves mode: "translation" fields
+  const parsed = parseEnglishReelsAiJson(
+    JSON.stringify({
+      mode: 'translation',
+      learningLang: 'en',
+      level: 'B1',
+      thinkSec: 3,
+      repeatCount: 3,
+      title: '【Phản xạ B1】"Coi chừng cô ấy đấy!" nói tiếng Anh sao cho chuẩn?',
+      cards: [
+        {
+          type: 'title',
+          kicker: 'PHẢN XẠ · B1',
+          title: '【Phản xạ B1】"Coi chừng cô ấy đấy!"',
+          speech: '',
+          explanationSpeech: 'Thử thách phản xạ tiếng Anh thực tế!',
+        },
+        {
+          type: 'translation',
+          indexLabel: '01 / 01',
+          sourcePrompt: 'Coi chừng cô ấy đấy!',
+          answer: 'Watch out for her!',
+          phonetic: '/wɑːtʃ aʊt fɔːr hɜːr/',
+          speech: 'Watch out for her!',
+          grammarNote: 'watch out for + O = coi chừng ai',
+          explanationSpeech: 'Rất tự nhiên khi cảnh báo bạn bè.',
+          thinkSec: 3,
+          repeatCount: 3,
+        },
+      ],
+    }),
+  );
+  assert.ok(parsed !== null);
+  assert.equal(parsed!.isTranslationMode, true);
+  assert.equal(parsed!.thinkSec, 3);
+  assert.equal(parsed!.repeatCount, 3);
+  const trParsedCard = parsed!.cards.find((c) => c.type === 'translation')!;
+  assert.equal(trParsedCard.sourcePrompt, 'Coi chừng cô ấy đấy!');
+  assert.equal(trParsedCard.repeatCount, 3);
+
+  // 5. Choreography builds 3 phases (prompt -> 3 countdown ticks + meter -> 3 repeats) with 0 overlaps in 9:16 and clean 16:9 layout
+  const proj916 = reelCardsToLessonProject(parsed!.cards, {
+    title: parsed!.title,
+    theme: 'pastel-sunrise',
+    targetLang: 'vi',
+    aspectRatio: '9:16',
+  });
+  assert.equal(findVisualOverlaps(proj916.elements).length, 0);
+
+  const countdownMeters = proj916.elements.filter((el) => el.id.includes('reel-tr-q-countdown-meter-'));
+  assert.equal(countdownMeters.length, 3);
+  const repeatPills = proj916.elements.filter((el) => el.id.includes('reel-tr-pill-rep-'));
+  assert.equal(repeatPills.length, 3);
+
+  const repeatCues = proj916.cues.filter((c) => c.id.includes('-r'));
+  assert.equal(repeatCues.length, 3);
+  const promptCue = proj916.cues.find((c) => c.id.endsWith('-q'))!;
+  assert.ok(repeatCues[0].start - promptCue.end >= 2.9, 'Think countdown gap must precede first repeat');
+
+  const proj169 = reelCardsToLessonProject(parsed!.cards, {
+    title: parsed!.title,
+    theme: 'studio-slate',
+    targetLang: 'vi',
+    aspectRatio: '16:9',
+  });
+  const firstMeter = proj169.elements.find((el) => el.id.includes('reel-tr-q-countdown-meter-'))!;
+  const promptCard = proj169.elements.find((el) => el.id.includes('reel-tr-prompt-card-'))!;
+  const meterMidTime = (firstMeter.startTime + firstMeter.endTime) / 2;
+  const layoutPhase2 = resolveElementLayoutForAspect(proj169.elements, meterMidTime, '16:9');
+  const meterBox = layoutPhase2.get(firstMeter.id)!;
+  const promptBox = layoutPhase2.get(promptCard.id)!;
+  assert.ok(
+    meterBox.y - promptBox.y >= 260,
+    `16:9 Phase 2 prompt card (y=${promptBox.y}) and meter (y=${meterBox.y}) must have >=260px vertical separation`,
+  );
+
+  const ansCard = proj169.elements.find((el) => el.id.includes('reel-tr-ans-card-'))!;
+  const ansProp = proj169.elements.find((el) => el.id.includes('reel-tr-ans-prop-'))!;
+  const revealMidTime = (ansCard.startTime + ansCard.endTime) / 2;
+  const layoutPhase3 = resolveElementLayoutForAspect(proj169.elements, revealMidTime, '16:9');
+  assert.ok(layoutPhase3.get(ansProp.id)!.x < 960, '16:9 Phase 3 nuance prop must land on left column');
+  assert.ok(layoutPhase3.get(ansCard.id)!.x > 960, '16:9 Phase 3 answer card must land on right column');
+});
+
 
 

@@ -478,7 +478,7 @@ export const ComponentDatabaseModal: React.FC<ComponentDatabaseModalProps> = ({
                     : 'text-slate-600 hover:text-slate-900'
                 }`}
               >
-                Kho &amp; Thiết Kế UI ({catalog.length})
+                Kho Mẫu UI ({catalog.length})
               </button>
               <button
                 type="button"
@@ -490,7 +490,7 @@ export const ComponentDatabaseModal: React.FC<ComponentDatabaseModalProps> = ({
                 }`}
               >
                 <Sparkles className="w-3.5 h-3.5" />
-                <span>Tạo bằng AI Web</span>
+                <span>Tạo Mẫu AI</span>
               </button>
             </div>
 

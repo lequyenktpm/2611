@@ -988,19 +988,19 @@ export const AudioSubtitleStudioModal: React.FC<AudioSubtitleStudioModalProps> =
             }`}
           >
             <FileAudio className="w-3.5 h-3.5" />
-            <span>1. Sinh Audio TTS + Đồng bộ từng từ</span>
+            <span>1. Tạo Giọng Đọc &amp; Sub</span>
           </button>
           <button
             type="button"
             onClick={() => setTab('transcribe')}
-            className={`inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold rounded-lg border transition-colors ${
+            className={`inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold rounded-lg border transition-colors whitespace-nowrap shrink-0 ${
               tab === 'transcribe'
                 ? 'bg-white border-indigo-300 text-indigo-700 shadow-xs'
                 : 'bg-transparent border-transparent text-slate-600 hover:bg-white/60'
             }`}
           >
             <Languages className="w-3.5 h-3.5" />
-            <span>2. Bóc Sub (.srt / .vtt) &amp; Dịch file gốc</span>
+            <span>2. Bóc &amp; Dịch Phụ Đề</span>
           </button>
         </div>
 

@@ -898,7 +898,7 @@ export default function App() {
               }`}
             >
               <Clapperboard className={`w-3.5 h-3.5 ${activeTab === 'studio' ? 'text-indigo-600' : 'text-slate-400'}`} />
-              <span>Studio Video ({project.aspectRatio || mp4Settings.aspectRatio || '9:16'})</span>
+              <span>Dựng Video ({project.aspectRatio || mp4Settings.aspectRatio || '9:16'})</span>
             </button>
 
             <button
@@ -911,7 +911,7 @@ export default function App() {
               }`}
             >
               <Sparkles className={`w-3.5 h-3.5 ${activeTab === 'reels' ? 'text-violet-600' : 'text-slate-400'}`} />
-              <span>English Reels Studio</span>
+              <span>Video Ngoại Ngữ AI</span>
             </button>
 
             <button
@@ -924,7 +924,7 @@ export default function App() {
               }`}
             >
               <Film className={`w-3.5 h-3.5 ${activeTab === 'edu-studio' ? 'text-emerald-600' : 'text-slate-400'}`} />
-              <span>Edu Studio 1.19 &amp; Output</span>
+              <span>Hậu Kỳ &amp; File Xuất</span>
             </button>
           </nav>
 

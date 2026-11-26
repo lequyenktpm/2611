@@ -63,6 +63,15 @@ export interface PersistedStudioSettings {
     creatorLevel?: string;
     creatorDurationMinutes?: number;
     creatorItemCount?: number;
+    translationTopicHint?: string;
+    translationCustomLines?: string;
+    translationLearningLang?: LearningLanguageId;
+    translationLevel?: string;
+    translationDurationMinutes?: number;
+    translationItemCount?: number;
+    translationThinkSec?: number;
+    translationRepeatCount?: number;
+    translationIncludeNuance?: boolean;
     lessonTitle?: string;
     rawText?: string;
     includeQuizInPrompt?: 'auto' | 'always' | 'none';

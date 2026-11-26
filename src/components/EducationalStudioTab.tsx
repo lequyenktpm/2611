@@ -2345,33 +2345,33 @@ export const EducationalStudioTab: React.FC<EducationalStudioTabProps> = ({
               }`}
             >
               <Layers className="w-3.5 h-3.5" />
-              <span>1. Merge Video + Audio</span>
+              <span>1. Ghép Video + Audio</span>
             </button>
 
             <button
               type="button"
               onClick={() => setSubTab('karaoke')}
-              className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg border transition-colors ${
+              className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg border transition-colors whitespace-nowrap shrink-0 ${
                 subTab === 'karaoke'
                   ? 'bg-white border-indigo-300 text-indigo-700 shadow-xs'
                   : 'border-transparent text-slate-600 hover:bg-white/60'
               }`}
             >
               <Music className="w-3.5 h-3.5" />
-              <span>2. Add Karaoke Sub &amp; Mix</span>
+              <span>2. Phụ Đề &amp; Nhạc Nền</span>
             </button>
 
             <button
               type="button"
               onClick={() => setSubTab('align')}
-              className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg border transition-colors ${
+              className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg border transition-colors whitespace-nowrap shrink-0 ${
                 subTab === 'align'
                   ? 'bg-white border-indigo-300 text-indigo-700 shadow-xs'
                   : 'border-transparent text-slate-600 hover:bg-white/60'
               }`}
             >
               <BookOpen className="w-3.5 h-3.5" />
-              <span>3. Reading Along Studio</span>
+              <span>3. Video Đọc Theo Chữ</span>
             </button>
           </div>
 
