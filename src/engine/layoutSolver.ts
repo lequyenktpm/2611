@@ -153,7 +153,7 @@ export function estimateElementHalfExtents(el: SceneElement): {
       } else if (variant === 'avatar-speech') {
         baseHalfH = 116;
       } else if (variant === 'cartoon-host') {
-        baseHalfH = 440;
+        baseHalfH = 325;
       } else if (
         variant === 'p168-step-quiz-formula' ||
         variant === 'p168-situation-cards'
@@ -298,6 +298,10 @@ function getZoneTier(el: SceneElement): number {
     case 'topic-pill':
       return 1;
     case 'illustration-prop':
+      if (el.props.kind === 'illustration-prop' && el.props.variant === 'cartoon-host') {
+        return 4.2;
+      }
+      return el.layout.y >= 1150 ? 3.8 : 2;
     case 'word-stack':
     case 'shape-3d':
       return el.layout.y >= 1150 ? 3.8 : 2;

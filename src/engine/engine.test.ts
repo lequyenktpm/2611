@@ -15,7 +15,9 @@ import { choreographFromTranscript, resyncProjectTimingToCues } from './autoChor
 import { computeElementFrameState, computeStaggerItemState } from './animationMath';
 import {
   classifyCharToViseme,
+  computeCartoonHostContextFromElements,
   computeSpeechLipSyncState,
+  formatCartoonHostHeadline,
 } from './cartoonHostAnimator';
 import {
   cleanDownloadFileName,
@@ -3853,18 +3855,122 @@ test('cartoonHostAnimator produces smooth speech-synced visemes, blinks, and arm
   assert.equal(awake.blinkFactor, 0);
 });
 
-test('cartoon-host @Gimmys composition produces yellow-pill karaoke and 0 visual overlaps', () => {
+test('cartoon-host @Gimmys composition produces interactive cards, yellow-pill karaoke, and 0 visual overlaps', () => {
   const proj = recomposeProjectWithStyle(PRESET_JP_EN_POLITE, 'cartoon-host');
   assert.equal(proj.compositionId, 'cartoon-host');
+  assert.equal(formatCartoonHostHeadline('Can / Could / May (Transcript Nhật-Anh 1:42)'), 'Can / Could / May');
+  assert.equal(formatCartoonHostHeadline(PRESET_JP_EN_POLITE.title), '水が欲しい時、CanとCouldどっち？');
+
   const hostEl = proj.elements.find(
     (e) => e.props.kind === 'illustration-prop' && e.props.variant === 'cartoon-host',
   );
   assert.ok(hostEl, 'cartoon-host illustration element should exist');
+  const meterEl = proj.elements.find((e) => e.type === 'tone-meter');
+  if (meterEl && hostEl) {
+    assert.ok(hostEl.layout.y > meterEl.layout.y, 'Gimmy must sit cleanly below tone-meter in 9:16');
+  }
+  const introCheckState = computeSpeechLipSyncState(
+    [{ id: 'intro', start: 0, end: 5, text: 'Học từ vựng English mỗi ngày!', words: [] }],
+    1.0,
+    { activeBadge: 'none', activeText: 'Từ vựng tiếng Anh' },
+  );
+  assert.notEqual(introCheckState.mood, 'worried', 'Substring -ng in English/Từ vựng must never falsely trigger worried');
+  const interactiveCards = proj.elements.filter((e) => e.type === 'sentence-card');
+  assert.ok(interactiveCards.length >= 2, 'cartoon-host should preserve interactive teaching cards for Gimmy to point at');
+  const interactivePills = proj.elements.filter((e) => e.type === 'topic-pill');
+  assert.ok(interactivePills.length >= 1, 'cartoon-host should include context topic pills');
   const yellowSub = proj.elements.find(
     (e) => e.props.kind === 'karaoke-card' && e.props.variant === 'yellow-pill',
   );
   assert.ok(yellowSub, 'cartoon-host should apply yellow-pill karaoke card styling');
   assert.deepEqual(findVisualOverlaps(proj.elements), []);
+});
+
+test('cartoon-host @Gimmys context-aware reactions, multi-aspect 16:9/1:1/4:5 layouts, Reels cards, and AI prompts', () => {
+  const proj = recomposeProjectWithStyle(PRESET_JP_EN_POLITE, 'cartoon-host');
+
+  // 1. Worried / warning context reaction on cross/AVOID card (~3.5s)
+  const worriedCtx916 = computeCartoonHostContextFromElements(proj.elements, 3.5, proj.cues, '9:16');
+  const worriedState = computeSpeechLipSyncState(proj.cues, 3.5, worriedCtx916);
+  assert.equal(worriedState.mood, 'worried');
+  assert.equal(worriedState.gestureMode, 'warn-avoid');
+  assert.equal(worriedState.pointerGlyph, 'cross');
+  assert.ok(worriedState.browSlope < -0.3);
+  assert.ok(worriedState.smileBias < 0);
+
+  // 2. Happy pointing reaction on check/NATURAL card (~34.5s: "Could I have some water, please?") in 9:16 vs 16:9
+  const happyCtx916 = computeCartoonHostContextFromElements(proj.elements, 34.5, proj.cues, '9:16');
+  const happyState916 = computeSpeechLipSyncState(proj.cues, 34.5, happyCtx916);
+  assert.equal(happyState916.mood, 'happy');
+  assert.equal(happyState916.pointerGlyph, 'check');
+  assert.ok(happyState916.eyeTargetY < -0.2);
+
+  const happyCtx169 = computeCartoonHostContextFromElements(proj.elements, 34.5, proj.cues, '16:9');
+  const happyState169 = computeSpeechLipSyncState(proj.cues, 34.5, happyCtx169);
+  assert.equal(happyState169.mood, 'happy');
+  assert.equal(happyState169.gestureMode, 'point-right');
+  assert.ok(happyState169.eyeTargetX > 0.3);
+
+  // 3. Curious brow & question glyph on quiz context
+  const curiousState = computeSpeechLipSyncState(proj.cues, 1.0, {
+    activeBadge: 'question',
+    activeText: 'Which one is natural?',
+    targetDirection: 'up',
+  });
+  assert.equal(curiousState.mood, 'curious');
+  assert.equal(curiousState.pointerGlyph, 'question');
+  assert.ok(curiousState.browSlope > 0.4);
+
+  // 4. Responsive multi-aspect layouts (16:9, 1:1, 4:5)
+  const reelsBuilt = buildReelCardsRuleBased('Avoid: Give me water.\nNatural: Could I have some water?', {
+    mode: 'vocab',
+    targetLang: 'Tiếng Nhật',
+  });
+  const reelsProj = reelCardsToLessonProject(reelsBuilt.cards, {
+    title: '水が欲しい時、CanとCouldどっち？',
+    compositionId: 'cartoon-host',
+    aspectRatio: '9:16',
+  });
+  assert.deepEqual(findVisualOverlaps(reelsProj.elements), [], 'Reels 9:16 cartoon-host should have 0 overlaps');
+
+  const map169 = resolveElementLayoutForAspect(reelsProj.elements, 1.0, '16:9', reelsProj.subtitleConfig, 'cartoon-host');
+  const host169 = reelsProj.elements.find((e) => e.id === 'reel-cartoon-host-main');
+  const card169 = reelsProj.elements.find((e) => e.type === 'sentence-card' && e.startTime <= 1.0 && e.endTime >= 1.0);
+  const strip169 = reelsProj.elements.find((e) => e.type === 'comparison-strip' && e.startTime <= 1.0 && e.endTime >= 1.0);
+  const kara169 = reelsProj.elements.find((e) => e.type === 'karaoke-card' && e.startTime <= 1.0 && e.endTime >= 1.0);
+  assert.ok(host169 && card169 && strip169 && kara169);
+  assert.ok((map169.get(host169.id)?.x ?? 0) < 600, '16:9 should place Gimmy on left column');
+  assert.ok((map169.get(card169.id)?.x ?? 0) > 1100, '16:9 should place teaching card on right column');
+  assert.ok((map169.get(strip169.id)?.x ?? 0) > 1100, '16:9 should place strip on right column (no header overlap)');
+  assert.ok((map169.get(kara169.id)?.y ?? 0) >= 900, '16:9 karaoke sits cleanly at bottom');
+
+  const map11 = resolveElementLayoutForAspect(reelsProj.elements, 1.0, '1:1', reelsProj.subtitleConfig, 'cartoon-host');
+  assert.ok((map11.get(host169.id)?.x ?? 0) < 450, '1:1 places Gimmy on left');
+  assert.ok((map11.get(card169.id)?.x ?? 0) > 600, '1:1 places teaching card on right');
+
+  const map45 = resolveElementLayoutForAspect(reelsProj.elements, 1.0, '4:5', reelsProj.subtitleConfig, 'cartoon-host');
+  assert.ok((map45.get(card169.id)?.y ?? 0) < (map45.get(host169.id)?.y ?? 0), '4:5 places card above Gimmy');
+
+  // 5. Updated @Gimmys AI prompts across Tab 1 & Tab 2
+  const studioPrompt = buildSceneGenerationPrompt(proj.cues, {
+    title: '水が欲しい時、CanとCouldどっち？',
+    compositionId: 'cartoon-host',
+  });
+  assert.ok(studioPrompt.includes('@Gimmys'));
+  assert.ok(studioPrompt.includes('KHÔNG TẠO BONG BÓNG THOẠI'));
+  const reelsPrompt = buildEnglishReelsWebAiPrompt({
+    sourceText: 'Could I have some water?',
+    mode: 'auto',
+    targetLang: 'Tiếng Nhật',
+    compositionId: 'cartoon-host',
+  });
+  assert.ok(reelsPrompt.includes('KHÔNG viết lời thừa làm bong bóng thoại'));
+  const creatorPrompt = buildAiCreatorWebAiPrompt({
+    topicHint: 'Polite water requests',
+    targetLang: 'Tiếng Nhật',
+    compositionId: 'cartoon-host',
+  });
+  assert.ok(creatorPrompt.includes('@Gimmys'));
 });
 
 test('splitMixedLanguageTtsSpans preserves pure Spanish & French stories in 1 TTS voice without switching to Vietnamese or Pinyin', () => {

@@ -9,7 +9,13 @@ import {
 import { getCustomComponentByVariant } from './customComponentStore';
 import { VectorPrimitive } from './customComponentTypes';
 import { drawPresetBackground, getBackgroundPresetMeta } from './backgroundPresets';
-import { computeSpeechLipSyncState, type CartoonLipSyncFrame } from './cartoonHostAnimator';
+import {
+  computeCartoonHostContextFromElements,
+  computeSpeechLipSyncState,
+  formatCartoonHostHeadline,
+  type CartoonHostContext,
+  type CartoonLipSyncFrame,
+} from './cartoonHostAnimator';
 import type { ExportAspectRatioId } from './mp4Config';
 import {
   BackgroundFitMode,
@@ -78,18 +84,276 @@ export function resolveElementLayoutForAspect(
   const explicitPos = subtitleConfig?.position ?? (compositionId === 'plain' ? 'center' : undefined);
   const stage = getStageDimensionsForAspect(aspectRatio);
 
+  const isCartoonHostProject =
+    compositionId === 'cartoon-host' ||
+    elements.some(
+      (el) => el.props.kind === 'illustration-prop' && el.props.variant === 'cartoon-host',
+    );
+
   if (aspectRatio === '9:16') {
+    const visible916 = isCartoonHostProject
+      ? elements.filter((el) => time >= el.startTime - 0.01 && time <= el.endTime + 0.01)
+      : [];
+    const hasTopStrip916 = visible916.some(
+      (el) => el.type === 'comparison-strip' && el.layout.y < 900 && !el.id.includes('-quiz-opts-'),
+    );
     for (const el of elements) {
-      if (el.type === 'karaoke-card' && explicitPos && !el.layout.manualPosition) {
+      if (el.layout.manualPosition) {
+        out.set(el.id, el.layout);
+        continue;
+      }
+      if (el.type === 'karaoke-card' && explicitPos) {
         out.set(el.id, {
           ...el.layout,
           x: stage.width / 2,
           y: resolveKaraokeTargetY(explicitPos, aspectRatio, stage.height),
           width: compositionId === 'plain' ? 960 : el.layout.width,
         });
-      } else {
-        out.set(el.id, el.layout);
+        continue;
       }
+      if (isCartoonHostProject) {
+        const isTopSub = explicitPos === 'top';
+        if (el.type === 'comparison-strip' && el.layout.y < 900 && !el.id.includes('-quiz-opts-')) {
+          out.set(el.id, {
+            ...el.layout,
+            y: isTopSub ? Math.max(el.layout.y, 350) : Math.max(el.layout.y, 196),
+            scale: Math.min(el.layout.scale || 1, 0.9),
+          });
+          continue;
+        }
+        if (el.type === 'topic-pill' && el.layout.y < 520) {
+          out.set(el.id, {
+            ...el.layout,
+            y: isTopSub ? Math.max(el.layout.y, 445) : hasTopStrip916 ? Math.max(el.layout.y, 296) : Math.max(el.layout.y, 205),
+            scale: Math.min(el.layout.scale || 1, 0.92),
+          });
+          continue;
+        }
+        if (el.type === 'sentence-card') {
+          out.set(el.id, {
+            ...el.layout,
+            y: isTopSub ? Math.max(el.layout.y, 600) : hasTopStrip916 ? Math.max(465, Math.min(el.layout.y, 505)) : Math.max(385, Math.min(el.layout.y, 435)),
+            scale: Math.min(el.layout.scale || 1, 0.92),
+          });
+          continue;
+        }
+        if (el.type === 'tone-meter') {
+          out.set(el.id, {
+            ...el.layout,
+            x: 540,
+            y: isTopSub ? 760 : 595,
+            width: 700,
+            scale: Math.min(el.layout.scale || 0.78, 0.78),
+          });
+          continue;
+        }
+        if (el.props.kind === 'illustration-prop' && el.props.variant === 'cartoon-host') {
+          out.set(el.id, {
+            ...el.layout,
+            x: 540,
+            y: isTopSub ? 1135 : 1085,
+            width: 820,
+            scale: Math.min(el.layout.scale || 0.92, 0.92),
+          });
+          continue;
+        }
+      }
+      out.set(el.id, el.layout);
+    }
+    return out;
+  }
+
+  const visible = elements.filter((el) => time >= el.startTime - 0.01 && time <= el.endTime + 0.01);
+  const topStrip = visible.filter(
+    (el) => el.type === 'comparison-strip' && el.layout.y < 900 && !el.id.includes('-quiz-opts-'),
+  );
+  const hasTopStrip = topStrip.length > 0;
+
+  const isTopPill = (el: SceneElement): boolean =>
+    (el.type === 'topic-pill' && el.layout.y < 520) ||
+    (el.type === 'shape-3d' &&
+      el.props.kind === 'shape-3d' &&
+      el.props.shapeType === 'pill_3d' &&
+      el.layout.y < 420);
+
+  const isQuizOptStrip = (el: SceneElement): boolean =>
+    el.type === 'comparison-strip' && (el.id.includes('-quiz-opts-') || el.layout.y >= 900);
+
+  const isCountdownMeter = (el: SceneElement): boolean =>
+    el.id.includes('-q-countdown-meter-') || el.id.includes('-tr-q-countdown-meter-');
+
+  const isCartoonHostEl = (el: SceneElement): boolean =>
+    el.props.kind === 'illustration-prop' && el.props.variant === 'cartoon-host';
+
+  const isRightFocal = (el: SceneElement): boolean =>
+    el.type === 'sentence-card' || el.type === 'tone-meter';
+
+  const isLeftVisual = (el: SceneElement): boolean =>
+    (el.type === 'illustration-prop' && !isCountdownMeter(el)) || el.type === 'word-stack';
+
+  const midVisuals = visible.filter(isLeftVisual);
+  const midCards = visible.filter(isRightFocal);
+  const mid3dBlocks = visible.filter((el) => el.type === 'shape-3d' && !isTopPill(el));
+  const midQuizOpts = visible.filter(isQuizOptStrip);
+  const midMeters = visible.filter(isCountdownMeter);
+  const hasTopSubCollision = explicitPos === 'top';
+
+  if (isCartoonHostProject && (aspectRatio === '1:1' || aspectRatio === '4:5')) {
+    const hasLowerRight = midQuizOpts.length > 0 || midMeters.length > 0 || visible.some((v) => v.type === 'tone-meter');
+    const hasCompanion =
+      midCards.length > 0 || midQuizOpts.length > 0 || midMeters.length > 0 || hasTopStrip || visible.some(isTopPill);
+
+    if (aspectRatio === '4:5') {
+      // 1080 x 1350: Clean stacked responsive vertical layout (Header -> Strip -> Pill -> Card -> Gimmy -> Karaoke)
+      for (const el of elements) {
+        if (el.layout.manualPosition) {
+          out.set(el.id, el.layout);
+          continue;
+        }
+        if (el.type === 'karaoke-card') {
+          out.set(el.id, {
+            ...el.layout,
+            x: 540,
+            y: resolveKaraokeTargetY(explicitPos || 'bottom', '4:5', stage.height),
+            width: 920,
+            scale: 0.92,
+          });
+          continue;
+        }
+        if (el.type === 'comparison-strip' && !isQuizOptStrip(el)) {
+          out.set(el.id, {
+            ...el.layout,
+            x: 540,
+            y: hasTopSubCollision ? 345 : 172,
+            width: 880,
+            scale: 0.84,
+          });
+          continue;
+        }
+        if (isTopPill(el)) {
+          out.set(el.id, {
+            ...el.layout,
+            x: 540,
+            y: hasTopSubCollision ? (hasTopStrip ? 425 : 350) : hasTopStrip ? 248 : 178,
+            width: 620,
+            scale: 0.84,
+          });
+          continue;
+        }
+        if (el.type === 'sentence-card') {
+          out.set(el.id, {
+            ...el.layout,
+            x: 540,
+            y: hasTopSubCollision ? 545 : hasTopStrip ? 385 : 330,
+            width: 820,
+            scale: 0.82,
+          });
+          continue;
+        }
+        if (el.type === 'tone-meter' || isQuizOptStrip(el) || isCountdownMeter(el)) {
+          out.set(el.id, {
+            ...el.layout,
+            x: 540,
+            y: hasTopSubCollision ? 690 : 530,
+            width: 780,
+            scale: 0.72,
+          });
+          continue;
+        }
+        if (isCartoonHostEl(el)) {
+          out.set(el.id, {
+            ...el.layout,
+            x: 540,
+            y: hasTopSubCollision ? 920 : hasLowerRight ? 835 : 795,
+            width: 780,
+            scale: hasLowerRight ? 0.68 : 0.74,
+          });
+          continue;
+        }
+        out.set(el.id, {
+          ...el.layout,
+          x: 540,
+          y: Math.min(620, el.layout.y),
+          width: Math.min(820, el.layout.width),
+          scale: 0.76,
+        });
+      }
+      return out;
+    }
+
+    // 1:1 Square (1080 x 1080): Two-column split (Gimmy left pointing right, cards right)
+    for (const el of elements) {
+      if (el.layout.manualPosition) {
+        out.set(el.id, el.layout);
+        continue;
+      }
+      if (el.type === 'karaoke-card') {
+        out.set(el.id, {
+          ...el.layout,
+          x: 540,
+          y: resolveKaraokeTargetY(explicitPos || 'bottom', '1:1', stage.height),
+          width: 940,
+          scale: 0.9,
+        });
+        continue;
+      }
+      if (el.type === 'comparison-strip' && !isQuizOptStrip(el)) {
+        out.set(el.id, {
+          ...el.layout,
+          x: 765,
+          y: hasTopSubCollision ? 295 : 80,
+          width: 560,
+          scale: 0.7,
+        });
+        continue;
+      }
+      if (isTopPill(el)) {
+        out.set(el.id, {
+          ...el.layout,
+          x: 765,
+          y: hasTopSubCollision ? (hasTopStrip ? 375 : 300) : hasTopStrip ? 168 : 108,
+          width: 480,
+          scale: 0.76,
+        });
+        continue;
+      }
+      if (el.type === 'sentence-card') {
+        out.set(el.id, {
+          ...el.layout,
+          x: 765,
+          y: hasLowerRight ? 360 : 455,
+          width: 530,
+          scale: 0.78,
+        });
+        continue;
+      }
+      if (el.type === 'tone-meter' || isQuizOptStrip(el) || isCountdownMeter(el)) {
+        out.set(el.id, {
+          ...el.layout,
+          x: 765,
+          y: 625,
+          width: 520,
+          scale: 0.72,
+        });
+        continue;
+      }
+      if (isCartoonHostEl(el)) {
+        out.set(el.id, {
+          ...el.layout,
+          x: hasCompanion ? 280 : 540,
+          y: hasTopSubCollision ? 595 : 550,
+          width: 680,
+          scale: hasCompanion ? 0.65 : 0.74,
+        });
+        continue;
+      }
+      out.set(el.id, {
+        ...el.layout,
+        x: 765,
+        y: 460,
+        width: 520,
+        scale: 0.72,
+      });
     }
     return out;
   }
@@ -125,43 +389,122 @@ export function resolveElementLayoutForAspect(
     return out;
   }
 
-  // 16:9 Widescreen (1920 x 1080) adaptive layout
-  const visible = elements.filter((el) => time >= el.startTime - 0.01 && time <= el.endTime + 0.01);
-  const topStrip = visible.filter(
-    (el) => el.type === 'comparison-strip' && el.layout.y < 900 && !el.id.includes('-quiz-opts-'),
-  );
-  const hasTopStrip = topStrip.length > 0;
+  // 16:9 Widescreen (1920 x 1080) dedicated responsive choreography for Cartoon Host (@Gimmys)
+  if (isCartoonHostProject) {
+    const hasQuiz = midQuizOpts.length > 0;
+    const hasLowerRight =
+      hasQuiz || midMeters.length > 0 || visible.some((v) => v.type === 'tone-meter');
+    const hasRightColumn =
+      hasTopStrip ||
+      visible.some(isTopPill) ||
+      midCards.length > 0 ||
+      hasLowerRight ||
+      midVisuals.some((v) => !isCartoonHostEl(v));
 
-  const isTopPill = (el: SceneElement): boolean =>
-    (el.type === 'topic-pill' && el.layout.y < 520) ||
-    (el.type === 'shape-3d' &&
-      el.props.kind === 'shape-3d' &&
-      el.props.shapeType === 'pill_3d' &&
-      el.layout.y < 420);
+    for (const el of elements) {
+      if (el.layout.manualPosition) {
+        out.set(el.id, el.layout);
+        continue;
+      }
+      if (el.type === 'karaoke-card') {
+        const targetY = explicitPos
+          ? resolveKaraokeTargetY(explicitPos, '16:9', stage.height)
+          : 948;
+        out.set(el.id, {
+          ...el.layout,
+          x: 960,
+          y: targetY,
+          width: Math.min(1680, Math.max(1380, Math.round(el.layout.width * 1.65))),
+          scale: explicitPos === 'center' ? 1 : 0.94,
+        });
+        continue;
+      }
+      if (isCartoonHostEl(el)) {
+        out.set(el.id, {
+          ...el.layout,
+          x: hasRightColumn ? 455 : 960,
+          y: hasTopSubCollision ? 620 : 585,
+          width: 780,
+          scale: 0.78,
+        });
+        continue;
+      }
+      if (el.type === 'comparison-strip' && !isQuizOptStrip(el)) {
+        out.set(el.id, {
+          ...el.layout,
+          x: 1365,
+          y: hasTopSubCollision ? 295 : 88,
+          width: 920,
+          scale: 0.88,
+        });
+        continue;
+      }
+      if (isTopPill(el)) {
+        out.set(el.id, {
+          ...el.layout,
+          x: 1365,
+          y: hasTopSubCollision ? (hasTopStrip ? 385 : 310) : hasTopStrip ? 182 : 112,
+          width: 740,
+          scale: 0.88,
+        });
+        continue;
+      }
+      if (el.type === 'sentence-card') {
+        out.set(el.id, {
+          ...el.layout,
+          x: 1365,
+          y: hasLowerRight ? (hasTopSubCollision ? 515 : 378) : hasTopSubCollision ? 560 : 485,
+          width: 880,
+          scale: hasLowerRight ? 0.88 : 0.98,
+        });
+        continue;
+      }
+      if (isQuizOptStrip(el)) {
+        out.set(el.id, {
+          ...el.layout,
+          x: 1365,
+          y: midMeters.length > 0 ? 635 : 675,
+          width: 840,
+          scale: 0.82,
+        });
+        continue;
+      }
+      if (isCountdownMeter(el)) {
+        out.set(el.id, {
+          ...el.layout,
+          x: 1365,
+          y: hasQuiz ? 810 : 695,
+          width: 780,
+          scale: hasQuiz ? 0.62 : 0.72,
+        });
+        continue;
+      }
+      if (el.type === 'tone-meter') {
+        out.set(el.id, {
+          ...el.layout,
+          x: 1365,
+          y: 675,
+          width: 780,
+          scale: 0.86,
+        });
+        continue;
+      }
+      // Companion illustration/word-stack in right column
+      out.set(el.id, {
+        ...el.layout,
+        x: 1365,
+        y: 515,
+        width: 840,
+        scale: 0.88,
+      });
+    }
+    return out;
+  }
 
-  const isQuizOptStrip = (el: SceneElement): boolean =>
-    el.type === 'comparison-strip' && (el.id.includes('-quiz-opts-') || el.layout.y >= 900);
-
-  const isCountdownMeter = (el: SceneElement): boolean =>
-    el.id.includes('-q-countdown-meter-');
-
-  const isRightFocal = (el: SceneElement): boolean =>
-    el.type === 'sentence-card' || el.type === 'tone-meter';
-
-  const isLeftVisual = (el: SceneElement): boolean =>
-    (el.type === 'illustration-prop' && !isCountdownMeter(el)) || el.type === 'word-stack';
-
-  const midVisuals = visible.filter(isLeftVisual);
-  const midCards = visible.filter(isRightFocal);
-  const mid3dBlocks = visible.filter((el) => el.type === 'shape-3d' && !isTopPill(el));
-  const midQuizOpts = visible.filter(isQuizOptStrip);
-  const midMeters = visible.filter(isCountdownMeter);
-
+  // 16:9 Widescreen (1920 x 1080) adaptive layout for standard compositions
   const hasSplitColumns =
     (midVisuals.length > 0 && (midCards.length > 0 || midQuizOpts.length > 0 || midMeters.length > 0)) ||
     mid3dBlocks.length >= 2;
-
-  const hasTopSubCollision = explicitPos === 'top';
 
   for (const el of elements) {
     if (el.layout.manualPosition) {
@@ -247,14 +590,12 @@ export function resolveElementLayoutForAspect(
           scale: Math.min(0.95, el.layout.scale || 1),
         });
       } else {
-        const isCartoonHost =
-          el.props.kind === 'illustration-prop' && el.props.variant === 'cartoon-host';
         out.set(el.id, {
           ...el.layout,
           x: 960,
-          y: hasTopSubCollision ? 560 : isCartoonHost ? 485 : 515,
+          y: hasTopSubCollision ? 560 : 515,
           width: Math.min(1260, Math.round(el.layout.width * 1.2)),
-          scale: isCartoonHost ? 0.8 : Math.min(1.02, el.layout.scale || 1),
+          scale: Math.min(1.02, el.layout.scale || 1),
         });
       }
       continue;
@@ -590,25 +931,119 @@ function drawCharacterAvatar(
 }
 
 /**
- * Draws a silky-smooth, speech-synced @Gimmys-style 2D cartoon mascot:
+ * Renders the signature @Gimmys golden-orange outlined short hook headline
+ * directly in stage coordinates so it never clips or collides across 9:16, 16:9, 1:1, or 4:5.
+ */
+function drawCartoonHostHeadline(
+  ctx: CanvasRenderingContext2D,
+  rawTitle: string | undefined,
+  aspectRatio: ExportAspectRatioId = '9:16',
+  stageW: number,
+  subtitlePos?: 'top' | 'center' | 'bottom',
+  hasRightHeaderSplit = false,
+) {
+  const cleanTitle = formatCartoonHostHeadline(rawTitle);
+  if (!cleanTitle) return;
+
+  let centerX = stageW / 2;
+  let centerY = 92;
+  let maxW = stageW - 96;
+  let maxH = 104;
+  let maxFontSize = 54;
+
+  if (aspectRatio === '16:9') {
+    if (hasRightHeaderSplit) {
+      centerX = 430;
+      maxW = 720;
+      maxFontSize = 44;
+    } else {
+      centerX = stageW / 2;
+      maxW = 1480;
+      maxFontSize = 52;
+    }
+    centerY = subtitlePos === 'top' ? 68 : 96;
+    maxH = 92;
+  } else if (aspectRatio === '1:1') {
+    if (hasRightHeaderSplit) {
+      centerX = 285;
+      maxW = 470;
+      maxFontSize = 36;
+    } else {
+      centerX = stageW / 2;
+      maxW = 920;
+      maxFontSize = 44;
+    }
+    centerY = subtitlePos === 'top' ? 64 : 88;
+    maxH = 88;
+  } else if (aspectRatio === '4:5') {
+    centerX = stageW / 2;
+    centerY = subtitlePos === 'top' ? 64 : 82;
+    maxW = 920;
+    maxH = 88;
+    maxFontSize = 46;
+  } else {
+    centerX = stageW / 2;
+    centerY = subtitlePos === 'top' ? 74 : 92;
+    maxW = 920;
+    maxH = 104;
+    maxFontSize = 54;
+  }
+
+  const fitted = fitWrappedTextBlock(ctx, cleanTitle, maxW, maxH, {
+    fontWeight: 900,
+    maxFontSize,
+    minFontSize: 22,
+    maxLines: 2,
+    lineHeightRatio: 1.12,
+  });
+
+  ctx.save();
+  ctx.font = `900 ${fitted.fontSize}px ${FONT_DISPLAY}`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  const startY = centerY - ((fitted.lines.length - 1) * fitted.lineHeight) / 2;
+  const grad = ctx.createLinearGradient(0, centerY - 36, 0, centerY + 36);
+  grad.addColorStop(0, '#FEF08A');
+  grad.addColorStop(0.55, '#FACC15');
+  grad.addColorStop(1, '#F97316');
+
+  fitted.lines.forEach((ln, li) => {
+    const ly = startY + li * fitted.lineHeight;
+    ctx.save();
+    ctx.shadowColor = 'rgba(250, 204, 21, 0.50)';
+    ctx.shadowBlur = 16;
+    ctx.strokeStyle = '#3B1D0A';
+    ctx.lineWidth = Math.max(8, Math.round(fitted.fontSize * 0.24));
+    ctx.lineJoin = 'round';
+    ctx.strokeText(ln, centerX, ly, maxW);
+    ctx.restore();
+    ctx.fillStyle = grad;
+    ctx.fillText(ln, centerX, ly, maxW);
+  });
+  ctx.restore();
+}
+
+/**
+ * Draws a silky-smooth, context-reactive & speech-synced @Gimmys-style 2D cartoon mascot:
  * - Warm shaded round tan head with thick ink outlines
- * - Blinking oval eyes & expressive eyebrows
- * - Continuous viseme-interpolated D-shape / oval lip-sync mouth
- * - Crisp white tunic torso + articulated Bezier stick arms with 4-finger cartoon hands
- * - Planted stick legs with gentle conversational breathing
+ * - Expressive mood-driven eyes (gaze tracking toward active card) & eyebrows (worried/curious/happy)
+ * - Continuous viseme-interpolated mouth modulated by context mood
+ * - Articulated stick arms that point UP (9:16/4:5) or RIGHT (16:9/1:1), warn on mistakes, or celebrate tips
+ * - ZERO speech bubble above head so subtitles & interactive teaching cards stay crystal clear
  */
 function drawCartoonHostCharacter(
   ctx: CanvasRenderingContext2D,
   time: number,
   cues: TranscriptCue[] = [],
-  propData?: IllustrationPropData,
+  _propData?: IllustrationPropData,
+  hostContext?: CartoonHostContext,
 ) {
-  const lip = computeSpeechLipSyncState(cues, time);
+  const lip = computeSpeechLipSyncState(cues, time, hostContext);
   const ink = '#0F172A';
 
   ctx.save();
 
-  // Helper to draw a fanned 4-finger cartoon hand at wrist (wx, wy) pointing along angle
+  // Helper to draw a fanned cartoon hand at wrist (wx, wy)
   const drawCartoonHand = (wx: number, wy: number, baseAngle: number, spreadFlip = 1, compact = false) => {
     const fingerOffsets = compact ? [-0.26, 0, 0.26] : [-0.46, -0.14, 0.18, 0.52];
     const fingerLens = compact ? [19, 23, 19] : [26, 33, 31, 24];
@@ -632,7 +1067,75 @@ function drawCartoonHostCharacter(
     ctx.restore();
   };
 
-  // Helper to draw smooth articulated Bezier arm from shoulder to elbow to wrist
+  // Pointing hand with crisp index finger + subtle curled palm fingers
+  const drawPointingHand = (
+    wx: number,
+    wy: number,
+    dirAngle: number,
+    glyph: CartoonLipSyncFrame['pointerGlyph'],
+  ) => {
+    ctx.save();
+    ctx.strokeStyle = ink;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    // Extended index finger
+    const tipX = wx + Math.cos(dirAngle) * 40;
+    const tipY = wy + Math.sin(dirAngle) * 40;
+    ctx.lineWidth = 6.2;
+    ctx.beginPath();
+    ctx.moveTo(wx, wy);
+    ctx.lineTo(tipX, tipY);
+    ctx.stroke();
+
+    // Two curled helper fingers
+    ctx.lineWidth = 4.6;
+    [-0.45, 0.48].forEach((off) => {
+      const a = dirAngle + off;
+      ctx.beginPath();
+      ctx.moveTo(wx, wy);
+      ctx.lineTo(wx + Math.cos(a) * 16, wy + Math.sin(a) * 16);
+      ctx.stroke();
+    });
+
+    // Subtle crisp reaction badge near pointing tip (never overlapping face/cards)
+    if (glyph) {
+      const gx = tipX + Math.cos(dirAngle) * 28;
+      const gy = tipY + Math.sin(dirAngle) * 28;
+      const badgeColor =
+        glyph === 'cross'
+          ? '#DC2626'
+          : glyph === 'check'
+            ? '#16A34A'
+            : glyph === 'question'
+              ? '#D97706'
+              : '#2563EB';
+      const symbol =
+        glyph === 'cross'
+          ? '✕'
+          : glyph === 'check'
+            ? '✓'
+            : glyph === 'question'
+              ? '?'
+              : '!';
+
+      ctx.fillStyle = '#FFFFFF';
+      ctx.beginPath();
+      ctx.arc(gx, gy, 18, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = badgeColor;
+      ctx.lineWidth = 3.5;
+      ctx.stroke();
+
+      ctx.fillStyle = badgeColor;
+      ctx.font = `900 21px ${FONT_DISPLAY}`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(symbol, gx, gy + 1);
+    }
+    ctx.restore();
+  };
+
+  // Smooth articulated Bezier arm
   const drawArticulatedArm = (
     sx: number,
     sy: number,
@@ -666,7 +1169,7 @@ function drawCartoonHostCharacter(
     }
   };
 
-  // Helper to draw sleek bent-elbow hip-resting arm matching reference silhouette
+  // Bent-elbow hip-resting arm matching reference silhouette
   const drawHipRestingArm = (dir: -1 | 1, sway: number) => {
     const sx = dir * 74;
     const sy = 10;
@@ -686,6 +1189,121 @@ function drawCartoonHostCharacter(
     ctx.stroke();
     ctx.restore();
     drawCartoonHand(wx, wy, Math.PI * 0.5 + dir * 0.14, dir, true);
+  };
+
+  // Context-driven right arm gesture helper (pointing up toward cards, pointing right in widescreen, warning stop, or chin question)
+  const drawContextualRightArm = (sway: number) => {
+    const bob = Math.sin(time * 3.1) * 4;
+    if (lip.gestureMode === 'point-up' || lip.gestureMode === 'approve-tip') {
+      const sx = 72;
+      const sy = 10;
+      const ex = 138 + sway * 0.4;
+      const ey = -48 + bob * 0.4;
+      const wx = 122 + sway * 0.3;
+      const wy = -168 + bob;
+      ctx.save();
+      ctx.strokeStyle = ink;
+      ctx.lineWidth = 6.8;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      ctx.beginPath();
+      ctx.moveTo(sx, sy);
+      ctx.quadraticCurveTo(ex, ey, wx, wy);
+      ctx.stroke();
+      ctx.restore();
+      drawPointingHand(wx, wy, -Math.PI * 0.54, lip.pointerGlyph);
+      return;
+    }
+
+    if (lip.gestureMode === 'point-right') {
+      const sx = 72;
+      const sy = 14;
+      const ex = 160 + sway * 0.4;
+      const ey = 28 + bob * 0.4;
+      const wx = 248 + Math.sin(time * 2.8) * 6;
+      const wy = -32 + bob;
+      ctx.save();
+      ctx.strokeStyle = ink;
+      ctx.lineWidth = 6.8;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      ctx.beginPath();
+      ctx.moveTo(sx, sy);
+      ctx.quadraticCurveTo(ex, ey, wx, wy);
+      ctx.stroke();
+      ctx.restore();
+      drawPointingHand(wx, wy, -0.22, lip.pointerGlyph);
+      return;
+    }
+
+    if (lip.gestureMode === 'warn-avoid') {
+      const sx = 74;
+      const sy = 12;
+      const ex = 148 + sway * 0.3;
+      const ey = 8 + Math.sin(time * 5.0) * 5;
+      const wx = 166 + Math.sin(time * 5.0) * 6;
+      const wy = -104 + Math.cos(time * 4.5) * 4;
+      ctx.save();
+      ctx.strokeStyle = ink;
+      ctx.lineWidth = 6.8;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      ctx.beginPath();
+      ctx.moveTo(sx, sy);
+      ctx.quadraticCurveTo(ex, ey, wx, wy);
+      ctx.stroke();
+      ctx.restore();
+      drawCartoonHand(wx, wy, -Math.PI * 0.48, 1, false);
+      // Crisp ✕ warning badge near warning hand
+      ctx.save();
+      ctx.fillStyle = '#FFFFFF';
+      ctx.beginPath();
+      ctx.arc(wx + 34, wy - 44, 19, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = '#DC2626';
+      ctx.lineWidth = 3.8;
+      ctx.stroke();
+      ctx.fillStyle = '#DC2626';
+      ctx.font = `900 22px ${FONT_DISPLAY}`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('✕', wx + 34, wy - 43);
+      ctx.restore();
+      return;
+    }
+
+    if (lip.gestureMode === 'question') {
+      const sx = 72;
+      const sy = 14;
+      const ex = 126 + sway * 0.3;
+      const ey = 62;
+      const wx = 58;
+      const wy = -26 + bob * 0.4;
+      ctx.save();
+      ctx.strokeStyle = ink;
+      ctx.lineWidth = 6.6;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      ctx.beginPath();
+      ctx.moveTo(sx, sy);
+      ctx.quadraticCurveTo(ex, ey, wx, wy);
+      ctx.stroke();
+      ctx.restore();
+      drawCartoonHand(wx, wy, -Math.PI * 0.72, -1, true);
+      return;
+    }
+
+    if (lip.gestureMode === 'cheer') {
+      drawArticulatedArm(72, 14, lip.rightShoulderAngle, lip.rightElbowAngle, 1, true);
+      return;
+    }
+
+    if (lip.gestureMode === 'explain' && lip.mouthOpen > 0.2) {
+      drawArticulatedArm(72, 14, lip.rightShoulderAngle, lip.rightElbowAngle, 1, true);
+      return;
+    }
+
+    drawHipRestingArm(1, sway);
   };
 
   // 0. Ground radial shadow under shoes
@@ -712,7 +1330,6 @@ function drawCartoonHostCharacter(
   ctx.quadraticCurveTo(45, 266, 42, 336);
   ctx.stroke();
 
-  // Solid black oval shoes
   ctx.fillStyle = ink;
   ctx.beginPath();
   ctx.ellipse(-52, 339, 27, 11, -0.18, 0, Math.PI * 2);
@@ -722,15 +1339,19 @@ function drawCartoonHostCharacter(
   ctx.fill();
   ctx.restore();
 
-  // 2. Gentle breathing torso & arms container
+  // 2. Breathing torso & contextual arms
   ctx.save();
   ctx.translate(0, lip.headBobY);
 
   const lSway = Math.sin(time * 1.35) * 4;
   const rSway = Math.sin(time * 1.45 + 0.8) * 4;
 
-  // Arms: iconic symmetrical bent-elbow hip-resting pose at rest; animated explain gesture during emphatic speech
-  if (lip.gestureMode === 'cheer' || (lip.gestureMode === 'explain' && lip.mouthOpen > 0.28)) {
+  // Viewer-left arm: reacts openly during cheer/warn/explain, rests comfortably when right arm points
+  if (
+    lip.gestureMode === 'cheer' ||
+    lip.gestureMode === 'warn-avoid' ||
+    (lip.gestureMode === 'explain' && lip.mouthOpen > 0.25)
+  ) {
     drawArticulatedArm(-72, 14, lip.leftShoulderAngle, lip.leftElbowAngle, -1, true);
   } else {
     drawHipRestingArm(-1, lSway);
@@ -742,7 +1363,7 @@ function drawCartoonHostCharacter(
   ctx.ellipse(0, 206, 98, 12, 0, 0, Math.PI * 2);
   ctx.fill();
 
-  // White bell/dome tunic body with crisp cool shading on right edge + thick black outline
+  // White bell/dome tunic body with crisp shading + thick outline
   ctx.save();
   ctx.beginPath();
   ctx.moveTo(-62, -24);
@@ -764,15 +1385,12 @@ function drawCartoonHostCharacter(
   ctx.stroke();
   ctx.restore();
 
-  if (lip.gestureMode === 'cheer') {
-    drawArticulatedArm(72, 14, lip.rightShoulderAngle, lip.rightElbowAngle, 1, true);
-  } else {
-    drawHipRestingArm(1, rSway);
-  }
+  // Viewer-right contextual gesture arm
+  drawContextualRightArm(rSway);
 
-  // 3. Slightly oval Tan Head rotating smoothly around neck pivot
+  // 3. Slightly oval Tan Head rotating around neck pivot with subtle context shake/tilt
   ctx.save();
-  ctx.translate(0, -34);
+  ctx.translate(lip.headShakeX, -34);
   ctx.rotate(lip.headTiltRad);
   ctx.translate(0, -124);
 
@@ -792,38 +1410,91 @@ function drawCartoonHostCharacter(
   ctx.stroke();
   ctx.restore();
 
-  // Expressive eyebrows
-  const browY = -46 - lip.browLift * 10;
-  ctx.strokeStyle = ink;
-  ctx.lineWidth = 5.2;
-  ctx.lineCap = 'round';
-  ctx.beginPath();
-  ctx.moveTo(-54, browY + 4);
-  ctx.quadraticCurveTo(-37, browY - 7, -20, browY + 3);
-  ctx.moveTo(20, browY + 3);
-  ctx.quadraticCurveTo(37, browY - 7, 54, browY + 4);
-  ctx.stroke();
+  // Subtle warm cheek blush on happy / encouraging moods
+  if (lip.mood === 'happy') {
+    ctx.save();
+    ctx.fillStyle = 'rgba(244, 114, 182, 0.22)';
+    ctx.beginPath();
+    ctx.ellipse(-62, 14, 18, 10, 0, 0, Math.PI * 2);
+    ctx.ellipse(62, 14, 18, 10, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
 
-  // Crisp oval dark eyes with smooth natural blinking
+  // Context-driven eyebrows (worried / \, curious asymmetrical raise, happy arches)
+  const browBaseY = -46 - lip.browLift * 10;
+  const gazeX = lip.eyeTargetX * 5.5;
+  const gazeY = lip.eyeTargetY * 4;
+  ctx.strokeStyle = ink;
+  ctx.lineWidth = 5.4;
+  ctx.lineCap = 'round';
+
+  if (lip.mood === 'worried') {
+    // Inner brows raised in concern (/ \)
+    ctx.beginPath();
+    ctx.moveTo(-56, browBaseY + 9);
+    ctx.quadraticCurveTo(-37, browBaseY + 1, -18, browBaseY - 8);
+    ctx.moveTo(18, browBaseY - 8);
+    ctx.quadraticCurveTo(37, browBaseY + 1, 56, browBaseY + 9);
+    ctx.stroke();
+  } else if (lip.mood === 'curious') {
+    // Asymmetrical raised eyebrow on right
+    ctx.beginPath();
+    ctx.moveTo(-54, browBaseY + 5);
+    ctx.quadraticCurveTo(-37, browBaseY - 2, -20, browBaseY + 4);
+    ctx.moveTo(18, browBaseY - 5);
+    ctx.quadraticCurveTo(37, browBaseY - 18, 56, browBaseY - 7);
+    ctx.stroke();
+  } else {
+    ctx.beginPath();
+    ctx.moveTo(-54, browBaseY + 4);
+    ctx.quadraticCurveTo(-37, browBaseY - 8, -20, browBaseY + 3);
+    ctx.moveTo(20, browBaseY + 3);
+    ctx.quadraticCurveTo(37, browBaseY - 8, 54, browBaseY + 4);
+    ctx.stroke();
+  }
+
+  // Crisp oval dark eyes with gaze offset + mood modulation + blinking
   const eyeScaleY = Math.max(0.08, 1 - lip.blinkFactor);
+  const lx = -37 + gazeX;
+  const rx = 37 + gazeX;
+  const ey = -18 + gazeY;
   if (eyeScaleY < 0.24) {
     ctx.strokeStyle = ink;
     ctx.lineWidth = 5.4;
     ctx.beginPath();
-    ctx.arc(-37, -18, 12, 0.1 * Math.PI, 0.9 * Math.PI);
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.arc(37, -18, 12, 0.1 * Math.PI, 0.9 * Math.PI);
-    ctx.stroke();
+    if (lip.mood === 'happy') {
+      // Joyful closed arcs (curved up)
+      ctx.arc(lx, ey + 5, 13, 1.1 * Math.PI, 1.9 * Math.PI);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(rx, ey + 5, 13, 1.1 * Math.PI, 1.9 * Math.PI);
+      ctx.stroke();
+    } else {
+      ctx.arc(lx, ey, 12, 0.1 * Math.PI, 0.9 * Math.PI);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(rx, ey, 12, 0.1 * Math.PI, 0.9 * Math.PI);
+      ctx.stroke();
+    }
   } else {
+    const lScaleMod = lip.mood === 'worried' ? 0.85 : lip.mood === 'curious' ? 0.92 : 1;
+    const rScaleMod = lip.mood === 'worried' ? 0.85 : lip.mood === 'curious' ? 1.1 : 1;
     ctx.fillStyle = ink;
     ctx.beginPath();
-    ctx.ellipse(-37, -18, 10.5, 13.5 * eyeScaleY, 0, 0, Math.PI * 2);
-    ctx.ellipse(37, -18, 10.5, 13.5 * eyeScaleY, 0, 0, Math.PI * 2);
+    ctx.ellipse(lx, ey, 10.5, 13.5 * eyeScaleY * lScaleMod, 0, 0, Math.PI * 2);
+    ctx.ellipse(rx, ey, 10.5, 13.5 * eyeScaleY * rScaleMod, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Crisp subtle specular glint shifted slightly toward gaze target
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.85)';
+    ctx.beginPath();
+    ctx.arc(lx + 2.4 + lip.eyeTargetX * 1.6, ey - 3.8 + lip.eyeTargetY * 1.4, 2.7, 0, Math.PI * 2);
+    ctx.arc(rx + 2.4 + lip.eyeTargetX * 1.6, ey - 3.8 + lip.eyeTargetY * 1.4, 2.7, 0, Math.PI * 2);
     ctx.fill();
   }
 
-  // Smooth syllable/viseme lip-synced mouth
+  // Smooth syllable/viseme lip-synced mouth modulated by emotional mood
   const mouthY = 36;
   const openAmt = lip.mouthOpen;
   if (openAmt <= 0.09) {
@@ -831,25 +1502,34 @@ function drawCartoonHostCharacter(
     ctx.lineWidth = 6.2;
     ctx.lineCap = 'round';
     ctx.beginPath();
-    if (lip.viseme === 'closed') {
+    if (lip.mood === 'worried') {
+      // Concerned downward mouth arc
+      ctx.arc(0, mouthY + 24, 26, 1.18 * Math.PI, 1.82 * Math.PI);
+    } else if (lip.mood === 'curious') {
+      // Thoughtful small oval/slanted mouth
+      ctx.moveTo(-18, mouthY + 5);
+      ctx.quadraticCurveTo(0, mouthY + 2, 18, mouthY + 7);
+    } else if (lip.viseme === 'closed') {
       ctx.moveTo(-25, mouthY + 4);
       ctx.quadraticCurveTo(0, mouthY + 6, 25, mouthY + 4);
     } else {
-      ctx.arc(0, mouthY - 8, 27, 0.16 * Math.PI, 0.84 * Math.PI);
+      const smileDepth = lip.mood === 'happy' ? 31 : 27;
+      ctx.arc(0, mouthY - 8, smileDepth, 0.14 * Math.PI, 0.86 * Math.PI);
     }
     ctx.stroke();
   } else {
     const mw = 38 * lip.mouthWidth;
     const mh = 12 + openAmt * 36;
+    const cornerCurve = lip.mood === 'worried' ? -4 : lip.mood === 'happy' ? 6 : 4;
     ctx.save();
     ctx.beginPath();
     if (lip.mouthRound > 0.55) {
-      const rx = mw * (0.72 - 0.14 * lip.mouthRound);
-      const ry = Math.max(10, mh * 0.62);
-      ctx.ellipse(0, mouthY + ry * 0.45, rx, ry, 0, 0, Math.PI * 2);
+      const rxMouth = mw * (0.72 - 0.14 * lip.mouthRound);
+      const ryMouth = Math.max(10, mh * 0.62);
+      ctx.ellipse(0, mouthY + ryMouth * 0.45, rxMouth, ryMouth, 0, 0, Math.PI * 2);
     } else {
       ctx.moveTo(-mw, mouthY);
-      ctx.quadraticCurveTo(0, mouthY + 5, mw, mouthY);
+      ctx.quadraticCurveTo(0, mouthY + cornerCurve, mw, mouthY);
       ctx.bezierCurveTo(
         mw * 0.96,
         mouthY + mh * 1.18,
@@ -875,122 +1555,7 @@ function drawCartoonHostCharacter(
 
   ctx.restore(); // end head
   ctx.restore(); // end torso/bob
-
-  // 4. Optional signature @Gimmys golden-yellow outlined headline & speech bubble above head (canvas mode)
-  if (propData && (propData.title || propData.speechText || cues.length > 0)) {
-    const activeCue = cues.find((c) => time >= c.start && time <= c.end) ?? cues[0];
-    const bubbleText = (activeCue?.text || propData.speechText || '').trim();
-
-    let bubbleTopY = -440;
-    if (bubbleText) {
-      const fittedBubble = fitWrappedTextBlock(ctx, bubbleText, 640, 118, {
-        fontWeight: 800,
-        maxFontSize: 42,
-        minFontSize: 22,
-        maxLines: 2,
-        lineHeightRatio: 1.24,
-      });
-      ctx.save();
-      ctx.font = `800 ${fittedBubble.fontSize}px ${FONT_DISPLAY}`;
-      const maxBubbleLineW = fittedBubble.lines.reduce(
-        (acc, ln) => Math.max(acc, ctx.measureText(ln).width),
-        0,
-      );
-      ctx.restore();
-      const bW = Math.min(730, Math.max(380, maxBubbleLineW + 96));
-      const bH = Math.max(108, fittedBubble.lines.length * fittedBubble.lineHeight + 50);
-      const bx = -bW / 2;
-      const by = -346 - bH;
-      bubbleTopY = by;
-
-      // Slate-blue offset shadow beneath yellow-bordered bubble
-      ctx.save();
-      ctx.fillStyle = 'rgba(30, 64, 110, 0.34)';
-      drawRoundedRectPath(ctx, bx + 12, by + 12, bW, bH, 22);
-      ctx.fill();
-      ctx.beginPath();
-      ctx.moveTo(-14, by + bH + 10);
-      ctx.lineTo(10, by + bH + 44);
-      ctx.lineTo(36, by + bH + 10);
-      ctx.closePath();
-      ctx.fill();
-      ctx.restore();
-
-      // White fill + thick #FACC15 golden-yellow border + pointer tail
-      ctx.save();
-      ctx.fillStyle = '#FFFFFF';
-      ctx.strokeStyle = '#FACC15';
-      ctx.lineWidth = 8.5;
-      ctx.lineJoin = 'round';
-      drawRoundedRectPath(ctx, bx, by, bW, bH, 22);
-      ctx.fill();
-      ctx.stroke();
-
-      ctx.beginPath();
-      ctx.moveTo(-20, by + bH - 4);
-      ctx.lineTo(0, by + bH + 30);
-      ctx.lineTo(24, by + bH - 4);
-      ctx.closePath();
-      ctx.fillStyle = '#FFFFFF';
-      ctx.fill();
-      ctx.beginPath();
-      ctx.moveTo(-20, by + bH);
-      ctx.lineTo(0, by + bH + 30);
-      ctx.lineTo(24, by + bH);
-      ctx.strokeStyle = '#FACC15';
-      ctx.lineWidth = 8.5;
-      ctx.stroke();
-
-      // Bubble spoken sentence text
-      ctx.font = `800 ${fittedBubble.fontSize}px ${FONT_DISPLAY}`;
-      ctx.fillStyle = '#1E293B';
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      const bStartY = by + bH / 2 - ((fittedBubble.lines.length - 1) * fittedBubble.lineHeight) / 2;
-      fittedBubble.lines.forEach((ln, li) => {
-        ctx.fillText(ln, 0, bStartY + li * fittedBubble.lineHeight, bW - 56);
-      });
-      ctx.restore();
-    }
-
-    if (propData.title) {
-      const cleanTitle = propData.title.trim();
-      const fittedTitle = fitWrappedTextBlock(ctx, cleanTitle, 780, 124, {
-        fontWeight: 900,
-        maxFontSize: 64,
-        minFontSize: 32,
-        maxLines: 2,
-        lineHeightRatio: 1.14,
-      });
-      ctx.save();
-      ctx.font = `900 ${fittedTitle.fontSize}px ${FONT_DISPLAY}`;
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      const halfTitleH = ((fittedTitle.lines.length - 1) * fittedTitle.lineHeight) / 2 + fittedTitle.fontSize * 0.55;
-      const titleCenterY = Math.min(-555, bubbleTopY - 36 - halfTitleH);
-      const titleStartY = titleCenterY - ((fittedTitle.lines.length - 1) * fittedTitle.lineHeight) / 2;
-      const tGrad = ctx.createLinearGradient(0, titleCenterY - 40, 0, titleCenterY + 40);
-      tGrad.addColorStop(0, '#FEF08A');
-      tGrad.addColorStop(0.55, '#FACC15');
-      tGrad.addColorStop(1, '#F97316');
-      fittedTitle.lines.forEach((ln, li) => {
-        const ly = titleStartY + li * fittedTitle.lineHeight;
-        ctx.save();
-        ctx.shadowColor = 'rgba(250, 204, 21, 0.55)';
-        ctx.shadowBlur = 18;
-        ctx.strokeStyle = '#3B1D0A';
-        ctx.lineWidth = 14;
-        ctx.lineJoin = 'round';
-        ctx.strokeText(ln, 0, ly, 780);
-        ctx.restore();
-        ctx.fillStyle = tGrad;
-        ctx.fillText(ln, 0, ly, 780);
-      });
-      ctx.restore();
-    }
-  }
-
-  ctx.restore();
+  ctx.restore(); // end character root
 }
 
 const bgImageCache = new Map<string, HTMLImageElement>();
@@ -2411,6 +2976,7 @@ function drawIllustrationProp(
   time: number,
   elStartTime = 0,
   cues: TranscriptCue[] = [],
+  hostContext?: CartoonHostContext,
 ) {
   const elElapsed = Math.max(0, time - elStartTime);
   const floatRamp = easeOutCubic(clamp01(elElapsed / 0.5));
@@ -3168,7 +3734,7 @@ function drawIllustrationProp(
       }
     });
   } else if (props.variant === 'cartoon-host') {
-    drawCartoonHostCharacter(ctx, time, cues, props.data);
+    drawCartoonHostCharacter(ctx, time, cues, props.data, hostContext);
   } else if (props.variant === 'avatar-speech') {
     const speech = props.data?.speechText || 'Could I have some water, please?';
     const reaction = props.data?.reactionText || 'Polite!';
@@ -6546,6 +7112,35 @@ export function renderProjectFrame(
     project.compositionId,
   );
 
+  const isCartoonStage =
+    project.compositionId === 'cartoon-host' ||
+    sorted.some(
+      (el) => el.props.kind === 'illustration-prop' && el.props.variant === 'cartoon-host',
+    );
+  const cartoonHostContext = isCartoonStage
+    ? computeCartoonHostContextFromElements(sorted, time, project.cues, project.aspectRatio)
+    : undefined;
+
+  if (isCartoonStage) {
+    const hasRightHeaderSplit =
+      (project.aspectRatio === '16:9' || project.aspectRatio === '1:1') &&
+      sorted.some(
+        (el) =>
+          time >= el.startTime - 0.01 &&
+          time <= el.endTime + 0.01 &&
+          !(el.props.kind === 'illustration-prop' && el.props.variant === 'cartoon-host') &&
+          el.type !== 'karaoke-card',
+      );
+    drawCartoonHostHeadline(
+      ctx,
+      project.title,
+      project.aspectRatio || '9:16',
+      stageW,
+      project.subtitleConfig?.position,
+      hasRightHeaderSplit,
+    );
+  }
+
   for (const el of sorted) {
     const frame = computeElementFrameState(el, time);
     if (!frame.visible) continue;
@@ -6589,10 +7184,24 @@ export function renderProjectFrame(
         if (fitScale < 0.999) {
           ctx.save();
           ctx.scale(fitScale, fitScale);
-          drawIllustrationProp(ctx, el.props, time, el.startTime, project.cues);
+          drawIllustrationProp(
+            ctx,
+            el.props,
+            time,
+            el.startTime,
+            project.cues,
+            el.props.variant === 'cartoon-host' ? cartoonHostContext : undefined,
+          );
           ctx.restore();
         } else {
-          drawIllustrationProp(ctx, el.props, time, el.startTime, project.cues);
+          drawIllustrationProp(
+            ctx,
+            el.props,
+            time,
+            el.startTime,
+            project.cues,
+            el.props.variant === 'cartoon-host' ? cartoonHostContext : undefined,
+          );
         }
         break;
       }

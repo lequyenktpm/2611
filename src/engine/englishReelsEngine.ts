@@ -1628,10 +1628,12 @@ export function buildEnglishReelsWebAiPrompt(params: {
   const { variantsListText, sceneIconsListText } = getCatalogSummaryForPrompt();
 
   const exampleTimelinePromptHint =
-    params.compositionId && params.compositionId !== 'ai-decide'
-      ? `Ưu tiên bố cục "${params.compositionId}" nhưng vẫn đảm bảo chuyển cảnh có lời dẫn và giữ đủ ` +
-        (includeQuiz === 'none' ? 'các thẻ UI minh họa rõ nét.' : 'thẻ UI minh họa & Quiz 5s (nếu bài có quiz).')
-      : 'Chọn component minh họa (`visual.variant` + tùy biến `title`, `subtitle`, `labels`, `value`, `sceneIcon`) khớp từng đoạn bài học.';
+    params.compositionId === 'cartoon-host'
+      ? 'Bố cục NHÂN VẬT HOẠT HÌNH LIP-SYNC (@Gimmys): (1) Đặt "title" thật ngắn gọn (~6–10 từ, đúng ngôn ngữ người học, tuyệt đối KHÔNG ghi "(Transcript ...)"), (2) KHÔNG viết lời thừa làm bong bóng thoại vì app đã có phụ đề vàng ở dưới, (3) Trên từng card dùng `badge` ("TRÁNH DÙNG" / "NÊN DÙNG" / "MẸO HAY"), `content`, `translation` ngắn gọn và `visual.variant` / `visual.labels` đối chiếu đúng-sai để nhân vật Gimmy chỉ tay & biểu cảm đúng ngữ cảnh.'
+      : params.compositionId && params.compositionId !== 'ai-decide'
+        ? `Ưu tiên bố cục "${params.compositionId}" nhưng vẫn đảm bảo chuyển cảnh có lời dẫn và giữ đủ ` +
+          (includeQuiz === 'none' ? 'các thẻ UI minh họa rõ nét.' : 'thẻ UI minh họa & Quiz 5s (nếu bài có quiz).')
+        : 'Chọn component minh họa (`visual.variant` + tùy biến `title`, `subtitle`, `labels`, `value`, `sceneIcon`) khớp từng đoạn bài học.';
 
   const targetLangConstraint =
     locale.code === 'none'
@@ -1859,9 +1861,13 @@ export function buildAiCreatorWebAiPrompt(params: {
       : `Write \`meaning\` / \`translation\` / \`visual.subtitle\` / \`visual.labels\` clearly in **${locale.targetLanguageLabel}** tailored for level **${chosenLevel}**.`;
 
   const compHint =
-    params.compositionId && params.compositionId !== 'ai-decide'
-      ? `Prioritize layout style "${params.compositionId}" when appropriate while still varying individual card visuals.`
-      : 'Intelligently rotate visual components across cards.';
+    params.compositionId === 'cartoon-host'
+      ? 'Layout is **@Gimmys Lip-Sync Cartoon Host** (aspect ' +
+        aspectLabel +
+        '): Keep root `"title"` short and hooky (~6–10 words in the learner language, never technical labels). Do NOT duplicate subtitles as a top speech bubble—instead pair each card with clear Wrong/Avoid vs Right/Natural contrast labels (`word`, `meaning`, `translation`, `visual.labels`, e.g. `"Avoid"` vs `"Use this instead"`) so Gimmy points at and reacts expressively to each teaching card!'
+      : params.compositionId && params.compositionId !== 'ai-decide'
+        ? `Prioritize layout style "${params.compositionId}" when appropriate while still varying individual card visuals.`
+        : 'Intelligently rotate visual components across cards.';
 
   const scriptPurityHint =
     learningLang === 'zh'
@@ -4559,10 +4565,49 @@ export function reelCardsToLessonProject(
       illY: 585,
       cardY: 1020,
     },
+    'cartoon-host': {
+      showStrip: true,
+      stripY: 185,
+      pillY: 278,
+      illY: 1055,
+      cardY: 465,
+      pillBg: '#FEF08A',
+      pillColor: '#713F12',
+      cardBg: '#FFFFFF',
+      cardText: '#0F172A',
+      emphasisColor: '#2563EB',
+    },
   };
   const activeProfile = compLayoutProfile[compId] ?? compLayoutProfile['story-scenes'];
 
   const elements: LessonProject['elements'] = [];
+
+  if (compId === 'cartoon-host') {
+    elements.push({
+      id: 'reel-cartoon-host-main',
+      type: 'illustration-prop',
+      label: 'Nhân vật Hoạt Hình Lip-Sync (@Gimmys)',
+      startTime: 0,
+      endTime: totalDuration,
+      enterAnimation: 'fade-scale',
+      exitAnimation: 'fade-out',
+      layout: {
+        x: 540,
+        y: resolvedSubtitleConfig.position === 'top' ? 1140 : hasQuiz ? 1105 : 1085,
+        width: 820,
+        scale: hasQuiz ? 0.88 : 0.92,
+        zIndex: 12,
+      },
+      props: {
+        kind: 'illustration-prop',
+        variant: 'cartoon-host',
+        data: {
+          title: options?.title || safeCards[0]?.title || 'Language Lesson',
+          speechText: safeCards[0]?.content || '',
+        },
+      },
+    });
+  }
 
   safeCards.forEach((card, idx) => {
     const win = cardWindows[idx];
@@ -4800,26 +4845,28 @@ export function reelCardsToLessonProject(
           },
         });
 
-        elements.push({
-          id: `reel-tr-ask-prop-${idx}`,
-          type: 'illustration-prop',
-          label: `Prompt Visual #${idx + 1}`,
-          startTime: start,
-          endTime: win.questionEnd,
-          enterAnimation: 'fade-scale',
-          exitAnimation: 'fade-out',
-          layout: { x: 540, y: 505, width: 840, scale: 0.92, zIndex: 9 },
-          props: {
-            kind: 'illustration-prop',
-            variant: 'bs-card-header',
-            data: {
-              formula: card.indexLabel || `#${idx}`,
-              title: trLocale.askTitle,
-              subtitle: trLocale.askSub(Math.max(1, Math.round(win.thinkSec))),
-              sceneIcon: 'mic',
+        if (compId !== 'cartoon-host') {
+          elements.push({
+            id: `reel-tr-ask-prop-${idx}`,
+            type: 'illustration-prop',
+            label: `Prompt Visual #${idx + 1}`,
+            startTime: start,
+            endTime: win.questionEnd,
+            enterAnimation: 'fade-scale',
+            exitAnimation: 'fade-out',
+            layout: { x: 540, y: 505, width: 840, scale: 0.92, zIndex: 9 },
+            props: {
+              kind: 'illustration-prop',
+              variant: 'bs-card-header',
+              data: {
+                formula: card.indexLabel || `#${idx}`,
+                title: trLocale.askTitle,
+                subtitle: trLocale.askSub(Math.max(1, Math.round(win.thinkSec))),
+                sceneIcon: 'mic',
+              },
             },
-          },
-        });
+          });
+        }
       }
 
       // Phase 2 Countdown Pills + Progress Meter (during thinkSec)
@@ -4857,7 +4904,13 @@ export function reelCardsToLessonProject(
             endTime: t1,
             enterAnimation: 'fade-scale',
             exitAnimation: 'fade-out',
-            layout: { x: 540, y: 505, width: 840, scale: 0.9, zIndex: 10 },
+            layout: {
+              x: 540,
+              y: compId === 'cartoon-host' ? 660 : 505,
+              width: compId === 'cartoon-host' ? 780 : 840,
+              scale: compId === 'cartoon-host' ? 0.68 : 0.9,
+              zIndex: 10,
+            },
             props: {
               kind: 'illustration-prop',
               variant: 'bs-progress-meter',
@@ -4882,7 +4935,13 @@ export function reelCardsToLessonProject(
         endTime: preRevealEnd,
         enterAnimation: 'pop-up',
         exitAnimation: 'fade-out',
-        layout: { x: 540, y: 865, width: 880, scale: 1, zIndex: 20 },
+        layout: {
+          x: 540,
+          y: compId === 'cartoon-host' ? activeProfile.cardY : 865,
+          width: 880,
+          scale: compId === 'cartoon-host' ? 0.92 : 1,
+          zIndex: 20,
+        },
         props: {
           kind: 'sentence-card',
           text: sourcePromptText,
@@ -5001,30 +5060,32 @@ export function reelCardsToLessonProject(
           });
         }
 
-        // Visual comparison / nuance tip card during reveal (no full-sentence phonetic; highlight vocab + grammar)
-        elements.push({
-          id: `reel-tr-ans-prop-${idx}`,
-          type: 'illustration-prop',
-          label: `Answer Visual #${idx + 1}`,
-          startTime: win.answerStart,
-          endTime: end,
-          enterAnimation: 'pop-up',
-          exitAnimation: 'fade-out',
-          layout: { x: 540, y: 505, width: 840, scale: 0.92, zIndex: 11 },
-          props: {
-            kind: 'illustration-prop',
-            variant: 'bs-alert-tip',
-            data: {
-              title: trLocale.sourceLabel(sourcePromptText),
-              speechText:
-                [card.vocabNotes, card.grammarNote, card.explanationSpeech]
-                  .filter(Boolean)
-                  .join(' · ') || trLocale.defaultTip(totalRepeats),
-              highlightWord: trLocale.repeatChip(totalRepeats),
-              sceneIcon: 'sparkles',
+        // Visual comparison / nuance tip card during reveal (omit heavy prop under cartoon-host)
+        if (compId !== 'cartoon-host') {
+          elements.push({
+            id: `reel-tr-ans-prop-${idx}`,
+            type: 'illustration-prop',
+            label: `Answer Visual #${idx + 1}`,
+            startTime: win.answerStart,
+            endTime: end,
+            enterAnimation: 'pop-up',
+            exitAnimation: 'fade-out',
+            layout: { x: 540, y: 505, width: 840, scale: 0.92, zIndex: 11 },
+            props: {
+              kind: 'illustration-prop',
+              variant: 'bs-alert-tip',
+              data: {
+                title: trLocale.sourceLabel(sourcePromptText),
+                speechText:
+                  [card.vocabNotes, card.grammarNote, card.explanationSpeech]
+                    .filter(Boolean)
+                    .join(' · ') || trLocale.defaultTip(totalRepeats),
+                highlightWord: trLocale.repeatChip(totalRepeats),
+                sceneIcon: 'sparkles',
+              },
             },
-          },
-        });
+          });
+        }
 
         // Revealed Target Translation Sentence Card (gloss vocab + grammar instead of full-sentence phonetic)
         elements.push({
@@ -5035,7 +5096,13 @@ export function reelCardsToLessonProject(
           endTime: end,
           enterAnimation: 'pop-up',
           exitAnimation: 'fade-out',
-          layout: { x: 540, y: 865, width: 880, scale: 1, zIndex: 22 },
+          layout: {
+            x: 540,
+            y: compId === 'cartoon-host' ? activeProfile.cardY : 865,
+            width: 880,
+            scale: compId === 'cartoon-host' ? 0.94 : 1,
+            zIndex: 22,
+          },
           props: {
             kind: 'sentence-card',
             text: card.content,
@@ -5069,7 +5136,7 @@ export function reelCardsToLessonProject(
         endTime: end,
         enterAnimation: 'fade-scale',
         exitAnimation: 'fade-out',
-        layout: { x: 540, y: 170, width: 920, scale: 1, zIndex: 12 },
+        layout: { x: 540, y: activeProfile.stripY, width: 920, scale: 1, zIndex: 12 },
         props: {
           kind: 'comparison-strip',
           items: stageSteps.map((sLbl, sIdx) => ({
@@ -5090,7 +5157,7 @@ export function reelCardsToLessonProject(
           endTime: win.questionEnd,
           enterAnimation: 'pop-up',
           exitAnimation: 'fade-out',
-          layout: { x: 540, y: 295, width: 640, scale: 1, zIndex: 16 },
+          layout: { x: 540, y: activeProfile.pillY, width: 640, scale: 1, zIndex: 16 },
           props: {
             kind: 'topic-pill',
             text: `${card.badge || 'QUIZ'} · ${locale.quizAskTag}`,
@@ -5120,7 +5187,7 @@ export function reelCardsToLessonProject(
             endTime: t1,
             enterAnimation: 'pop-up',
             exitAnimation: 'fade-out',
-            layout: { x: 540, y: 295, width: 640, scale: 1, zIndex: 18 },
+            layout: { x: 540, y: activeProfile.pillY, width: 640, scale: 1, zIndex: 18 },
             props: {
               kind: 'topic-pill',
               text: locale.thinkCountdown(remain),
@@ -5139,9 +5206,14 @@ export function reelCardsToLessonProject(
             exitAnimation: 'fade-out',
             layout: {
               x: 540,
-              y: hasContextExcerpt ? 1315 : 500,
-              width: hasContextExcerpt ? 780 : 840,
-              scale: hasContextExcerpt ? 0.72 : 0.94,
+              y:
+                compId === 'cartoon-host'
+                  ? 725
+                  : hasContextExcerpt
+                    ? 1315
+                    : 500,
+              width: compId === 'cartoon-host' ? 760 : hasContextExcerpt ? 780 : 840,
+              scale: compId === 'cartoon-host' ? 0.52 : hasContextExcerpt ? 0.72 : 0.94,
               zIndex: 10,
             },
             props: {
@@ -5168,7 +5240,7 @@ export function reelCardsToLessonProject(
           endTime: end,
           enterAnimation: 'pop-up',
           exitAnimation: 'fade-out',
-          layout: { x: 540, y: 295, width: 880, scale: 1, zIndex: 18 },
+          layout: { x: 540, y: activeProfile.pillY, width: 880, scale: 1, zIndex: 18 },
           props: {
             kind: 'topic-pill',
             text: locale.correctAnswerPill(ansLetter, ansOpt),
@@ -5177,26 +5249,28 @@ export function reelCardsToLessonProject(
           },
         });
 
-        elements.push({
-          id: `reel-q-ans-prop-${idx}`,
-          type: 'illustration-prop',
-          label: `Answer Card #${idx + 1}`,
-          startTime: win.answerStart,
-          endTime: end,
-          enterAnimation: 'pop-up',
-          exitAnimation: 'fade-out',
-          layout: { x: 540, y: 515, width: 840, scale: 0.96, zIndex: 11 },
-          props: {
-            kind: 'illustration-prop',
-            variant: 'bs-alert-tip',
-            data: {
-              title: locale.correctAnswerCardTitle(ansLetter, ansOpt),
-              speechText: card.explanation || locale.defaultExplanation(ansLetter, ansOpt),
-              highlightWord: locale.correctBadge,
-              sceneIcon: 'sparkles',
+        if (compId !== 'cartoon-host') {
+          elements.push({
+            id: `reel-q-ans-prop-${idx}`,
+            type: 'illustration-prop',
+            label: `Answer Card #${idx + 1}`,
+            startTime: win.answerStart,
+            endTime: end,
+            enterAnimation: 'pop-up',
+            exitAnimation: 'fade-out',
+            layout: { x: 540, y: 515, width: 840, scale: 0.96, zIndex: 11 },
+            props: {
+              kind: 'illustration-prop',
+              variant: 'bs-alert-tip',
+              data: {
+                title: locale.correctAnswerCardTitle(ansLetter, ansOpt),
+                speechText: card.explanation || locale.defaultExplanation(ansLetter, ansOpt),
+                highlightWord: locale.correctBadge,
+                sceneIcon: 'sparkles',
+              },
             },
-          },
-        });
+          });
+        }
       }
 
       // Passage Context Card (concise direct-evidence excerpt kept visible throughout Question + Think countdown)
@@ -5210,7 +5284,13 @@ export function reelCardsToLessonProject(
           endTime: preRevealEnd,
           enterAnimation: 'fade-scale',
           exitAnimation: 'fade-out',
-          layout: { x: 540, y: 525, width: 880, scale: 0.94, zIndex: 9 },
+          layout: {
+            x: 540,
+            y: compId === 'cartoon-host' ? 400 : 525,
+            width: 880,
+            scale: compId === 'cartoon-host' ? 0.68 : 0.94,
+            zIndex: 9,
+          },
           props: {
             kind: 'illustration-prop',
             variant: 'css-browser-mockup',
@@ -5222,7 +5302,7 @@ export function reelCardsToLessonProject(
             },
           },
         });
-      } else if (win.questionEnd - start > 0.15) {
+      } else if (win.questionEnd - start > 0.15 && compId !== 'cartoon-host') {
         elements.push({
           id: `reel-q-ask-prop-${idx}`,
           type: 'illustration-prop',
@@ -5251,7 +5331,13 @@ export function reelCardsToLessonProject(
           endTime: preRevealEnd,
           enterAnimation: 'pop-up',
           exitAnimation: 'fade-out',
-          layout: { x: 540, y: hasContextExcerpt ? 840 : 830, width: 880, scale: 1, zIndex: 20 },
+          layout: {
+            x: 540,
+            y: compId === 'cartoon-host' ? (hasContextExcerpt ? 535 : 420) : hasContextExcerpt ? 840 : 830,
+            width: 880,
+            scale: compId === 'cartoon-host' ? 0.84 : 1,
+            zIndex: 20,
+          },
           props: {
             kind: 'sentence-card',
             text: card.content,
@@ -5273,7 +5359,13 @@ export function reelCardsToLessonProject(
           endTime: end,
           enterAnimation: 'pop-up',
           exitAnimation: 'fade-out',
-          layout: { x: 540, y: 830, width: 880, scale: 1, zIndex: 22 },
+          layout: {
+            x: 540,
+            y: compId === 'cartoon-host' ? 425 : 830,
+            width: 880,
+            scale: compId === 'cartoon-host' ? 0.86 : 1,
+            zIndex: 22,
+          },
           props: {
             kind: 'sentence-card',
             text: `${ansLetter}. ${ansOpt}`,
@@ -5297,7 +5389,13 @@ export function reelCardsToLessonProject(
         endTime: end,
         enterAnimation: 'slide-up',
         exitAnimation: 'fade-out',
-        layout: { x: 540, y: hasContextExcerpt ? 1085 : 1175, width: 920, scale: 1, zIndex: 20 },
+        layout: {
+          x: 540,
+          y: compId === 'cartoon-host' ? (hasContextExcerpt ? 645 : 590) : hasContextExcerpt ? 1085 : 1175,
+          width: 920,
+          scale: compId === 'cartoon-host' ? 0.82 : 1,
+          zIndex: 20,
+        },
         props: {
           kind: 'comparison-strip',
           items: card.options.slice(0, 4).map((opt, oIdx) => ({
@@ -5572,21 +5670,38 @@ export function reelCardsToLessonProject(
         },
       });
 
-      elements.push({
-        id: `reel-prop-${idx}`,
-        type: 'illustration-prop',
-        label: `Visual #${idx + 1}`,
-        startTime: start,
-        endTime: end,
-        enterAnimation: 'fade-scale',
-        exitAnimation: 'fade-out',
-        layout: { x: 540, y: activeProfile.illY, width: 860, scale: 0.96, zIndex: 10 },
-        props: {
-          kind: 'illustration-prop',
-          variant: visualSpec.variant,
-          data: visualSpec.data,
-        },
-      });
+      if (compId !== 'cartoon-host') {
+        elements.push({
+          id: `reel-prop-${idx}`,
+          type: 'illustration-prop',
+          label: `Visual #${idx + 1}`,
+          startTime: start,
+          endTime: end,
+          enterAnimation: 'fade-scale',
+          exitAnimation: 'fade-out',
+          layout: { x: 540, y: activeProfile.illY, width: 860, scale: 0.96, zIndex: 10 },
+          props: {
+            kind: 'illustration-prop',
+            variant: visualSpec.variant,
+            data: visualSpec.data,
+          },
+        });
+      }
+
+      const badgeHaystack = `${card.badge} ${card.title} ${displayHeadline} ${displaySub || ''}`;
+      const inferredReelBadge: 'check' | 'cross' | 'question' | 'none' =
+        card.type === 'outro'
+          ? 'check'
+          : card.type === 'intro'
+            ? 'none'
+            : /\b(avoid|rude|wrong|mistake|don't say|stop saying)\b|tránh|sai/i.test(badgeHaystack) ||
+                /(?:^|[\s「『(【])NG(?:$|[\s」』)】:：!])/u.test(badgeHaystack)
+              ? 'cross'
+              : /\b(natural|polite|better|instead|smart|tip|upgrade)\b|nên dùng|tự nhiên|chuẩn/i.test(
+                    badgeHaystack,
+                  )
+                ? 'check'
+                : 'none';
 
       elements.push({
         id: `reel-card-${idx}`,
@@ -5596,15 +5711,40 @@ export function reelCardsToLessonProject(
         endTime: end,
         enterAnimation: 'pop-up',
         exitAnimation: 'fade-out',
-        layout: { x: 540, y: activeProfile.cardY, width: 880, scale: 1, zIndex: 20 },
+        layout: {
+          x: 540,
+          y: activeProfile.cardY,
+          width: 880,
+          scale: compId === 'cartoon-host' ? 0.94 : 1,
+          zIndex: 20,
+        },
         props: {
           kind: 'sentence-card',
           text: displayHeadline,
           subtext: displaySub,
-          badge: card.type === 'outro' ? 'check' : 'none',
+          badge: inferredReelBadge,
+          stampText:
+            inferredReelBadge === 'cross'
+              ? 'AVOID'
+              : inferredReelBadge === 'check' && card.type !== 'outro'
+                ? 'NATURAL'
+                : undefined,
+          stampColor:
+            inferredReelBadge === 'cross'
+              ? '#DC2626'
+              : inferredReelBadge === 'check'
+                ? '#16A34A'
+                : undefined,
           emphasisWord: card.type === 'vocab' && !card.title.startsWith('Reading') ? card.title : undefined,
-          emphasisColor: activeProfile.emphasisColor ?? (card.type === 'outro' ? '#16A34A' : '#2563EB'),
-          bgColor: isDark ? 'rgba(15, 23, 42, 0.94)' : (activeProfile.cardBg ?? '#FFFFFF'),
+          emphasisColor:
+            inferredReelBadge === 'cross'
+              ? '#DC2626'
+              : activeProfile.emphasisColor ?? (card.type === 'outro' ? '#16A34A' : '#2563EB'),
+          bgColor: isDark
+            ? 'rgba(15, 23, 42, 0.94)'
+            : inferredReelBadge === 'cross'
+              ? '#FFF1F2'
+              : activeProfile.cardBg ?? '#FFFFFF',
           textColor: isDark ? '#F8FAFC' : (activeProfile.cardText ?? '#0F172A'),
         },
       });

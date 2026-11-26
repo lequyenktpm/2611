@@ -1114,7 +1114,7 @@ export const PRESET_JP_EN_POLITE: LessonProject = (() => {
   const words = cues.flatMap((c) => c.words);
   return scenePlanToProject(words, SAMPLE_JP_EN_SCENE_JSON, {
     id: 'preset-jp-en-polite',
-    title: 'Can / Could / May (Transcript Nhật-Anh 1:42)',
+    title: '水が欲しい時、CanとCouldどっち？',
     theme: 'pastel-sunrise',
     cuesOverride: cues,
   });

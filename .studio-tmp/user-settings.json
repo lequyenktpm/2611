@@ -1,5 +1,5 @@
 {
-  "activeTab": "edu-studio",
+  "activeTab": "reels",
   "studio": {
     "aspectRatio": "9:16",
     "resolution": "540p",
@@ -18,7 +18,7 @@
     "bgmVolume": 0.03,
     "descriptionStyle": "auto"
   },
-  "updatedAt": 1795732229639,
+  "updatedAt": 1795734364266,
   "reels": {
     "reelCreationMode": "creator",
     "creatorTopicHint": "",
@@ -118,7 +118,7 @@
         "splitAudioByRole": true,
         "explanationTtsVoice": "en-US-JennyNeural",
         "ttsRate": 1,
-        "reelsAspectRatio": "9:16",
+        "reelsAspectRatio": "16:9",
         "selectedTheme": "pastel-sunrise",
         "selectedComposition": "story-scenes",
         "subtitlePosition": "bottom",

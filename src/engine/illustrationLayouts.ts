@@ -1053,9 +1053,143 @@ export function recomposeProjectWithStyle(
 
   if (compositionId === 'cartoon-host') {
     const subPos = project.subtitleConfig?.position;
-    const targetKaraokeY = subPos === 'top' ? 320 : 1515;
+    const targetKaraokeY = subPos === 'top' ? 275 : 1585;
 
-    // Continuous full-duration @Gimmys cartoon mascot synced dynamically to project.cues
+    const existingMeter = project.elements.find((e) => e.type === 'tone-meter');
+
+    // Interactive teaching pills + right/wrong/tip sentence cards in upper zone for Gimmy to point at
+    segments.forEach((seg, idx) => {
+      const safeStart = Math.max(0, seg.startTime);
+      const safeEnd = Math.max(safeStart + 0.45, seg.endTime);
+      const cardSignalText = `${seg.cueText} ${seg.cardText}`;
+      const inferredBadge: 'check' | 'cross' | 'question' | 'none' =
+        seg.badge !== 'none'
+          ? seg.badge
+          : /\b(avoid|rude|wrong|mistake|don't say|stop saying)\b|ぶっきらぼう|tránh|sai/i.test(cardSignalText) ||
+              /(?:^|[\s「『(【])NG(?:$|[\s」』)】:：!])/u.test(cardSignalText)
+            ? 'cross'
+            : /[?？]/.test(cardSignalText)
+              ? 'question'
+              : /\b(natural|polite|better|instead|could|may|can|tip)\b|丁寧|自然|nên dùng/i.test(
+                    cardSignalText,
+                  )
+                ? 'check'
+                : 'none';
+
+      const inferredStamp =
+        seg.stampText ||
+        (inferredBadge === 'cross'
+          ? 'AVOID'
+          : inferredBadge === 'check'
+            ? 'NATURAL'
+            : undefined);
+
+      const pillText =
+        seg.topicLabel && !/^Part \d+$/i.test(seg.topicLabel) && !/^Point #\d+$/i.test(seg.topicLabel)
+          ? seg.topicLabel
+          : inferredBadge === 'cross'
+            ? '⚠ Tránh cách nói này'
+            : inferredBadge === 'check'
+              ? '✔ Nên dùng · Tự nhiên'
+              : inferredBadge === 'question'
+                ? '❓ Chọn cách nói chuẩn'
+                : `💡 Điểm nhấn #${idx + 1}`;
+
+      const pillBg =
+        inferredBadge === 'cross'
+          ? '#FEE2E2'
+          : inferredBadge === 'check'
+            ? '#DCFCE7'
+            : inferredBadge === 'question'
+              ? '#FEF3C7'
+              : seg.topicBg || '#E0E7FF';
+      const pillColor =
+        inferredBadge === 'cross'
+          ? '#B91C1C'
+          : inferredBadge === 'check'
+            ? '#15803D'
+            : inferredBadge === 'question'
+              ? '#B45309'
+              : seg.topicColor || '#3730A3';
+
+      newVisuals.push({
+        id: `comp-cartoon-pill-${idx + 1}`,
+        type: 'topic-pill',
+        label: `Nhãn ngữ cảnh #${idx + 1}: ${pillText}`,
+        startTime: Number(safeStart.toFixed(2)),
+        endTime: Number(safeEnd.toFixed(2)),
+        enterAnimation: 'pop-up',
+        exitAnimation: 'fade-out',
+        layout: {
+          x: 540,
+          y: subPos === 'top' ? 430 : 205,
+          width: 620,
+          scale: 0.92,
+          zIndex: 18,
+        },
+        props: {
+          kind: 'topic-pill',
+          text: pillText,
+          bgColor: pillBg,
+          textColor: pillColor,
+        },
+      });
+
+      newVisuals.push({
+        id: `comp-cartoon-card-${idx + 1}`,
+        type: 'sentence-card',
+        label: `Thẻ tương tác #${idx + 1}: ${seg.cardText.slice(0, 24)}`,
+        startTime: Number(safeStart.toFixed(2)),
+        endTime: Number(safeEnd.toFixed(2)),
+        enterAnimation: 'pop-up',
+        exitAnimation: idx === segments.length - 1 ? 'fade-out' : 'shrink',
+        layout: {
+          x: 540,
+          y: subPos === 'top' ? 600 : 395,
+          width: 860,
+          scale: 0.92,
+          zIndex: 20,
+        },
+        props: {
+          kind: 'sentence-card',
+          text: seg.cardText,
+          subtext: seg.subtext,
+          badge: inferredBadge,
+          stampText: inferredStamp,
+          stampColor:
+            inferredBadge === 'cross'
+              ? '#DC2626'
+              : inferredBadge === 'check'
+                ? '#16A34A'
+                : seg.stampColor,
+          emphasisWord: seg.emphasisWord,
+          emphasisColor:
+            inferredBadge === 'cross'
+              ? '#DC2626'
+              : inferredBadge === 'check'
+                ? '#16A34A'
+                : seg.emphasisColor || '#2563EB',
+          bgColor: inferredBadge === 'cross' ? '#FFF1F2' : '#FFFFFF',
+          textColor: '#0F172A',
+        },
+      });
+    });
+
+    if (existingMeter && existingMeter.props.kind === 'tone-meter') {
+      newVisuals.push({
+        ...existingMeter,
+        layout: {
+          ...existingMeter.layout,
+          x: 540,
+          y: subPos === 'top' ? 760 : 595,
+          width: 700,
+          scale: 0.78,
+          zIndex: 18,
+        },
+      });
+    }
+
+    // Continuous full-duration @Gimmys cartoon mascot synced dynamically to project.cues + active cards
     newVisuals.push({
       id: 'comp-cartoon-host-main',
       type: 'illustration-prop',
@@ -1066,9 +1200,9 @@ export function recomposeProjectWithStyle(
       exitAnimation: 'fade-out',
       layout: {
         x: 540,
-        y: subPos === 'top' ? 985 : 905,
-        width: 880,
-        scale: 1.08,
+        y: subPos === 'top' ? 1135 : 1085,
+        width: 820,
+        scale: existingMeter ? 0.88 : 0.94,
         zIndex: 12,
       },
       props: {

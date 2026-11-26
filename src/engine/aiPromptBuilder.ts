@@ -80,6 +80,17 @@ export function buildSceneGenerationPrompt(
     styleGuide = `PHONG CÁCH 3D NỔI + KARAOKE ĐẬM:
 - Đặt "theme": "${options?.theme ?? 'studio-slate'}" (hoặc các nền sáng/tối tùy chọn, chữ karaoke vàng #FACC15 khi nền tối).
 - Ưu tiên dùng \`kind: "shape_3d"\` với \`shape_type: "card_3d" | "pill_3d" | "cube_3d" | "staircase_3d"\` làm điểm nhấn chính ở \`y: 0.24..0.68\`.`;
+  } else if (options?.compositionId === 'cartoon-host') {
+    styleGuide = `PHONG CÁCH NHÂN VẬT HOẠT HÌNH LIP-SYNC (@Gimmys — Nền trời xanh & Thẻ tương tác):
+- Đặt "theme": "${options?.theme ?? 'pastel-sunrise'}" và "compositionId": "cartoon-host".
+- **TIÊU ĐỀ BÀI HỌC (\`"title"\`) NGẮN GỌN ĐÚNG NGÔN NGỮ NGƯỜI HỌC**: Tối đa 6–10 từ mang tính câu hỏi gợi tò mò (VD: \`"水が欲しい時、CanとCouldどっち？"\` hoặc \`"Bạn đã biết phân biệt 3 từ này chưa?"\`). Tuyệt đối KHÔNG ghi chú thích kỹ thuật kiểu \`(Transcript ... 1:42)\`.
+- **KHÔNG TẠO BONG BÓNG THOẠI LẶP LẠI CÂU NÓI**: App đã có phụ đề vàng nổi bật bên dưới và nhân vật Gimmy tự nhép miệng từng âm tiết.
+- **TẠO COMPONENT TƯƠNG TÁC ĐỂ NHÂN VẬT CHỈ TAY & PHẢN ỨNG THEO NGỮ CẢNH**:
+  + Trong mỗi scene, đặt nhãn ngắn (\`kind: "pill"\` ở \`y: 0.14..0.20\`) và thẻ ví dụ tương tác (\`kind: "text"\` / \`sentence_card\` ở \`y: 0.22..0.38\`) thể hiện rõ **ĐÚNG / SAI / TRÁNH DÙNG / MẸO**:
+    * Câu sai / nên tránh: \`style: { "badge": "cross", "stampText": "AVOID", "emphasisColor": "#DC2626" }\` → nhân vật tự đổi sang nét mặt lo lắng / cảnh báo!
+    * Câu hay / lịch sự / tự nhiên: \`style: { "badge": "check", "stampText": "NATURAL", "emphasisColor": "#16A34A" }\` → nhân vật cười tươi & chỉ tay lên thẻ!
+    * Câu hỏi / trắc nghiệm: \`style: { "badge": "question" }\` → nhân vật nghiêng đầu suy nghĩ tò mò!
+  + Có thể thêm \`kind: "meter"\` (sắc thái) hoặc \`kind: "illustration"\` nhỏ gọn ở \`y: 0.39..0.48\` nhưng PHẢI chừa vùng \`y: 0.42..0.74\` cho nhân vật Gimmy và \`y >= 0.76\` cho phụ đề vàng.`;
   } else if (aiDecideComposition) {
     const compositionList = LAYOUT_COMPOSITIONS.filter((c) => c.id !== 'custom' && c.id !== 'plain')
       .map(
@@ -107,6 +118,7 @@ Quy tắc chọn (ưu tiên từ trên xuống):
 - Checklist đúng/sai → "checklist-cards"
 - Mốc thời gian / deadline / thì → "timeline-track"
 - 3 khái niệm / giới từ / trọng âm → "spatial-contrast"
+- Giảng giải đối chiếu đúng/sai qua nhân vật hoạt hình lip-sync (@Gimmys, không bong bóng thoại) → "cartoon-host"
 - Từ khóa/câu ngắn mạnh phong cách @xun52000 → "word-reveal"
 - Bài giảng 3 cấp độ dùng khối nổi 3D → "3d-shapes"
 - Cảnh đời sống / hội thoại / câu chuyện (quán, công sở, bạn bè, sân bay, nhà hàng, mua sắm, bác sĩ, thời tiết...) → "story-scenes"

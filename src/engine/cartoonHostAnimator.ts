@@ -1,4 +1,5 @@
-import type { TranscriptCue, WordTiming } from './types';
+import type { ExportAspectRatioId } from './mp4Config';
+import type { SceneElement, TranscriptCue, WordTiming } from './types';
 
 export type CartoonViseme =
   | 'rest'
@@ -9,7 +10,26 @@ export type CartoonViseme =
   | 'oh'
   | 'oo';
 
-export type CartoonGestureMode = 'present' | 'explain' | 'question' | 'cheer';
+export type CartoonGestureMode =
+  | 'present'
+  | 'explain'
+  | 'question'
+  | 'cheer'
+  | 'point-up'
+  | 'point-right'
+  | 'warn-avoid'
+  | 'approve-tip';
+
+export type CartoonExpressionMood = 'neutral' | 'happy' | 'worried' | 'curious' | 'surprised';
+
+export interface CartoonHostContext {
+  activeBadge?: 'check' | 'cross' | 'question' | 'none';
+  activeStamp?: string;
+  activeText?: string;
+  cueText?: string;
+  toneValue?: number;
+  targetDirection?: 'up' | 'right' | 'none';
+}
 
 export interface CartoonLipSyncFrame {
   isSpeaking: boolean;
@@ -26,10 +46,23 @@ export interface CartoonLipSyncFrame {
   blinkFactor: number;
   /** Gentle subtle vertical breath/float offset in px (before scale) */
   headBobY: number;
+  /** Gentle horizontal negative/emphasis head shake offset in px (before scale) */
+  headShakeX: number;
   /** Subtle conversational head tilt in radians */
   headTiltRad: number;
   /** 0..1 eyebrow raise on questions & emphasis */
   browLift: number;
+  /** -1 (worried inner-up / \) .. 0 (level) .. +1 (inquisitive asymmetrical raise) */
+  browSlope: number;
+  /** -1 (concerned downturn) .. 0 (neutral) .. +1 (warm smile) */
+  smileBias: number;
+  /** Pupil horizontal gaze target (-1 left .. +1 right toward companion card) */
+  eyeTargetX: number;
+  /** Pupil vertical gaze target (-1 up toward top card .. +1 down) */
+  eyeTargetY: number;
+  mood: CartoonExpressionMood;
+  /** Optional subtle reaction indicator near gesturing hand */
+  pointerGlyph: 'check' | 'cross' | 'question' | 'tip' | null;
   /** Smoothly interpolated viewer-left arm angles (radians) */
   leftShoulderAngle: number;
   leftElbowAngle: number;
@@ -41,6 +74,10 @@ export interface CartoonLipSyncFrame {
 
 function clamp01(v: number): number {
   return Math.max(0, Math.min(1, v));
+}
+
+function clampRange(v: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, v));
 }
 
 function smoothstep(t: number): number {
@@ -67,6 +104,31 @@ const VISEME_SHAPES: Record<CartoonViseme, VisemeMetrics> = {
   oh: { open: 0.78, width: 0.76, round: 0.88 },
   oo: { open: 0.48, width: 0.62, round: 0.96 },
 };
+
+/**
+ * Cleans accidental technical/duration suffixes like "(Transcript Nhật-Anh 1:42)" from
+ * the top cartoon headline and keeps it concise and punchy for on-screen reading.
+ */
+export function formatCartoonHostHeadline(rawTitle?: string, maxChars = 40): string {
+  const raw = (rawTitle || '').trim();
+  if (!raw) return '';
+
+  let cleaned = raw
+    .replace(/\(\s*(?:transcript|audio|video|demo|preset|sample)\b[^)]*\)/gi, '')
+    .replace(/\(\s*\d{1,2}:\d{2}(?::\d{2})?\s*\)/g, '')
+    .replace(/\[(?:transcript|audio|video)\b[^\]]*\]/gi, '')
+    .replace(/\s{2,}/g, ' ')
+    .replace(/^[\s\-–—·:|]+|[\s\-–—·:|]+$/g, '')
+    .trim();
+
+  if (!cleaned) cleaned = raw;
+  if (cleaned.length <= maxChars) return cleaned;
+
+  const slice = cleaned.slice(0, maxChars - 1).trim();
+  const lastSpace = slice.lastIndexOf(' ');
+  const cut = lastSpace >= Math.floor(maxChars * 0.52) ? slice.slice(0, lastSpace).trim() : slice;
+  return `${cut.replace(/[,;:·-]+$/, '')}…`;
+}
 
 /**
  * Maps a Latin, Japanese (Hiragana/Katakana), Korean Hangul, or punctuation character
@@ -133,14 +195,12 @@ function buildWordVisemeSequence(word: string): CartoonViseme[] {
 
   const chars = Array.from(clean);
   const raw = chars.map(classifyCharToViseme);
-  // Collapse consecutive identical visemes so mouth transitions feel syllabic rather than fluttery
   const compact: CartoonViseme[] = [];
   for (const v of raw) {
     if (compact.length === 0 || compact[compact.length - 1] !== v) {
       compact.push(v);
     }
   }
-  // Ensure at least one vowel-like opening inside real spoken words
   if (compact.length === 1 && compact[0] === 'closed') {
     compact.push('ah');
   }
@@ -186,8 +246,6 @@ interface ArmPose {
   rightElbow: number;
 }
 
-// Reference @Gimmys pose ('present'): viewer-left arm extended gently outward with 4-finger open palm;
-// viewer-right arm bent comfortably near waist/hip.
 const ARM_POSES: Record<CartoonGestureMode, ArmPose> = {
   present: {
     leftShoulder: 0.42,
@@ -213,33 +271,215 @@ const ARM_POSES: Record<CartoonGestureMode, ArmPose> = {
     rightShoulder: -0.68,
     rightElbow: -0.62,
   },
+  'point-up': {
+    leftShoulder: 0.25,
+    leftElbow: 0.42,
+    rightShoulder: -1.45,
+    rightElbow: -0.95,
+  },
+  'point-right': {
+    leftShoulder: 0.28,
+    leftElbow: 0.46,
+    rightShoulder: 1.05,
+    rightElbow: 0.22,
+  },
+  'warn-avoid': {
+    leftShoulder: 0.85,
+    leftElbow: 0.65,
+    rightShoulder: -0.95,
+    rightElbow: -0.78,
+  },
+  'approve-tip': {
+    leftShoulder: 0.48,
+    leftElbow: 0.44,
+    rightShoulder: -1.18,
+    rightElbow: -0.76,
+  },
 };
 
-function detectGestureForCue(cue: TranscriptCue | undefined, cueIdx: number): CartoonGestureMode {
-  if (!cue) return 'present';
-  const txt = cue.text.trim();
-  if (/[?？]$/.test(txt) || /\b(okay|could|may|can|how|what|why|would|right)\b/i.test(txt)) {
-    return cueIdx % 2 === 0 ? 'present' : 'question';
+const NEGATIVE_CONTEXT_REGEX =
+  /\b(avoid|rude|wrong|mistake|don't say|do not say|stop saying|never say|too blunt|too direct|textbook|boring|bad|incorrect|no!)\b|ぶっきらぼう|失礼|ダメ|間違い|使わない|tránh|sai|đừng nói|thô lỗ|cọc lốc|lỗi/i;
+
+const NEGATIVE_NG_TOKEN_REGEX = /(?:^|[\s「『(【])NG(?:$|[\s」』)】:：!])/u;
+
+const QUESTION_CONTEXT_REGEX =
+  /[?？]|\b(quiz|question|guess|which|choose|think|wonder|blank|fill in)\b|どっち|どれ|なんで|どう|質問|クイズ|chọn|đố|nghĩ thử|cách nào/i;
+
+const POSITIVE_CONTEXT_REGEX =
+  /\b(natural|polite|better|instead|great|correct|awesome|smart|formal|upgrade|native|use this|right way|polite!)\b|丁寧|自然|おすすめ|正解|ネイティブ|良い|使うべき|nên dùng|tự nhiên|chuẩn|lịch sự|chính xác|đúng|hay hơn/i;
+
+const TIP_CONTEXT_REGEX =
+  /\b(tip|key|important|note|remember|focus|secret|rule)\b|ポイント|コツ|覚え|重要|mẹo|lưu ý|bí quyết|quy tắc/i;
+
+function classifyMoodAndGesture(
+  cue: TranscriptCue | undefined,
+  cueIdx: number,
+  context?: CartoonHostContext,
+): {
+  mood: CartoonExpressionMood;
+  gestureMode: CartoonGestureMode;
+  pointerGlyph: CartoonLipSyncFrame['pointerGlyph'];
+} {
+  const txt = cue?.text?.trim() ?? '';
+  const combined = [txt, context?.cueText, context?.activeStamp, context?.activeText]
+    .filter(Boolean)
+    .join(' ');
+  const dir = context?.targetDirection ?? 'none';
+
+  const isExplicitNegative = context?.activeBadge === 'cross';
+  const isExplicitPositive = context?.activeBadge === 'check';
+  const isExplicitQuestion = context?.activeBadge === 'question';
+  const hasExplicitBadge = isExplicitNegative || isExplicitPositive || isExplicitQuestion;
+
+  const isNegative =
+    isExplicitNegative ||
+    (!hasExplicitBadge &&
+      ((typeof context?.toneValue === 'number' && context.toneValue < 0.34) ||
+        NEGATIVE_CONTEXT_REGEX.test(combined) ||
+        NEGATIVE_NG_TOKEN_REGEX.test(combined)));
+
+  if (isNegative) {
+    return {
+      mood: 'worried',
+      gestureMode: 'warn-avoid',
+      pointerGlyph: 'cross',
+    };
   }
-  if (/[!！]$/.test(txt) || /\b(great|awesome|natural|polite|amazing|yes)\b/i.test(txt)) {
-    return 'cheer';
+
+  const isQuestion =
+    isExplicitQuestion ||
+    (!hasExplicitBadge && QUESTION_CONTEXT_REGEX.test(combined));
+
+  if (isQuestion) {
+    return {
+      mood: 'curious',
+      gestureMode: dir === 'right' ? 'point-right' : dir === 'up' ? 'point-up' : 'question',
+      pointerGlyph: 'question',
+    };
   }
-  return cueIdx % 2 === 0 ? 'present' : 'explain';
+
+  const isPositive =
+    isExplicitPositive ||
+    (typeof context?.toneValue === 'number' && context.toneValue >= 0.62) ||
+    POSITIVE_CONTEXT_REGEX.test(combined);
+
+  if (isPositive) {
+    return {
+      mood: 'happy',
+      gestureMode:
+        dir === 'right'
+          ? 'point-right'
+          : dir === 'up'
+            ? cueIdx % 2 === 0
+              ? 'point-up'
+              : 'approve-tip'
+            : 'cheer',
+      pointerGlyph: 'check',
+    };
+  }
+
+  const isTip = TIP_CONTEXT_REGEX.test(combined);
+  if (dir === 'right') {
+    return {
+      mood: isTip ? 'happy' : 'neutral',
+      gestureMode: cueIdx % 2 === 0 ? 'point-right' : 'explain',
+      pointerGlyph: isTip ? 'tip' : null,
+    };
+  }
+  if (dir === 'up') {
+    return {
+      mood: isTip ? 'happy' : 'neutral',
+      gestureMode: cueIdx % 2 === 0 ? 'point-up' : 'explain',
+      pointerGlyph: isTip ? 'tip' : null,
+    };
+  }
+
+  return {
+    mood: isTip ? 'happy' : 'neutral',
+    gestureMode: cueIdx % 2 === 0 ? 'present' : 'explain',
+    pointerGlyph: isTip ? 'tip' : null,
+  };
+}
+
+/**
+ * Inspects active scene elements at `time` so Gimmy reacts directly to whatever
+ * teaching card, comparison, or tone meter is currently on screen.
+ */
+export function computeCartoonHostContextFromElements(
+  elements: SceneElement[],
+  time: number,
+  cues: TranscriptCue[] = [],
+  aspectRatio: ExportAspectRatioId = '9:16',
+): CartoonHostContext {
+  const active = elements.filter(
+    (el) =>
+      time >= el.startTime - 0.02 &&
+      time <= el.endTime + 0.02 &&
+      !(el.props.kind === 'illustration-prop' && el.props.variant === 'cartoon-host'),
+  );
+
+  const activeCard = active.find((el) => el.type === 'sentence-card');
+  const activePill = active.find((el) => el.type === 'topic-pill');
+  const activeMeter = active.find((el) => el.type === 'tone-meter');
+  const activeIll = active.find((el) => el.type === 'illustration-prop');
+  const activeCue = cues.find((c) => time >= c.start && time <= c.end);
+
+  const textParts: string[] = [];
+  let activeBadge: CartoonHostContext['activeBadge'];
+  let activeStamp: string | undefined;
+  let toneValue: number | undefined;
+
+  if (activeCard && activeCard.props.kind === 'sentence-card') {
+    activeBadge = activeCard.props.badge;
+    activeStamp = activeCard.props.stampText;
+    textParts.push(activeCard.props.text, activeCard.props.subtext || '');
+  }
+  if (activePill && activePill.props.kind === 'topic-pill') {
+    textParts.push(activePill.props.text);
+  }
+  if (activeIll && activeIll.props.kind === 'illustration-prop' && activeIll.props.data) {
+    const d = activeIll.props.data;
+    textParts.push(d.title || '', d.subtitle || '', d.reactionText || '', d.speechText || '');
+    if (d.labels?.length) textParts.push(d.labels.join(' '));
+  }
+  if (activeMeter && activeMeter.props.kind === 'tone-meter') {
+    const p = activeMeter.props;
+    const span = Math.max(0.05, (p.animateEnd ?? activeMeter.endTime) - (p.animateStart ?? activeMeter.startTime));
+    const ratio = clamp01((time - (p.animateStart ?? activeMeter.startTime)) / span);
+    toneValue = lerp(p.valueStart, p.valueEnd, ratio);
+  }
+
+  const hasCompanionVisual = Boolean(activeCard || activePill || activeMeter || activeIll);
+  const targetDirection: CartoonHostContext['targetDirection'] = !hasCompanionVisual
+    ? 'none'
+    : aspectRatio === '16:9' || aspectRatio === '1:1'
+      ? 'right'
+      : 'up';
+
+  return {
+    activeBadge,
+    activeStamp,
+    activeText: textParts.filter(Boolean).join(' ').trim() || undefined,
+    cueText: activeCue?.text,
+    toneValue,
+    targetDirection,
+  };
 }
 
 /**
  * Computes deterministic, silky-smooth frame-accurate animation state for the
  * @Gimmys-style cartoon mascot at any timestamp `time`.
- * Uses cubic/smoothstep syllable envelopes and damped pose transitions so motion
- * is organic and never jittery.
+ * Context-aware: adapts facial expressions, brow slant, eye gaze direction, and
+ * pointing/warning gestures to match right/wrong/question/tip cards.
  */
 export function computeSpeechLipSyncState(
   cues: TranscriptCue[],
   time: number,
+  context?: CartoonHostContext,
 ): CartoonLipSyncFrame {
   const t = Math.max(0, time);
 
-  // Natural blinking every ~3.4s (two crisp 0.16s ease-in-out blinks + slight variance)
+  // Natural blinking every ~3.45s
   const blinkCycle = 3.45;
   const phase = t % blinkCycle;
   const blinkWindow = 0.16;
@@ -249,30 +489,35 @@ export function computeSpeechLipSyncState(
     blinkFactor = Math.sin(bp * Math.PI);
   }
 
-  // Locate active cue (preferring exact hit; tiny lead-in of 60ms for natural mouth anticipation)
+  // Locate active cue (tiny lead-in of 60ms for natural anticipation)
   let activeCueIdx = cues.findIndex((c) => t >= c.start && t <= c.end);
   if (activeCueIdx === -1) {
     activeCueIdx = cues.findIndex((c) => t >= c.start - 0.06 && t <= c.end + 0.06);
   }
   const activeCue = activeCueIdx >= 0 ? cues[activeCueIdx] : undefined;
 
-  // Determine gesture mode & smooth cross-cue pose interpolation
   const prevCueIdx = Math.max(
     0,
     activeCueIdx >= 0
       ? activeCueIdx - 1
       : cues.filter((c) => c.end < t).length - 1,
   );
-  const currentGesture = detectGestureForCue(activeCue ?? cues[prevCueIdx], Math.max(0, activeCueIdx));
-  const previousGesture = detectGestureForCue(cues[prevCueIdx], prevCueIdx);
-  const transitionStart = activeCue ? activeCue.start : 0;
-  const gestureBlend = activeCue
-    ? smoothstep((t - transitionStart) / 0.42)
-    : 1;
+  const currentState = classifyMoodAndGesture(
+    activeCue ?? cues[prevCueIdx],
+    Math.max(0, activeCueIdx),
+    context,
+  );
+  const prevState = classifyMoodAndGesture(
+    cues[prevCueIdx],
+    prevCueIdx,
+    activeCueIdx > 0 ? undefined : context,
+  );
 
-  const pA = ARM_POSES[previousGesture];
-  const pB = ARM_POSES[currentGesture];
-  // Ultra-gentle organic breathing sway on arms (low amplitude, smooth low frequency)
+  const transitionStart = activeCue ? activeCue.start : 0;
+  const gestureBlend = activeCue ? smoothstep((t - transitionStart) / 0.36) : 1;
+
+  const pA = ARM_POSES[prevState.gestureMode];
+  const pB = ARM_POSES[currentState.gestureMode];
   const swayA = Math.sin(t * 1.45) * 0.045;
   const swayB = Math.cos(t * 1.25) * 0.04;
 
@@ -308,7 +553,6 @@ export function computeSpeechLipSyncState(
       const s0 = VISEME_SHAPES[v0];
       const s1 = VISEME_SHAPES[v1];
 
-      // Smooth Hermite blend between intra-word phonemes + gentle open/close word envelope
       const interp = smoothstep(localFrac);
       const wordEnvelope = Math.sin(Math.PI * Math.pow(u, 0.85));
       const syllablePulse = 0.72 + 0.28 * Math.sin(Math.PI * localFrac);
@@ -319,23 +563,75 @@ export function computeSpeechLipSyncState(
       mouthWidth = lerp(s0.width, s1.width, interp);
       mouthRound = lerp(s0.round, s1.round, interp);
     } else {
-      // Short intra-cue pause between words: gentle friendly closed smile
-      viseme = 'smile';
-      mouthOpen = 0.05;
-      mouthWidth = 1.06;
+      viseme = currentState.mood === 'worried' ? 'closed' : 'smile';
+      mouthOpen = 0.04;
+      mouthWidth = currentState.mood === 'worried' ? 0.92 : 1.06;
       mouthRound = 0;
     }
   }
 
-  // Soft low-frequency breathing float (never choppy high-frequency jitter)
-  const breathY = Math.sin(t * 1.8) * 2.6;
-  const speakBounceY = isSpeaking ? Math.sin(t * 6.2) * 1.1 * clamp01(mouthOpen * 1.5) : 0;
+  const mood = currentState.mood;
+  const breathY = Math.sin(t * 1.8) * 2.4;
+  const speakBounceY = isSpeaking ? Math.sin(t * 6.2) * 1.15 * clamp01(mouthOpen * 1.5) : 0;
   const headBobY = breathY + speakBounceY;
 
-  const isQuestion = Boolean(activeCue && /[?？]/.test(activeCue.text));
-  const browLift = isQuestion ? lerp(0.35, 0.85, gestureBlend) : isSpeaking ? 0.25 + mouthOpen * 0.2 : 0.08;
+  const headShakeX =
+    mood === 'worried'
+      ? Math.sin(t * 5.2) * 3.2 * (isSpeaking ? 1 : 0.45)
+      : 0;
+
+  const targetDir = context?.targetDirection ?? 'none';
+  const eyeTargetX = clampRange(
+    targetDir === 'right'
+      ? 0.68
+      : mood === 'curious'
+        ? 0.25
+        : Math.sin(t * 0.7) * 0.14,
+    -1,
+    1,
+  );
+  const eyeTargetY = clampRange(
+    targetDir === 'up'
+      ? -0.62
+      : mood === 'worried'
+        ? -0.15
+        : 0,
+    -1,
+    1,
+  );
+
+  const browSlope =
+    mood === 'worried'
+      ? -0.88
+      : mood === 'curious'
+        ? 0.72
+        : mood === 'happy'
+          ? 0.38
+          : 0.08;
+
+  const smileBias =
+    mood === 'worried'
+      ? -0.78
+      : mood === 'happy'
+        ? 0.9
+        : mood === 'curious'
+          ? 0.05
+          : 0.35;
+
+  const browLift =
+    mood === 'curious'
+      ? lerp(0.4, 0.85, gestureBlend)
+      : mood === 'worried'
+        ? 0.32
+        : isSpeaking
+          ? 0.24 + mouthOpen * 0.22
+          : 0.08;
+
   const headTiltRad =
-    Math.sin(t * 0.95) * 0.025 + (isQuestion ? 0.028 * gestureBlend : 0);
+    Math.sin(t * 0.95) * 0.022 +
+    (mood === 'curious' ? 0.055 * gestureBlend : 0) +
+    (mood === 'worried' ? -0.04 * gestureBlend : 0) +
+    (targetDir === 'right' && mood === 'happy' ? 0.03 * gestureBlend : 0);
 
   return {
     isSpeaking,
@@ -347,12 +643,19 @@ export function computeSpeechLipSyncState(
     mouthRound,
     blinkFactor,
     headBobY,
+    headShakeX,
     headTiltRad,
     browLift,
+    browSlope,
+    smileBias,
+    eyeTargetX,
+    eyeTargetY,
+    mood,
+    pointerGlyph: currentState.pointerGlyph,
     leftShoulderAngle,
     leftElbowAngle,
     rightShoulderAngle,
     rightElbowAngle,
-    gestureMode: currentGesture,
+    gestureMode: currentState.gestureMode,
   };
 }

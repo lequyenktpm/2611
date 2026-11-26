@@ -429,7 +429,7 @@ export const AutomationPipelinePanel: React.FC<AutomationPipelinePanelProps> = (
     onSelectPreset(presetId);
     if (presetId === 'jp-en') {
       setRawTranscript(SAMPLE_JP_EN_TRANSCRIPT);
-      setCustomTitle('Can / Could / May (Transcript Nhật-Anh 1:42)');
+      setCustomTitle('水が欲しい時、CanとCouldどっち？');
       setRawSceneJson(JSON.stringify(SAMPLE_JP_EN_SCENE_JSON, null, 2));
       setPromptStyle('tiktok-cards');
       setUseSeparateWordsJson(false);
@@ -1176,7 +1176,7 @@ export const AutomationPipelinePanel: React.FC<AutomationPipelinePanelProps> = (
                     type="button"
                     onClick={() => {
                       setRawTranscript(SAMPLE_JP_EN_TRANSCRIPT);
-                      setCustomTitle('Can / Could / May (Transcript Nhật-Anh 1:42)');
+                      setCustomTitle('水が欲しい時、CanとCouldどっち？');
                       setErrorMsg(null);
                     }}
                     className="flex-1 px-3 py-2 text-xs font-medium text-indigo-700 bg-indigo-50 border border-indigo-200 rounded-lg hover:bg-indigo-100 transition-colors whitespace-nowrap"
