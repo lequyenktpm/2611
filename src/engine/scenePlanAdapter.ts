@@ -3,6 +3,8 @@ import type { VectorPrimitive } from './customComponentTypes';
 import { matchIllustrationForCue } from './illustrationLayouts';
 import { resolveProjectOverlaps } from './layoutSolver';
 import {
+  clampCuesToAudioDuration,
+  clampSourceSegmentsToAudioDuration,
   isStoryboardV19Document,
   mapV19EnterAnimation,
   mapV19ExitAnimation,
@@ -170,7 +172,6 @@ export interface FlexibleSceneDocument extends ScenePlanDocument {
   style_profile?: StoryboardV19Document['style_profile'];
   elements?: FlexibleAiElement[];
   scenes: (ScenePlanDocument['scenes'][number] & {
-    scene_id?: string;
     title?: string;
     learning_objective?: string;
     composition?: LayoutCompositionId;
@@ -886,7 +887,7 @@ function convertStoryboardV19Elements(
         }
       }
 
-      const safeEnd = Math.max(startTime + 0.65, endTime);
+      const safeEnd = Math.min(totalDuration, Math.max(startTime + 0.65, endTime));
 
       // Position resolution: v1.9 normalized top-left { x, y, width, height } vs legacy center { x, y }
       const pos = el.position;
@@ -1259,6 +1260,48 @@ function convertStoryboardV19Elements(
   return result;
 }
 
+export function clampStoryboardPlanToAudioDuration<T extends FlexibleSceneDocument>(
+  plan: T,
+  audioDurationSec: number,
+): T {
+  const safeAudio = Number(audioDurationSec);
+  if (!plan || !Number.isFinite(safeAudio) || safeAudio <= 0.2) return plan;
+
+  const hasSegs = Array.isArray(plan.source_segments) && plan.source_segments.length > 0;
+  const clampedSegs = hasSegs
+    ? clampSourceSegmentsToAudioDuration(plan.source_segments!, safeAudio).segments
+    : plan.source_segments;
+
+  const clampedScenes = (plan.scenes ?? []).map((sc) => ({
+    ...sc,
+    elements: Array.isArray(sc.elements)
+      ? sc.elements.map((rawEl) => {
+          const el = rawEl as unknown as Record<string, unknown>;
+          const copy: Record<string, unknown> = { ...el };
+          if (typeof el.end_s === 'number' && el.end_s > safeAudio) {
+            copy.end_s = Number(safeAudio.toFixed(3));
+          }
+          if (typeof el.end === 'number' && el.end > safeAudio) {
+            copy.end = Number(safeAudio.toFixed(3));
+          }
+          if (typeof el.start_s === 'number' && el.start_s >= safeAudio - 0.2) {
+            copy.start_s = Number(Math.max(0, safeAudio - 0.5).toFixed(3));
+          }
+          if (typeof el.start === 'number' && el.start >= safeAudio - 0.2) {
+            copy.start = Number(Math.max(0, safeAudio - 0.5).toFixed(3));
+          }
+          return copy as unknown as typeof rawEl;
+        })
+      : sc.elements,
+  }));
+
+  return {
+    ...plan,
+    source_segments: clampedSegs,
+    scenes: clampedScenes,
+  };
+}
+
 export function scenePlanToProject(
   words: WordTiming[],
   plan: FlexibleSceneDocument,
@@ -1268,13 +1311,19 @@ export function scenePlanToProject(
     theme?: CanvasThemeId;
     compositionId?: LayoutCompositionId;
     audioFileName?: string;
+    audioDurationSec?: number | null;
     cuesOverride?: TranscriptCue[];
   },
 ): LessonProject {
-  const isV19 = isStoryboardV19Document(plan);
-  const v19Segments = Array.isArray(plan.source_segments) ? plan.source_segments : [];
+  const audioDur =
+    typeof options?.audioDurationSec === 'number' && options.audioDurationSec > 0
+      ? options.audioDurationSec
+      : null;
+  const effectivePlan = audioDur !== null ? clampStoryboardPlanToAudioDuration(plan, audioDur) : plan;
+  const isV19 = isStoryboardV19Document(effectivePlan);
+  const v19Segments = Array.isArray(effectivePlan.source_segments) ? effectivePlan.source_segments : [];
 
-  const cues: TranscriptCue[] =
+  const rawCues: TranscriptCue[] =
     options?.cuesOverride && options.cuesOverride.length > 0
       ? options.cuesOverride
       : isV19 && v19Segments.length > 0
@@ -1286,6 +1335,7 @@ export function scenePlanToProject(
             words: interpolateWordTimings(seg.text, Number(seg.start), Number(seg.end)),
           }))
         : groupWordsIntoCues(words);
+  const cues = audioDur !== null ? clampCuesToAudioDuration(rawCues, audioDur) : rawCues;
 
   const segLastEnd =
     v19Segments.length > 0 ? Math.max(...v19Segments.map((s) => Number(s.end) || 0)) : 0;
@@ -1295,13 +1345,16 @@ export function scenePlanToProject(
       : words.length > 0
         ? words[words.length - 1].end
         : Math.max(6.0, segLastEnd);
-  const totalDuration = Number((lastEnd + 0.5).toFixed(2));
+  const totalDuration =
+    audioDur !== null
+      ? Number(Math.max(lastEnd, audioDur).toFixed(2))
+      : Number((lastEnd + 0.5).toFixed(2));
 
   const elements: SceneElement[] = [];
 
   if (isV19) {
     elements.push(
-      ...convertStoryboardV19Elements(plan.scenes, v19Segments, words, cues, totalDuration),
+      ...convertStoryboardV19Elements(effectivePlan.scenes, v19Segments, words, cues, totalDuration),
     );
   }
 
@@ -1343,8 +1396,9 @@ export function scenePlanToProject(
       const pw = Math.round(sh.position.w * STAGE_W);
       const ph = Math.round(sh.position.h * STAGE_H);
 
+      const safeSceneId = sc.id || sc.scene_id || `sc-${scIdx + 1}`;
       elements.push({
-        id: `${sc.id}-shape-${shIdx}`,
+        id: `${safeSceneId}-shape-${shIdx}`,
         type: 'shape-3d',
         label: attachedText
           ? `${sh.type}: ${attachedText.content.slice(0, 22)}`
@@ -1391,8 +1445,9 @@ export function scenePlanToProject(
         const py = (tx.position?.y ?? 0.42) * STAGE_H;
         const pw = (tx.position?.w ?? 0.78) * STAGE_W;
 
+        const safeSceneId = sc.id || sc.scene_id || `sc-${scIdx + 1}`;
         elements.push({
-          id: `${sc.id}-text-${txIdx}`,
+          id: `${safeSceneId}-text-${txIdx}`,
           type: 'sentence-card',
           label: `Chữ: ${tx.content.slice(0, 22)}`,
           startTime: Number(startTime.toFixed(2)),
@@ -1416,14 +1471,18 @@ export function scenePlanToProject(
       });
   });
 
-  const resolvedCompId = options?.compositionId ?? plan.compositionId;
+  const inferredSceneComp = plan.scenes?.find((sc) => sc.composition)?.composition as
+    | LayoutCompositionId
+    | undefined;
+  const resolvedCompId = options?.compositionId ?? plan.compositionId ?? inferredSceneComp;
+  const isCartoonHost = resolvedCompId === 'cartoon-host';
   const has3dOnly = elements.length > 0 && elements.every((e) => e.type === 'shape-3d');
   const resolvedTheme = options?.theme ?? plan.theme ?? (has3dOnly ? 'studio-slate' : 'pastel-sunrise');
   const isDarkTheme = isDarkCanvasTheme(resolvedTheme);
 
   // Fallback visual richness guard: if imported JSON/scenes leave any segment/cue with only bare text
   // (no illustration, 3D shape, word-stack, or tone-meter visible during that window), inject a
-  // contextual Bootstrap/vector visual component (skipping word-reveal which is intentionally minimal).
+  // contextual Bootstrap/vector visual component (skipping word-reveal and cartoon-host which uses @Gimmys).
   const enrichWindows: Array<{ start: number; end: number; text: string }> = [];
   if (isV19 && v19Segments.length > 0) {
     v19Segments.forEach((seg) => {
@@ -1448,7 +1507,12 @@ export function scenePlanToProject(
     });
   }
 
-  if (resolvedCompId !== 'word-reveal' && !has3dOnly && enrichWindows.length > 0) {
+  if (
+    resolvedCompId !== 'word-reveal' &&
+    !isCartoonHost &&
+    !has3dOnly &&
+    enrichWindows.length > 0
+  ) {
     const ROTATION_VARIANTS: IllustrationVariant[] = [
       'contrast-pair-cards',
       'phrase-icon-split',
@@ -1528,6 +1592,91 @@ export function scenePlanToProject(
     });
   }
 
+  if (isCartoonHost) {
+    // Prepare stage for @Gimmys: infer badge/stampText on sentence cards for facial reactions & hand pointers,
+    // keep teaching elements cleanly in the upper zone above Gimmy (y < 760), and ensure @Gimmys exists.
+    elements.forEach((el) => {
+      if (el.props.kind === 'sentence-card') {
+        const cardText = `${el.props.text || ''} ${el.props.subtext || ''}`;
+        if (!el.props.badge || el.props.badge === 'none') {
+          const inferredBadge: 'check' | 'cross' | 'question' | 'none' =
+            /\b(avoid|rude|wrong|mistake|don't say|stop saying)\b|ぶっきらぼう|tránh|sai/i.test(cardText) ||
+            /(?:^|[\s「『(【])NG(?:$|[\s」』)】:：!])/u.test(cardText)
+              ? 'cross'
+              : /[?？]/.test(cardText)
+                ? 'question'
+                : /\b(natural|polite|better|instead|could|may|can|tip)\b|丁寧|自然|nên dùng/i.test(cardText)
+                  ? 'check'
+                  : 'none';
+          if (inferredBadge !== 'none') {
+            el.props = {
+              ...el.props,
+              badge: inferredBadge,
+              stampText:
+                el.props.stampText ||
+                (inferredBadge === 'cross'
+                  ? 'AVOID'
+                  : inferredBadge === 'check'
+                    ? 'NATURAL'
+                    : undefined),
+              stampColor:
+                el.props.stampColor ||
+                (inferredBadge === 'cross'
+                  ? '#DC2626'
+                  : inferredBadge === 'check'
+                    ? '#16A34A'
+                    : undefined),
+              bgColor:
+                el.props.bgColor || (inferredBadge === 'cross' ? '#FFF1F2' : '#FFFFFF'),
+            };
+          }
+        }
+        if (el.layout.y > 760) {
+          el.layout = { ...el.layout, y: 500, scale: Math.min(el.layout.scale || 1, 0.92) };
+        }
+      } else if (el.props.kind === 'tone-meter' && el.layout.y > 760) {
+        el.layout = { ...el.layout, y: 690, width: Math.min(el.layout.width, 720), scale: 0.78 };
+      } else if (
+        el.props.kind === 'illustration-prop' &&
+        el.props.variant !== 'cartoon-host' &&
+        el.layout.y > 680
+      ) {
+        el.layout = { ...el.layout, y: 510, scale: Math.min(el.layout.scale || 1, 0.82) };
+      }
+    });
+
+    const hasCartoonHost = elements.some(
+      (el) => el.props.kind === 'illustration-prop' && el.props.variant === 'cartoon-host',
+    );
+    if (!hasCartoonHost) {
+      const hasToneMeter = elements.some((el) => el.type === 'tone-meter');
+      elements.push({
+        id: 'cartoon-host-main',
+        type: 'illustration-prop',
+        label: 'Nhân vật Hoạt Hình Lip-Sync (@Gimmys)',
+        startTime: 0,
+        endTime: totalDuration,
+        enterAnimation: 'fade-scale',
+        exitAnimation: 'fade-out',
+        layout: {
+          x: 540,
+          y: hasToneMeter ? 1135 : 1085,
+          width: 820,
+          scale: hasToneMeter ? 0.88 : 0.94,
+          zIndex: 12,
+        },
+        props: {
+          kind: 'illustration-prop',
+          variant: 'cartoon-host',
+          data: {
+            title: options?.title?.trim() || plan.title || 'Lesson Host',
+            speechText: cues[0]?.text || '',
+          },
+        },
+      });
+    }
+  }
+
   // Add bottom karaoke cues
   cues.forEach((cue, idx) => {
     elements.push({
@@ -1536,17 +1685,17 @@ export function scenePlanToProject(
       label: `Sub động #${idx + 1}`,
       startTime: cue.start,
       endTime: cue.end,
-      enterAnimation: 'slide-up',
+      enterAnimation: isCartoonHost ? 'pop-up' : 'slide-up',
       exitAnimation: 'fade-out',
-      layout: { x: 540, y: 1580, width: 920, scale: 1, zIndex: 40 },
+      layout: { x: 540, y: 1580, width: isCartoonHost ? 900 : 920, scale: 1, zIndex: 40 },
       props: {
         kind: 'karaoke-card',
         cueId: cue.id,
         words: cue.words,
-        activeColor: isDarkTheme ? '#FACC15' : '#2563EB',
-        inactiveColor: isDarkTheme ? '#CBD5E1' : '#9CA3AF',
-        spokenColor: isDarkTheme ? '#FFFFFF' : '#111827',
-        variant: isDarkTheme ? 'dark-bar' : 'white-card',
+        activeColor: isCartoonHost ? '#B91C1C' : isDarkTheme ? '#FACC15' : '#2563EB',
+        inactiveColor: isCartoonHost ? '#334155' : isDarkTheme ? '#CBD5E1' : '#9CA3AF',
+        spokenColor: isCartoonHost ? '#0F172A' : isDarkTheme ? '#FFFFFF' : '#111827',
+        variant: isCartoonHost ? 'yellow-pill' : isDarkTheme ? 'dark-bar' : 'white-card',
       },
     });
   });
@@ -1556,9 +1705,11 @@ export function scenePlanToProject(
   return {
     id: options?.id ?? `scene-ai-${Date.now()}`,
     title: options?.title?.trim() || plan.title || 'Dự án từ Scene JSON',
-    subtitle: `${cues.length} câu thoại · ${resolvedElements.length} lớp đồ họa`,
+    subtitle: isCartoonHost
+      ? `${cues.length} câu thoại · Hoạt hình Lip-Sync (@Gimmys)`
+      : `${cues.length} câu thoại · ${resolvedElements.length} lớp đồ họa`,
     theme: resolvedTheme,
-    compositionId: options?.compositionId ?? plan.compositionId,
+    compositionId: resolvedCompId,
     duration: totalDuration,
     fps: 30,
     cues,

@@ -20,6 +20,7 @@ import {
   XCircle,
 } from 'lucide-react';
 import { buildSceneGenerationPrompt } from '../engine/aiPromptBuilder';
+import { getEffectiveIntroSeconds } from '../engine/canvasRenderer';
 import { validateStoryboardDocument } from '../engine/storyboardValidator';
 import { cleanDownloadFileName } from '../engine/outputNaming';
 import {
@@ -47,10 +48,12 @@ import {
   SAMPLE_XUN52000_TRANSCRIPT,
 } from '../engine/demoPresets';
 import {
+  clampStoryboardPlanToAudioDuration,
   parseScenePlanJson,
   parseWordLevelJson,
   summarizeScenePlan,
 } from '../engine/scenePlanAdapter';
+import { clampCuesToAudioDuration } from '../engine/storyboardV19';
 import {
   cuesToBlockTranscript,
   formatTimeToken,
@@ -601,6 +604,16 @@ export const AutomationPipelinePanel: React.FC<AutomationPipelinePanelProps> = (
     }
   };
 
+  const handleClampJsonSegmentsToAudio = () => {
+    if (!parsedPreviewPlan || !audioDurationSec || audioDurationSec <= 0.2) return;
+    const clampedPlan = clampStoryboardPlanToAudioDuration(parsedPreviewPlan, audioDurationSec);
+    setRawSceneJson(JSON.stringify(clampedPlan, null, 2));
+    setErrorMsg(null);
+    setRenderNotice(
+      `Đã tự co khớp các mốc segment cuối về đúng thời lượng Audio (${audioDurationSec.toFixed(2)}s).`,
+    );
+  };
+
   const parseInputsForRender = (): {
     words: WordTiming[];
     plan: ScenePlanDocument;
@@ -608,13 +621,17 @@ export const AutomationPipelinePanel: React.FC<AutomationPipelinePanelProps> = (
     cuesOverride?: TranscriptCue[];
     summary: ReturnType<typeof summarizeScenePlan>;
   } | null => {
-    const plan = parseScenePlanJson(rawSceneJson);
-    if (!plan || plan.scenes.length === 0) {
+    const rawPlan = parseScenePlanJson(rawSceneJson);
+    if (!rawPlan || rawPlan.scenes.length === 0) {
       setErrorMsg(
         'Không đọc được JSON từ AI. Hãy đảm bảo đoạn dán chứa object JSON có "scenes" hoặc "elements".',
       );
       return null;
     }
+    const plan =
+      typeof audioDurationSec === 'number' && audioDurationSec > 0.2
+        ? clampStoryboardPlanToAudioDuration(rawPlan, audioDurationSec)
+        : rawPlan;
 
     if (useSeparateWordsJson) {
       const words = parseWordLevelJson(rawWordsJson);
@@ -631,12 +648,16 @@ export const AutomationPipelinePanel: React.FC<AutomationPipelinePanelProps> = (
       };
     }
 
-    const cues = liveTranscriptCues.length > 0 ? liveTranscriptCues : project.cues;
-    if (cues.length === 0) {
+    const rawCues = liveTranscriptCues.length > 0 ? liveTranscriptCues : project.cues;
+    if (rawCues.length === 0) {
       setErrorMsg('Hãy nhập Transcript ở Bước 1 trước khi Render.');
       setStep(1);
       return null;
     }
+    const cues =
+      typeof audioDurationSec === 'number' && audioDurationSec > 0.2
+        ? clampCuesToAudioDuration(rawCues, audioDurationSec)
+        : rawCues;
     const nextTitle = (plan as { title?: string }).title?.trim() || customTitle;
     if ((plan as { title?: string }).title?.trim()) {
       setCustomTitle(nextTitle);
@@ -1737,11 +1758,26 @@ export const AutomationPipelinePanel: React.FC<AutomationPipelinePanelProps> = (
                       data-testid="storyboard-validator-issues"
                       className="p-2.5 rounded-lg bg-white border border-slate-200 space-y-1.5 text-[11px]"
                     >
-                      <div className="flex items-center justify-between text-[10.5px] font-semibold text-slate-700">
+                      <div className="flex flex-wrap items-center justify-between gap-2 text-[10.5px] font-semibold text-slate-700">
                         <span>Kiểm tra ngữ nghĩa (Stage 4 Validator)</span>
-                        <span>
-                          {validationReport.errors.length} lỗi · {validationReport.warnings.length} cảnh báo
-                        </span>
+                        <div className="flex items-center gap-2">
+                          {typeof audioDurationSec === 'number' &&
+                            audioDurationSec > 0.2 &&
+                            [...validationReport.errors, ...validationReport.warnings].some(
+                              (iss) => iss.code === 'SEGMENT_EXCEEDS_AUDIO',
+                            ) && (
+                              <button
+                                type="button"
+                                onClick={handleClampJsonSegmentsToAudio}
+                                className="px-2 py-0.5 text-[10px] font-semibold bg-amber-100 text-amber-900 border border-amber-300 rounded hover:bg-amber-200 transition-colors"
+                              >
+                                Khớp Segment theo Audio ({audioDurationSec.toFixed(2)}s)
+                              </button>
+                            )}
+                          <span>
+                            {validationReport.errors.length} lỗi · {validationReport.warnings.length} cảnh báo
+                          </span>
+                        </div>
                       </div>
                       <ul className="space-y-1 max-h-36 overflow-y-auto pr-1">
                         {[...validationReport.errors, ...validationReport.warnings]
@@ -2038,39 +2074,44 @@ export const AutomationPipelinePanel: React.FC<AutomationPipelinePanelProps> = (
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 overflow-y-auto pr-1 max-h-[220px]">
-          {visualTimelineItems.map((el) => {
-            const active = currentTime >= el.startTime && currentTime <= el.endTime;
-            return (
-              <button
-                key={el.id}
-                type="button"
-                onClick={() =>
-                  onSeek(
-                    Math.min(
-                      el.endTime - 0.05,
-                      el.startTime + Math.min(0.28, (el.endTime - el.startTime) * 0.25),
-                    ),
-                  )
-                }
-                className={`text-left px-3 py-2 rounded-lg border transition-colors ${
-                  active
-                    ? 'bg-indigo-50/80 border-indigo-300'
-                    : 'bg-slate-50/60 border-slate-200 hover:bg-slate-100'
-                }`}
-              >
-                <div className="flex items-center justify-between gap-2 text-[11px] text-slate-500 tabular-nums">
-                  <span className="font-mono">
-                    {formatTimeToken(el.startTime).slice(3, 8)} →{' '}
-                    {formatTimeToken(el.endTime).slice(3, 8)}
-                  </span>
-                  <span className="text-[10px] font-medium text-indigo-600">{el.type}</span>
-                </div>
-                <div className="text-xs font-medium text-slate-900 truncate mt-0.5">
-                  {el.label}
-                </div>
-              </button>
-            );
-          })}
+          {(() => {
+            const introSec = getEffectiveIntroSeconds(project);
+            const lessonTime = Math.max(0, currentTime - introSec);
+            return visualTimelineItems.map((el) => {
+              const active = lessonTime >= el.startTime && lessonTime <= el.endTime;
+              return (
+                <button
+                  key={el.id}
+                  type="button"
+                  onClick={() =>
+                    onSeek(
+                      introSec +
+                        Math.min(
+                          el.endTime - 0.05,
+                          el.startTime + Math.min(0.28, (el.endTime - el.startTime) * 0.25),
+                        ),
+                    )
+                  }
+                  className={`text-left px-3 py-2 rounded-lg border transition-colors ${
+                    active
+                      ? 'bg-indigo-50/80 border-indigo-300'
+                      : 'bg-slate-50/60 border-slate-200 hover:bg-slate-100'
+                  }`}
+                >
+                  <div className="flex items-center justify-between gap-2 text-[11px] text-slate-500 tabular-nums">
+                    <span className="font-mono">
+                      {formatTimeToken(el.startTime).slice(3, 8)} →{' '}
+                      {formatTimeToken(el.endTime).slice(3, 8)}
+                    </span>
+                    <span className="text-[10px] font-medium text-indigo-600">{el.type}</span>
+                  </div>
+                  <div className="text-xs font-medium text-slate-900 truncate mt-0.5">
+                    {el.label}
+                  </div>
+                </button>
+              );
+            });
+          })()}
         </div>
       </section>
     </div>

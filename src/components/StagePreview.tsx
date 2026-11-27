@@ -32,6 +32,8 @@ import {
 import { BACKGROUND_PRESETS } from '../engine/backgroundPresets';
 import {
   ensureProjectAssetsLoaded,
+  getEffectiveIntroSeconds,
+  getEffectiveOutroSeconds,
   getStageDimensionsForAspect,
   hitTestElementLayout,
   renderProjectFrame,
@@ -73,6 +75,10 @@ import { getEffectiveVectorCatalog, SCENE_ICON_KEYWORDS } from '../engine/vector
 import { resizeImageFileToStageDataUrl } from '../utils/imageResize';
 
 const DEFAULT_WATERMARK_CONFIG: WatermarkOutroConfig = {
+  introSeconds: 0,
+  introBadge: 'BÀI HỌC HÔM NAY',
+  introTitle: '',
+  introSubtitle: '',
   watermarkEnabled: false,
   watermarkText: '@KineticSub',
   watermarkCorner: 'bottom-right',
@@ -320,12 +326,18 @@ export const StagePreview: React.FC<StagePreviewProps> = ({
 
   const handlePointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
     if (isPlaying || isExportingVideo) return;
+    const introSec = getEffectiveIntroSeconds(project);
+    const lessonTime = Math.max(0, currentTime - introSec);
+    if (currentTime < introSec) {
+      onSelectElement(null);
+      return;
+    }
     const { x, y } = toCanvasCoords(e);
     const hit = hitTestElementLayout(
       project.elements,
       x,
       y,
-      currentTime,
+      lessonTime,
       effectiveAspect,
       project.subtitleConfig,
       project.compositionId,
@@ -776,150 +788,314 @@ export const StagePreview: React.FC<StagePreviewProps> = ({
         </p>
       )}
 
-      {/* Watermark & Outro (Tùy chọn) for Studio 9:16 */}
+      {/* Intro, Outro & Watermark (Tùy chọn) for Studio 9:16 */}
       {onChangeWatermark && (
         <div className="w-full pt-2">
-          <div className="rounded-lg border border-slate-200 bg-slate-50/70 px-2.5 py-1.5 space-y-2">
-            <div className="flex items-center justify-between gap-2">
-              <button
-                type="button"
-                onClick={() => setIsWatermarkOpen((o) => !o)}
-                className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-slate-700 hover:text-indigo-700"
-              >
-                <Stamp className="w-3.5 h-3.5 text-indigo-600" />
-                <span>Watermark &amp; Outro (Tùy chọn)</span>
-                {(wmConfig.watermarkEnabled || wmConfig.outroSeconds > 0) && (
-                  <span className="px-1.5 py-0.5 text-[9px] font-bold bg-emerald-100 text-emerald-700 rounded">
-                    Bật
-                  </span>
-                )}
-              </button>
-              <button
-                type="button"
-                onClick={() => setIsWatermarkOpen((o) => !o)}
-                className="text-[10px] font-medium text-indigo-600 hover:underline"
-              >
-                {isWatermarkOpen ? 'Thu gọn' : 'Chỉnh sửa'}
-              </button>
-            </div>
-
-            {isWatermarkOpen && (
-              <div className="pt-1.5 border-t border-slate-200/80 space-y-2 text-[11px]">
-                <div className="flex flex-wrap items-center gap-2">
-                  <label className="inline-flex items-center gap-1.5 font-medium text-slate-700 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={wmConfig.watermarkEnabled}
-                      onChange={(e) =>
-                        onChangeWatermark({
-                          ...wmConfig,
-                          watermarkEnabled: e.target.checked,
-                        })
-                      }
-                      className="rounded border-slate-300 text-indigo-600"
-                    />
-                    <span>Hiện Watermark</span>
-                  </label>
-                  <input
-                    type="text"
-                    aria-label="Nội dung Watermark"
-                    value={wmConfig.watermarkText}
-                    onChange={(e) =>
-                      onChangeWatermark({
-                        ...wmConfig,
-                        watermarkEnabled: true,
-                        watermarkText: e.target.value,
-                      })
-                    }
-                    placeholder="@TenKenh"
-                    className="flex-1 min-w-[100px] px-2 py-1 text-[11px] bg-white border border-slate-200 rounded"
-                  />
-                  <select
-                    aria-label="Góc Watermark"
-                    value={wmConfig.watermarkCorner}
-                    onChange={(e) =>
-                      onChangeWatermark({
-                        ...wmConfig,
-                        watermarkCorner: e.target.value as WatermarkCorner,
-                      })
-                    }
-                    className="px-2 py-1 text-[11px] bg-white border border-slate-200 rounded"
+          {(() => {
+            const activeIntroSec = getEffectiveIntroSeconds(project);
+            const activeOutroSec = getEffectiveOutroSeconds(project);
+            const anyBrandingActive =
+              activeIntroSec > 0 || activeOutroSec > 0 || wmConfig.watermarkEnabled;
+            return (
+              <div className="rounded-lg border border-slate-200 bg-slate-50/70 px-2.5 py-1.5 space-y-2">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <button
+                    type="button"
+                    data-testid="studio-intro-outro-toggle"
+                    onClick={() => setIsWatermarkOpen((o) => !o)}
+                    className="inline-flex flex-wrap items-center gap-1.5 text-[11px] font-semibold text-slate-700 hover:text-indigo-700"
                   >
-                    <option value="top-left">Trên Trái</option>
-                    <option value="top-right">Trên Phải</option>
-                    <option value="bottom-left">Dưới Trái</option>
-                    <option value="bottom-right">Dưới Phải</option>
-                  </select>
+                    <Stamp className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
+                    <span>Intro, Outro &amp; Watermark (Tùy chọn)</span>
+                    {activeIntroSec > 0 && (
+                      <span className="px-1.5 py-0.5 text-[9px] font-bold bg-indigo-100 text-indigo-700 rounded">
+                        Intro {activeIntroSec.toFixed(1).replace(/\.0$/, '')}s
+                      </span>
+                    )}
+                    {activeOutroSec > 0 && (
+                      <span className="px-1.5 py-0.5 text-[9px] font-bold bg-violet-100 text-violet-700 rounded">
+                        Outro {activeOutroSec.toFixed(1).replace(/\.0$/, '')}s
+                      </span>
+                    )}
+                    {wmConfig.watermarkEnabled && (
+                      <span className="px-1.5 py-0.5 text-[9px] font-bold bg-emerald-100 text-emerald-700 rounded">
+                        WM
+                      </span>
+                    )}
+                  </button>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <button
+                      type="button"
+                      data-testid="studio-intro-outro-preset-btn"
+                      onClick={() => {
+                        if (anyBrandingActive) {
+                          onChangeWatermark({
+                            ...wmConfig,
+                            introSeconds: 0,
+                            outroSeconds: 0,
+                            watermarkEnabled: false,
+                          });
+                        } else {
+                          onChangeWatermark({
+                            ...DEFAULT_WATERMARK_CONFIG,
+                            ...wmConfig,
+                            introSeconds: Math.max(2.5, Number(wmConfig.introSeconds || 0)),
+                            introBadge: wmConfig.introBadge?.trim() || 'BÀI HỌC HÔM NAY',
+                            introTitle: wmConfig.introTitle?.trim() || '',
+                            introSubtitle: wmConfig.introSubtitle?.trim() || 'Nghe kỹ & luyện nói theo nhịp',
+                            outroSeconds: Math.max(3, Number(wmConfig.outroSeconds || 0)),
+                            outroLine1: wmConfig.outroLine1?.trim() || 'Thanks for watching!',
+                            outroLine2: wmConfig.outroLine2?.trim() || 'Subscribe & Practice daily',
+                            watermarkEnabled: true,
+                            watermarkText: wmConfig.watermarkText?.trim() || '@KineticSub',
+                          });
+                          setIsWatermarkOpen(true);
+                        }
+                      }}
+                      className="px-2 py-0.5 text-[10px] font-semibold bg-white border border-slate-200 rounded text-slate-700 hover:bg-indigo-50 hover:text-indigo-700"
+                    >
+                      {anyBrandingActive ? 'Tắt hết' : 'Bật trọn bộ mẫu'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setIsWatermarkOpen((o) => !o)}
+                      className="text-[10px] font-medium text-indigo-600 hover:underline"
+                    >
+                      {isWatermarkOpen ? 'Thu gọn' : 'Chỉnh sửa'}
+                    </button>
+                  </div>
                 </div>
 
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="text-slate-600 shrink-0">Độ mờ: {Math.round(wmConfig.watermarkOpacity * 100)}%</span>
-                  <input
-                    type="range"
-                    aria-label="Độ mờ Watermark"
-                    min={0.15}
-                    max={1}
-                    step={0.05}
-                    value={wmConfig.watermarkOpacity}
-                    onChange={(e) =>
-                      onChangeWatermark({
-                        ...wmConfig,
-                        watermarkOpacity: Number(e.target.value),
-                      })
-                    }
-                    className="w-20 accent-indigo-600 h-1"
-                  />
-                  <label className="text-slate-600 ml-auto shrink-0">Outro (s):</label>
-                  <input
-                    type="number"
-                    aria-label="Thời lượng Outro giây"
-                    min={0}
-                    max={10}
-                    step={0.5}
-                    value={wmConfig.outroSeconds}
-                    onChange={(e) =>
-                      onChangeWatermark({
-                        ...wmConfig,
-                        outroSeconds: Math.max(0, Math.min(10, Number(e.target.value) || 0)),
-                      })
-                    }
-                    className="w-14 px-1.5 py-0.5 text-[11px] bg-white border border-slate-200 rounded font-mono"
-                  />
-                </div>
+                {isWatermarkOpen && (
+                  <div className="pt-2 border-t border-slate-200/80 space-y-2.5 text-[11px]">
+                    {/* 1. Intro Block */}
+                    <div className="rounded-md bg-white border border-slate-200/80 p-2 space-y-1.5">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <span className="font-semibold text-indigo-800">Intro đầu video</span>
+                        <div className="flex items-center gap-1.5">
+                          <label className="text-[10px] text-slate-600">Thời lượng (s):</label>
+                          <input
+                            type="number"
+                            aria-label="Thời lượng Intro giây"
+                            min={0}
+                            max={6}
+                            step={0.5}
+                            value={wmConfig.introSeconds ?? 0}
+                            onChange={(e) =>
+                              onChangeWatermark({
+                                ...wmConfig,
+                                introSeconds: Math.max(0, Math.min(6, Number(e.target.value) || 0)),
+                                introBadge: wmConfig.introBadge ?? 'BÀI HỌC HÔM NAY',
+                              })
+                            }
+                            className="w-14 px-1.5 py-0.5 text-[11px] bg-slate-50 border border-slate-200 rounded font-mono"
+                          />
+                          {(wmConfig.introSeconds ?? 0) > 0 && (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                onSeek(Math.min(0.8, Math.max(0.25, (wmConfig.introSeconds ?? 2) * 0.45)))
+                              }
+                              className="px-2 py-0.5 text-[10px] font-semibold bg-indigo-50 text-indigo-700 border border-indigo-200 rounded hover:bg-indigo-100"
+                            >
+                              Xem Intro
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                      {(wmConfig.introSeconds ?? 0) > 0 && (
+                        <div className="space-y-1.5">
+                          <div className="grid grid-cols-2 gap-1.5">
+                            <input
+                              type="text"
+                              aria-label="Nhãn Intro"
+                              value={wmConfig.introBadge ?? ''}
+                              onChange={(e) =>
+                                onChangeWatermark({
+                                  ...wmConfig,
+                                  introBadge: e.target.value,
+                                })
+                              }
+                              placeholder="Nhãn nhỏ (VD: BÀI HỌC HÔM NAY)"
+                              className="px-2 py-1 text-[11px] bg-slate-50 border border-slate-200 rounded"
+                            />
+                            <input
+                              type="text"
+                              aria-label="Phụ đề Intro"
+                              value={wmConfig.introSubtitle ?? ''}
+                              onChange={(e) =>
+                                onChangeWatermark({
+                                  ...wmConfig,
+                                  introSubtitle: e.target.value,
+                                })
+                              }
+                              placeholder="Phụ đề ngắn (tùy chọn)"
+                              className="px-2 py-1 text-[11px] bg-slate-50 border border-slate-200 rounded"
+                            />
+                          </div>
+                          <input
+                            type="text"
+                            aria-label="Tiêu đề chính Intro"
+                            value={wmConfig.introTitle ?? ''}
+                            onChange={(e) =>
+                              onChangeWatermark({
+                                ...wmConfig,
+                                introTitle: e.target.value,
+                              })
+                            }
+                            placeholder={`Tiêu đề Intro (để trống sẽ tự lấy: "${project.title.slice(0, 32)}")`}
+                            className="w-full px-2 py-1 text-[11px] bg-slate-50 border border-slate-200 rounded"
+                          />
+                        </div>
+                      )}
+                    </div>
 
-                {wmConfig.outroSeconds > 0 && (
-                  <div className="grid grid-cols-2 gap-1.5">
-                    <input
-                      type="text"
-                      aria-label="Outro dòng 1"
-                      value={wmConfig.outroLine1}
-                      onChange={(e) =>
-                        onChangeWatermark({
-                          ...wmConfig,
-                          outroLine1: e.target.value,
-                        })
-                      }
-                      placeholder="Outro dòng 1"
-                      className="px-2 py-1 text-[11px] bg-white border border-slate-200 rounded"
-                    />
-                    <input
-                      type="text"
-                      aria-label="Outro dòng 2"
-                      value={wmConfig.outroLine2}
-                      onChange={(e) =>
-                        onChangeWatermark({
-                          ...wmConfig,
-                          outroLine2: e.target.value,
-                        })
-                      }
-                      placeholder="Outro dòng 2"
-                      className="px-2 py-1 text-[11px] bg-white border border-slate-200 rounded"
-                    />
+                    {/* 2. Outro Block */}
+                    <div className="rounded-md bg-white border border-slate-200/80 p-2 space-y-1.5">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <span className="font-semibold text-violet-800">Outro cuối video</span>
+                        <div className="flex items-center gap-1.5">
+                          <label className="text-[10px] text-slate-600">Thời lượng (s):</label>
+                          <input
+                            type="number"
+                            aria-label="Thời lượng Outro giây"
+                            min={0}
+                            max={10}
+                            step={0.5}
+                            value={wmConfig.outroSeconds}
+                            onChange={(e) =>
+                              onChangeWatermark({
+                                ...wmConfig,
+                                outroSeconds: Math.max(0, Math.min(10, Number(e.target.value) || 0)),
+                              })
+                            }
+                            className="w-14 px-1.5 py-0.5 text-[11px] bg-slate-50 border border-slate-200 rounded font-mono"
+                          />
+                          {wmConfig.outroSeconds > 0 && (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                onSeek(
+                                  Math.max(
+                                    0,
+                                    project.duration - Math.max(0.3, wmConfig.outroSeconds * 0.45),
+                                  ),
+                                )
+                              }
+                              className="px-2 py-0.5 text-[10px] font-semibold bg-violet-50 text-violet-700 border border-violet-200 rounded hover:bg-violet-100"
+                            >
+                              Xem Outro
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                      {wmConfig.outroSeconds > 0 && (
+                        <div className="grid grid-cols-2 gap-1.5">
+                          <input
+                            type="text"
+                            aria-label="Outro dòng 1"
+                            value={wmConfig.outroLine1}
+                            onChange={(e) =>
+                              onChangeWatermark({
+                                ...wmConfig,
+                                outroLine1: e.target.value,
+                              })
+                            }
+                            placeholder="Outro dòng 1"
+                            className="px-2 py-1 text-[11px] bg-slate-50 border border-slate-200 rounded"
+                          />
+                          <input
+                            type="text"
+                            aria-label="Outro dòng 2"
+                            value={wmConfig.outroLine2}
+                            onChange={(e) =>
+                              onChangeWatermark({
+                                ...wmConfig,
+                                outroLine2: e.target.value,
+                              })
+                            }
+                            placeholder="Outro dòng 2"
+                            className="px-2 py-1 text-[11px] bg-slate-50 border border-slate-200 rounded"
+                          />
+                        </div>
+                      )}
+                    </div>
+
+                    {/* 3. Watermark Block */}
+                    <div className="rounded-md bg-white border border-slate-200/80 p-2 space-y-1.5">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <label className="inline-flex items-center gap-1.5 font-semibold text-slate-700 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={wmConfig.watermarkEnabled}
+                            onChange={(e) =>
+                              onChangeWatermark({
+                                ...wmConfig,
+                                watermarkEnabled: e.target.checked,
+                              })
+                            }
+                            className="rounded border-slate-300 text-indigo-600"
+                          />
+                          <span>Hiện Watermark</span>
+                        </label>
+                        <input
+                          type="text"
+                          aria-label="Nội dung Watermark"
+                          value={wmConfig.watermarkText}
+                          onChange={(e) =>
+                            onChangeWatermark({
+                              ...wmConfig,
+                              watermarkEnabled: true,
+                              watermarkText: e.target.value,
+                            })
+                          }
+                          placeholder="@TenKenh"
+                          className="flex-1 min-w-[100px] px-2 py-1 text-[11px] bg-slate-50 border border-slate-200 rounded"
+                        />
+                        <select
+                          aria-label="Góc Watermark"
+                          value={wmConfig.watermarkCorner}
+                          onChange={(e) =>
+                            onChangeWatermark({
+                              ...wmConfig,
+                              watermarkCorner: e.target.value as WatermarkCorner,
+                            })
+                          }
+                          className="px-2 py-1 text-[11px] bg-slate-50 border border-slate-200 rounded"
+                        >
+                          <option value="top-left">Trên Trái</option>
+                          <option value="top-right">Trên Phải</option>
+                          <option value="bottom-left">Dưới Trái</option>
+                          <option value="bottom-right">Dưới Phải</option>
+                        </select>
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        <span className="text-[10px] text-slate-600 shrink-0">
+                          Độ mờ Watermark: {Math.round(wmConfig.watermarkOpacity * 100)}%
+                        </span>
+                        <input
+                          type="range"
+                          aria-label="Độ mờ Watermark"
+                          min={0.15}
+                          max={1}
+                          step={0.05}
+                          value={wmConfig.watermarkOpacity}
+                          onChange={(e) =>
+                            onChangeWatermark({
+                              ...wmConfig,
+                              watermarkOpacity: Number(e.target.value),
+                            })
+                          }
+                          className="flex-1 accent-indigo-600 h-1"
+                        />
+                      </div>
+                    </div>
                   </div>
                 )}
               </div>
-            )}
-          </div>
+            );
+          })()}
         </div>
       )}
 
@@ -1059,10 +1235,11 @@ export const StagePreview: React.FC<StagePreviewProps> = ({
             ? project.elements.find((el) => el.id === selectedElementId) ?? null
             : null;
           if (!selectedEl) return null;
+          const lessonTime = Math.max(0, currentTime - getEffectiveIntroSeconds(project));
           const resolvedLayout =
             resolveElementLayoutForAspect(
               project.elements,
-              currentTime,
+              lessonTime,
               effectiveAspect,
               project.subtitleConfig,
               project.compositionId,

@@ -29,6 +29,10 @@ export interface CartoonHostContext {
   cueText?: string;
   toneValue?: number;
   targetDirection?: 'up' | 'right' | 'none';
+  /** Previous reaction context just before the latest card/element boundary, for smooth retraction/blending */
+  transitionFrom?: Omit<CartoonHostContext, 'transitionFrom' | 'transitionProgress'>;
+  /** 0 = still in transitionFrom state, 1 = fully settled into current context */
+  transitionProgress?: number;
 }
 
 export interface CartoonLipSyncFrame {
@@ -69,6 +73,20 @@ export interface CartoonLipSyncFrame {
   /** Smoothly interpolated viewer-right arm angles (radians) */
   rightShoulderAngle: number;
   rightElbowAngle: number;
+  /** Continuous unified right-arm kinematics (eliminates abrupt gesture-branch snapping) */
+  rightElbowX: number;
+  rightElbowY: number;
+  rightWristX: number;
+  rightWristY: number;
+  rightHandAngle: number;
+  /** 0 = relaxed open palm, 1 = extended pointing index finger */
+  rightHandPointMix: number;
+  /** 0 = spread fingers, 1 = compact hip-resting fingers */
+  rightHandCompactMix: number;
+  /** Active or fading-out reaction badge near gesturing hand */
+  badgeGlyph: 'check' | 'cross' | 'question' | 'tip' | null;
+  badgeOpacity: number;
+  badgeScale: number;
   gestureMode: CartoonGestureMode;
 }
 
@@ -87,6 +105,108 @@ function smoothstep(t: number): number {
 
 function lerp(a: number, b: number, t: number): number {
   return a + (b - a) * clamp01(t);
+}
+
+function lerpAngle(a: number, b: number, t: number): number {
+  let diff = ((b - a + Math.PI) % (Math.PI * 2)) - Math.PI;
+  if (diff < -Math.PI) diff += Math.PI * 2;
+  return a + diff * clamp01(t);
+}
+
+interface RightArmKinematics {
+  ex: number;
+  ey: number;
+  wx: number;
+  wy: number;
+  handAngle: number;
+  pointMix: number;
+  compactMix: number;
+}
+
+function getRightArmTargetPose(
+  mode: CartoonGestureMode,
+  t: number,
+  speechActivity: number,
+  sway: number,
+): RightArmKinematics {
+  const bob = Math.sin(t * 2.8) * 4;
+  switch (mode) {
+    case 'point-up':
+    case 'approve-tip':
+      return {
+        ex: 162 + sway * 0.4,
+        ey: -42 + bob * 0.4,
+        wx: 168 + sway * 0.3,
+        wy: -182 + bob,
+        handAngle: -Math.PI * 0.52,
+        pointMix: 1,
+        compactMix: 0,
+      };
+    case 'point-right':
+      return {
+        ex: 168 + sway * 0.4,
+        ey: 26 + bob * 0.4,
+        wx: 256 + Math.sin(t * 2.4) * 6,
+        wy: -32 + bob,
+        handAngle: -0.22,
+        pointMix: 1,
+        compactMix: 0,
+      };
+    case 'warn-avoid':
+      return {
+        ex: 166 + sway * 0.3,
+        ey: 8 + Math.sin(t * 3.0) * 4,
+        wx: 186 + Math.sin(t * 3.0) * 5,
+        wy: -112 + Math.cos(t * 2.6) * 4,
+        handAngle: -Math.PI * 0.46,
+        pointMix: 0,
+        compactMix: 0,
+      };
+    case 'question':
+      return {
+        ex: 158 + sway * 0.3,
+        ey: 36,
+        wx: 154,
+        wy: -68 + bob * 0.4,
+        handAngle: -Math.PI * 0.6,
+        pointMix: 0,
+        compactMix: 0.2,
+      };
+    case 'cheer':
+      return {
+        ex: 162 + sway * 0.35,
+        ey: -18 + bob * 0.4,
+        wx: 194 + sway * 0.3,
+        wy: -136 + bob,
+        handAngle: -Math.PI * 0.4,
+        pointMix: 0,
+        compactMix: 0,
+      };
+    case 'explain': {
+      // Smoothly modulate gesture height by continuous speechActivity (zero abrupt threshold jumps)
+      const act = clamp01(speechActivity);
+      return {
+        ex: lerp(142, 160, act) + sway * 0.35,
+        ey: lerp(96, 48, act),
+        wx: lerp(128, 186, act) + sway * 0.25,
+        wy: lerp(152, -16, act) + Math.sin(t * 2.6) * (3 + 4 * act),
+        handAngle: lerp(0.92, -0.32, act),
+        pointMix: 0,
+        compactMix: lerp(0.75, 0.15, act),
+      };
+    }
+    case 'present':
+    default:
+      return {
+        ex: 146 + sway * 0.35,
+        ey: 112,
+        wx: 122 + sway * 0.2,
+        wy: 206,
+        handAngle: Math.PI * 0.5 + 0.14,
+        pointMix: 0,
+        compactMix: 1,
+      };
+  }
 }
 
 interface VisemeMetrics {
@@ -401,16 +521,12 @@ function classifyMoodAndGesture(
   };
 }
 
-/**
- * Inspects active scene elements at `time` so Gimmy reacts directly to whatever
- * teaching card, comparison, or tone meter is currently on screen.
- */
-export function computeCartoonHostContextFromElements(
+function sampleRawCartoonHostContext(
   elements: SceneElement[],
   time: number,
   cues: TranscriptCue[] = [],
   aspectRatio: ExportAspectRatioId = '9:16',
-): CartoonHostContext {
+): Omit<CartoonHostContext, 'transitionFrom' | 'transitionProgress'> {
   const active = elements.filter(
     (el) =>
       time >= el.startTime - 0.02 &&
@@ -467,10 +583,115 @@ export function computeCartoonHostContextFromElements(
 }
 
 /**
+ * Inspects active scene elements at `time` so Gimmy reacts directly to whatever
+ * teaching card, comparison, or tone meter is currently on screen, and tracks
+ * recent start/end boundaries so arm gestures & badges retract smoothly over ~0.55s.
+ */
+export function computeCartoonHostContextFromElements(
+  elements: SceneElement[],
+  time: number,
+  cues: TranscriptCue[] = [],
+  aspectRatio: ExportAspectRatioId = '9:16',
+): CartoonHostContext {
+  const current = sampleRawCartoonHostContext(elements, time, cues, aspectRatio);
+
+  const RETRACT_WINDOW = 0.56;
+  let latestBoundary = -1;
+  for (const el of elements) {
+    if (el.props.kind === 'illustration-prop' && el.props.variant === 'cartoon-host') continue;
+    if (el.type !== 'sentence-card' && el.type !== 'topic-pill' && el.type !== 'tone-meter' && el.type !== 'illustration-prop') {
+      continue;
+    }
+    const endBoundary = el.endTime + 0.02;
+    const startBoundary = el.startTime - 0.02;
+    if (endBoundary <= time && time - endBoundary <= RETRACT_WINDOW && endBoundary > latestBoundary) {
+      latestBoundary = endBoundary;
+    }
+    if (startBoundary <= time && time - startBoundary <= RETRACT_WINDOW && startBoundary > latestBoundary) {
+      latestBoundary = startBoundary;
+    }
+  }
+
+  if (latestBoundary >= 0) {
+    const prevTime = Math.max(0, latestBoundary - 0.04);
+    const transitionFrom = sampleRawCartoonHostContext(elements, prevTime, cues, aspectRatio);
+    const transitionProgress = smoothstep((time - latestBoundary) / RETRACT_WINDOW);
+    return {
+      ...current,
+      transitionFrom,
+      transitionProgress,
+    };
+  }
+
+  return current;
+}
+
+function moodMetrics(
+  mood: CartoonExpressionMood,
+  targetDir: CartoonHostContext['targetDirection'],
+  t: number,
+  isSpeaking: boolean,
+  mouthOpen: number,
+) {
+  const browSlope =
+    mood === 'worried'
+      ? -0.88
+      : mood === 'curious'
+        ? 0.72
+        : mood === 'happy'
+          ? 0.38
+          : 0.08;
+  const smileBias =
+    mood === 'worried'
+      ? -0.78
+      : mood === 'happy'
+        ? 0.9
+        : mood === 'curious'
+          ? 0.05
+          : 0.35;
+  const browLift =
+    mood === 'curious'
+      ? 0.72
+      : mood === 'worried'
+        ? 0.32
+        : isSpeaking
+          ? 0.24 + mouthOpen * 0.22
+          : 0.08;
+  const eyeTargetX = clampRange(
+    targetDir === 'right'
+      ? 0.68
+      : mood === 'curious'
+        ? 0.25
+        : Math.sin(t * 0.7) * 0.14,
+    -1,
+    1,
+  );
+  const eyeTargetY = clampRange(
+    targetDir === 'up'
+      ? -0.62
+      : mood === 'worried'
+        ? -0.15
+        : 0,
+    -1,
+    1,
+  );
+  const headShakeX =
+    mood === 'worried'
+      ? Math.sin(t * 4.2) * 3.0 * (isSpeaking ? 1 : 0.45)
+      : 0;
+  const headTiltExtra =
+    (mood === 'curious' ? 0.055 : 0) +
+    (mood === 'worried' ? -0.04 : 0) +
+    (targetDir === 'right' && mood === 'happy' ? 0.03 : 0);
+  return { browSlope, smileBias, browLift, eyeTargetX, eyeTargetY, headShakeX, headTiltExtra };
+}
+
+/**
  * Computes deterministic, silky-smooth frame-accurate animation state for the
  * @Gimmys-style cartoon mascot at any timestamp `time`.
  * Context-aware: adapts facial expressions, brow slant, eye gaze direction, and
- * pointing/warning gestures to match right/wrong/question/tip cards.
+ * pointing/warning gestures to match right/wrong/question/tip cards, with smooth
+ * gradual retraction when cards or cues end.
  */
 export function computeSpeechLipSyncState(
   cues: TranscriptCue[],
@@ -496,37 +717,12 @@ export function computeSpeechLipSyncState(
   }
   const activeCue = activeCueIdx >= 0 ? cues[activeCueIdx] : undefined;
 
-  const prevCueIdx = Math.max(
-    0,
-    activeCueIdx >= 0
-      ? activeCueIdx - 1
-      : cues.filter((c) => c.end < t).length - 1,
-  );
-  const currentState = classifyMoodAndGesture(
-    activeCue ?? cues[prevCueIdx],
-    Math.max(0, activeCueIdx),
-    context,
-  );
-  const prevState = classifyMoodAndGesture(
-    cues[prevCueIdx],
-    prevCueIdx,
-    activeCueIdx > 0 ? undefined : context,
-  );
+  const endedCueCount = cues.filter((c) => c.end < t).length;
+  const lastEndedCueIdx = Math.max(0, endedCueCount - 1);
+  const effectiveCueIdx = activeCueIdx >= 0 ? activeCueIdx : lastEndedCueIdx;
+  const prevCueIdx = activeCueIdx > 0 ? activeCueIdx - 1 : lastEndedCueIdx;
 
-  const transitionStart = activeCue ? activeCue.start : 0;
-  const gestureBlend = activeCue ? smoothstep((t - transitionStart) / 0.36) : 1;
-
-  const pA = ARM_POSES[prevState.gestureMode];
-  const pB = ARM_POSES[currentState.gestureMode];
-  const swayA = Math.sin(t * 1.45) * 0.045;
-  const swayB = Math.cos(t * 1.25) * 0.04;
-
-  const leftShoulderAngle = lerp(pA.leftShoulder, pB.leftShoulder, gestureBlend) + swayA;
-  const leftElbowAngle = lerp(pA.leftElbow, pB.leftElbow, gestureBlend) + swayB * 0.8;
-  const rightShoulderAngle = lerp(pA.rightShoulder, pB.rightShoulder, gestureBlend) - swayB * 0.7;
-  const rightElbowAngle = lerp(pA.rightElbow, pB.rightElbow, gestureBlend) + swayA * 0.6;
-
-  // Determine speech / lip-sync viseme
+  // Determine speech / lip-sync viseme first so continuous speechActivity can inform arm ease
   let isSpeaking = false;
   let activeWord = '';
   let viseme: CartoonViseme = 'smile';
@@ -562,11 +758,125 @@ export function computeSpeechLipSyncState(
       mouthOpen = clamp01(rawOpen * (0.35 + 0.65 * wordEnvelope) * syllablePulse);
       mouthWidth = lerp(s0.width, s1.width, interp);
       mouthRound = lerp(s0.round, s1.round, interp);
+    }
+  }
+
+  const hasActiveSignal =
+    Boolean(activeCue) ||
+    (Boolean(context?.activeBadge) && context?.activeBadge !== 'none') ||
+    Boolean(context?.activeText) ||
+    typeof context?.toneValue === 'number';
+
+  const currentState = hasActiveSignal
+    ? classifyMoodAndGesture(activeCue, effectiveCueIdx, context)
+    : {
+        mood: 'neutral' as CartoonExpressionMood,
+        gestureMode: 'present' as CartoonGestureMode,
+        pointerGlyph: null as CartoonLipSyncFrame['pointerGlyph'],
+      };
+
+  // Determine previous state & smooth blend factor across BOTH element boundaries and cue transitions
+  const hasContextTransition =
+    context?.transitionFrom !== undefined &&
+    typeof context.transitionProgress === 'number' &&
+    context.transitionProgress < 0.999;
+
+  let prevState: ReturnType<typeof classifyMoodAndGesture>;
+  let gestureBlend = 1;
+  let prevTargetDir = context?.targetDirection ?? 'none';
+
+  if (hasContextTransition && context?.transitionFrom) {
+    prevState = classifyMoodAndGesture(
+      activeCue ?? cues[effectiveCueIdx],
+      effectiveCueIdx,
+      context.transitionFrom,
+    );
+    prevTargetDir = context.transitionFrom.targetDirection ?? 'none';
+    gestureBlend = clamp01(context.transitionProgress ?? 1);
+  } else if (activeCue) {
+    prevState =
+      activeCueIdx > 0
+        ? classifyMoodAndGesture(cues[prevCueIdx], prevCueIdx, undefined)
+        : {
+            mood: 'neutral' as CartoonExpressionMood,
+            gestureMode: 'present' as CartoonGestureMode,
+            pointerGlyph: null as CartoonLipSyncFrame['pointerGlyph'],
+          };
+    gestureBlend = smoothstep((t - (activeCue.start - 0.06)) / 0.48);
+  } else {
+    // Between cues without a context boundary: ease gently toward resting neutral pose over 0.56s
+    const lastEnded = cues[lastEndedCueIdx];
+    const hasRecentEnd = Boolean(lastEnded && t > lastEnded.end && !hasActiveSignal);
+    if (hasRecentEnd && lastEnded) {
+      prevState = classifyMoodAndGesture(lastEnded, lastEndedCueIdx, context);
+      gestureBlend = smoothstep((t - lastEnded.end) / 0.56);
     } else {
-      viseme = currentState.mood === 'worried' ? 'closed' : 'smile';
-      mouthOpen = 0.04;
-      mouthWidth = currentState.mood === 'worried' ? 0.92 : 1.06;
-      mouthRound = 0;
+      prevState = currentState;
+      gestureBlend = 1;
+    }
+  }
+
+  if (!isSpeaking && activeCue && t >= activeCue.start && t <= activeCue.end) {
+    viseme = currentState.mood === 'worried' ? 'closed' : 'smile';
+    mouthOpen = 0.04;
+    mouthWidth = currentState.mood === 'worried' ? 0.92 : 1.06;
+    mouthRound = 0;
+  }
+
+  const pA = ARM_POSES[prevState.gestureMode];
+  const pB = ARM_POSES[currentState.gestureMode];
+  const swayA = Math.sin(t * 1.45) * 0.045;
+  const swayB = Math.cos(t * 1.25) * 0.04;
+  const hipSway = Math.sin(t * 1.55) * 14;
+  const speechActivity = isSpeaking ? clamp01(0.35 + mouthOpen * 0.9) : 0;
+
+  const leftShoulderAngle = lerp(pA.leftShoulder, pB.leftShoulder, gestureBlend) + swayA;
+  const leftElbowAngle = lerp(pA.leftElbow, pB.leftElbow, gestureBlend) + swayB * 0.8;
+  const rightShoulderAngle = lerp(pA.rightShoulder, pB.rightShoulder, gestureBlend) - swayB * 0.7;
+  const rightElbowAngle = lerp(pA.rightElbow, pB.rightElbow, gestureBlend) + swayA * 0.6;
+
+  const armFrom = getRightArmTargetPose(prevState.gestureMode, t, speechActivity, hipSway);
+  const armTo = getRightArmTargetPose(currentState.gestureMode, t, speechActivity, hipSway);
+
+  // Subtle outward arc boost mid-transition so the wrist never slices across the torso/head silhouette
+  const arcSwing = Math.sin(Math.PI * clamp01(gestureBlend)) * 24;
+  const rightElbowX = lerp(armFrom.ex, armTo.ex, gestureBlend) + arcSwing * 0.65;
+  const rightElbowY = lerp(armFrom.ey, armTo.ey, gestureBlend);
+  const rightWristX = Math.max(118, lerp(armFrom.wx, armTo.wx, gestureBlend) + arcSwing);
+  const rightWristY = lerp(armFrom.wy, armTo.wy, gestureBlend);
+  const rightHandAngle = lerpAngle(armFrom.handAngle, armTo.handAngle, gestureBlend);
+  const rightHandPointMix = lerp(armFrom.pointMix, armTo.pointMix, gestureBlend);
+  const rightHandCompactMix = lerp(armFrom.compactMix, armTo.compactMix, gestureBlend);
+
+  // Smooth badge fade/scale in and gradual retract fade-out (never vanishes abruptly in 1 frame)
+  let badgeGlyph: CartoonLipSyncFrame['badgeGlyph'] = currentState.pointerGlyph;
+  let badgeOpacity = currentState.pointerGlyph ? 1 : 0;
+  let badgeScale = currentState.pointerGlyph ? 1 : 0.7;
+
+  if (prevState.pointerGlyph !== currentState.pointerGlyph) {
+    if (currentState.pointerGlyph && !prevState.pointerGlyph) {
+      badgeGlyph = currentState.pointerGlyph;
+      badgeOpacity = clamp01(gestureBlend * 1.25);
+      badgeScale = lerp(0.68, 1, gestureBlend);
+    } else if (!currentState.pointerGlyph && prevState.pointerGlyph) {
+      badgeGlyph = prevState.pointerGlyph;
+      badgeOpacity = clamp01(1 - gestureBlend * 1.18);
+      badgeScale = lerp(1, 0.64, gestureBlend);
+      if (badgeOpacity <= 0.02) {
+        badgeGlyph = null;
+        badgeOpacity = 0;
+      }
+    } else if (currentState.pointerGlyph && prevState.pointerGlyph) {
+      if (gestureBlend < 0.42) {
+        badgeGlyph = prevState.pointerGlyph;
+        badgeOpacity = clamp01(1 - gestureBlend / 0.42);
+        badgeScale = lerp(1, 0.75, gestureBlend / 0.42);
+      } else {
+        const enter = clamp01((gestureBlend - 0.42) / 0.58);
+        badgeGlyph = currentState.pointerGlyph;
+        badgeOpacity = enter;
+        badgeScale = lerp(0.75, 1, enter);
+      }
     }
   }
 
@@ -575,63 +885,17 @@ export function computeSpeechLipSyncState(
   const speakBounceY = isSpeaking ? Math.sin(t * 6.2) * 1.15 * clamp01(mouthOpen * 1.5) : 0;
   const headBobY = breathY + speakBounceY;
 
-  const headShakeX =
-    mood === 'worried'
-      ? Math.sin(t * 5.2) * 3.2 * (isSpeaking ? 1 : 0.45)
-      : 0;
-
   const targetDir = context?.targetDirection ?? 'none';
-  const eyeTargetX = clampRange(
-    targetDir === 'right'
-      ? 0.68
-      : mood === 'curious'
-        ? 0.25
-        : Math.sin(t * 0.7) * 0.14,
-    -1,
-    1,
-  );
-  const eyeTargetY = clampRange(
-    targetDir === 'up'
-      ? -0.62
-      : mood === 'worried'
-        ? -0.15
-        : 0,
-    -1,
-    1,
-  );
+  const mFrom = moodMetrics(prevState.mood, prevTargetDir, t, isSpeaking, mouthOpen);
+  const mTo = moodMetrics(mood, targetDir, t, isSpeaking, mouthOpen);
 
-  const browSlope =
-    mood === 'worried'
-      ? -0.88
-      : mood === 'curious'
-        ? 0.72
-        : mood === 'happy'
-          ? 0.38
-          : 0.08;
-
-  const smileBias =
-    mood === 'worried'
-      ? -0.78
-      : mood === 'happy'
-        ? 0.9
-        : mood === 'curious'
-          ? 0.05
-          : 0.35;
-
-  const browLift =
-    mood === 'curious'
-      ? lerp(0.4, 0.85, gestureBlend)
-      : mood === 'worried'
-        ? 0.32
-        : isSpeaking
-          ? 0.24 + mouthOpen * 0.22
-          : 0.08;
-
-  const headTiltRad =
-    Math.sin(t * 0.95) * 0.022 +
-    (mood === 'curious' ? 0.055 * gestureBlend : 0) +
-    (mood === 'worried' ? -0.04 * gestureBlend : 0) +
-    (targetDir === 'right' && mood === 'happy' ? 0.03 * gestureBlend : 0);
+  const headShakeX = lerp(mFrom.headShakeX, mTo.headShakeX, gestureBlend);
+  const eyeTargetX = clampRange(lerp(mFrom.eyeTargetX, mTo.eyeTargetX, gestureBlend), -1, 1);
+  const eyeTargetY = clampRange(lerp(mFrom.eyeTargetY, mTo.eyeTargetY, gestureBlend), -1, 1);
+  const browSlope = lerp(mFrom.browSlope, mTo.browSlope, gestureBlend);
+  const smileBias = lerp(mFrom.smileBias, mTo.smileBias, gestureBlend);
+  const browLift = lerp(mFrom.browLift, mTo.browLift, gestureBlend);
+  const headTiltRad = Math.sin(t * 0.95) * 0.022 + lerp(mFrom.headTiltExtra, mTo.headTiltExtra, gestureBlend);
 
   return {
     isSpeaking,
@@ -656,6 +920,16 @@ export function computeSpeechLipSyncState(
     leftElbowAngle,
     rightShoulderAngle,
     rightElbowAngle,
+    rightElbowX,
+    rightElbowY,
+    rightWristX,
+    rightWristY,
+    rightHandAngle,
+    rightHandPointMix,
+    rightHandCompactMix,
+    badgeGlyph,
+    badgeOpacity,
+    badgeScale,
     gestureMode: currentState.gestureMode,
   };
 }

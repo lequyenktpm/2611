@@ -203,10 +203,14 @@ export function validateStoryboardDocument(
       if (audioDurationSec !== null && lastEnd > 0) {
         audioTailGapSec = Number((audioDurationSec - lastEnd).toFixed(3));
         if (lastEnd > audioDurationSec + 0.5) {
+          const overshoot = lastEnd - audioDurationSec;
+          const isModestOverhang = overshoot <= Math.max(5.0, audioDurationSec * 0.08);
           pushIssue({
             code: 'SEGMENT_EXCEEDS_AUDIO',
-            severity: 'error',
-            message: `Segment cuối (${lastEnd.toFixed(2)}s) vượt quá tổng thời lượng Audio (${audioDurationSec.toFixed(2)}s).`,
+            severity: isModestOverhang ? 'warning' : 'error',
+            message: isModestOverhang
+              ? `Segment cuối (${lastEnd.toFixed(2)}s) vượt nhẹ thời lượng Audio (${audioDurationSec.toFixed(2)}s, lệch +${overshoot.toFixed(2)}s) — hệ thống sẽ tự co khớp về ${audioDurationSec.toFixed(2)}s khi dựng.`
+              : `Segment cuối (${lastEnd.toFixed(2)}s) vượt quá tổng thời lượng Audio (${audioDurationSec.toFixed(2)}s).`,
           });
         } else if (audioTailGapSec > 0.8) {
           pushIssue({

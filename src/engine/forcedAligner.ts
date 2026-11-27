@@ -208,18 +208,36 @@ export function tokenizeTextForAlignment(text: string, lang?: string): string[] 
       }
     }
 
-    // Regex fallback: split by CJK punctuation first, then 2-character CJK chunks
-    const clauses = tok.split(/(?<=[。、！？；：「」,.!?;:])/).filter(Boolean);
-    for (const clause of clauses) {
-      if (clause.length <= 3) {
-        result.push(clause);
-      } else {
-        for (let i = 0; i < clause.length; i += 2) {
-          const slice = clause.slice(i, i + 2);
-          if (RE_TRAILING_PUNCT.test(slice) && result.length > 0) {
-            result[result.length - 1] += slice;
+    // Regex fallback: separate Latin/digit tokens from CJK runs, only chunk CJK runs
+    const scriptParts =
+      tok.match(
+        /[「『（【《〈"']*?[A-Za-z0-9\u00C0-\u024F\u1E00-\u1EFF][A-Za-z0-9\u00C0-\u024F\u1E00-\u1EFF'’\-.,!?;:]*[」』）】》〉"']*|[「『（【《〈]?[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fffー々、。！？「」『』（）()【】《》]+|[^\s]/g,
+      ) || [tok];
+    for (const part of scriptParts) {
+      if (!RE_HAS_CJK_OR_KANA.test(part)) {
+        if (RE_TRAILING_PUNCT.test(part) && result.length > 0) {
+          result[result.length - 1] += part;
+        } else {
+          result.push(part);
+        }
+        continue;
+      }
+      const clauses = part.split(/(?<=[。、！？；：「」『』,.!?;:])/).filter(Boolean);
+      for (const clause of clauses) {
+        if (!RE_HAS_CJK_OR_KANA.test(clause) || clause.length <= 3) {
+          if (RE_TRAILING_PUNCT.test(clause) && result.length > 0) {
+            result[result.length - 1] += clause;
           } else {
-            result.push(slice);
+            result.push(clause);
+          }
+        } else {
+          for (let i = 0; i < clause.length; i += 2) {
+            const slice = clause.slice(i, i + 2);
+            if (RE_TRAILING_PUNCT.test(slice) && result.length > 0) {
+              result[result.length - 1] += slice;
+            } else {
+              result.push(slice);
+            }
           }
         }
       }
@@ -227,6 +245,78 @@ export function tokenizeTextForAlignment(text: string, lang?: string): string[] 
   }
 
   return result;
+}
+
+export interface WavSpeechBounds {
+  speechStartSec: number;
+  speechEndSec: number;
+  durationSec: number;
+}
+
+/**
+ * Finds the leading and trailing speech onset/offset in mono PCM Float32 samples
+ * using 10ms RMS energy frames so multi-TTS spans can be trimmed tightly without cutting consonants.
+ */
+export function detectWavSpeechBounds(
+  samples: Float32Array,
+  sampleRate = 24000,
+  options?: { leadPadSec?: number; tailPadSec?: number; minSpeechSpanSec?: number },
+): WavSpeechBounds {
+  const safeRate = Math.max(8000, sampleRate);
+  const durationSec = Number((samples.length / safeRate).toFixed(4));
+  if (samples.length === 0) {
+    return { speechStartSec: 0, speechEndSec: 0, durationSec: 0 };
+  }
+
+  const frameLen = Math.max(80, Math.round(safeRate * 0.01)); // 10ms frames
+  const frameDur = frameLen / safeRate;
+  const energies: number[] = [];
+  let maxEnergy = 0;
+
+  for (let start = 0; start < samples.length; start += frameLen) {
+    const end = Math.min(samples.length, start + frameLen);
+    let sq = 0;
+    for (let i = start; i < end; i++) {
+      sq += samples[i] * samples[i];
+    }
+    const rms = Math.sqrt(sq / Math.max(1, end - start));
+    energies.push(rms);
+    if (rms > maxEnergy) maxEnergy = rms;
+  }
+
+  if (maxEnergy < 0.002 || energies.length === 0) {
+    return { speechStartSec: 0, speechEndSec: durationSec, durationSec };
+  }
+
+  const threshold = Math.max(0.0065, maxEnergy * 0.038);
+  let firstActive = -1;
+  let lastActive = -1;
+  for (let i = 0; i < energies.length; i++) {
+    if (energies[i] >= threshold) {
+      if (firstActive === -1) firstActive = i;
+      lastActive = i;
+    }
+  }
+
+  if (firstActive === -1 || lastActive === -1) {
+    return { speechStartSec: 0, speechEndSec: durationSec, durationSec };
+  }
+
+  const leadPad = Math.max(0, options?.leadPadSec ?? 0.03);
+  const tailPad = Math.max(0, options?.tailPadSec ?? 0.045);
+  const minSpan = Math.max(0.08, options?.minSpeechSpanSec ?? 0.14);
+
+  const rawStart = Math.max(0, firstActive * frameDur - leadPad);
+  let rawEnd = Math.min(durationSec, (lastActive + 1) * frameDur + tailPad);
+  if (rawEnd - rawStart < minSpan) {
+    rawEnd = Math.min(durationSec, rawStart + minSpan);
+  }
+
+  return {
+    speechStartSec: Number(rawStart.toFixed(4)),
+    speechEndSec: Number(rawEnd.toFixed(4)),
+    durationSec,
+  };
 }
 
 function wordSpeechWeight(word: string): number {

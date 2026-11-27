@@ -294,6 +294,100 @@ export function buildSourceSegmentsFromCues(cues: TranscriptCue[]): StoryboardSo
   }));
 }
 
+export function clampSourceSegmentsToAudioDuration(
+  segments: StoryboardSourceSegment[],
+  audioDurationSec: number,
+): { segments: StoryboardSourceSegment[]; changed: boolean } {
+  if (!Array.isArray(segments) || segments.length === 0) {
+    return { segments: [], changed: false };
+  }
+  const safeAudio = Number(audioDurationSec);
+  if (!Number.isFinite(safeAudio) || safeAudio <= 0.2) {
+    return { segments: segments.map((s) => ({ ...s })), changed: false };
+  }
+
+  const maxEnd = segments.reduce((mx, s) => Math.max(mx, Number(s?.end) || 0), 0);
+  if (maxEnd <= safeAudio + 0.001) {
+    return { segments: segments.map((s) => ({ ...s })), changed: false };
+  }
+
+  // If all segments start well inside the audio file, only clamp trailing end timestamps
+  // so earlier cue timings stay untouched. Otherwise proportionally scale to preserve monotonicity.
+  const canTrimTailOnly = segments.every((s) => Number(s?.start || 0) < safeAudio - 0.2);
+  if (canTrimTailOnly) {
+    const next = segments.map((s) => {
+      const rawStart = Math.max(0, Number(s.start) || 0);
+      const rawEnd = Math.min(safeAudio, Math.max(rawStart + 0.15, Number(s.end) || rawStart + 0.5));
+      const clampedStart = Math.min(rawStart, Math.max(0, rawEnd - 0.15));
+      return {
+        ...s,
+        start: Number(clampedStart.toFixed(3)),
+        end: Number(rawEnd.toFixed(3)),
+      };
+    });
+    return { segments: next, changed: true };
+  }
+
+  const ratio = safeAudio / Math.max(0.1, maxEnd);
+  const next = segments.map((s) => {
+    const st = Math.max(0, (Number(s.start) || 0) * ratio);
+    const en = Math.min(safeAudio, Math.max(st + 0.1, (Number(s.end) || st + 0.5) * ratio));
+    return {
+      ...s,
+      start: Number(st.toFixed(3)),
+      end: Number(en.toFixed(3)),
+    };
+  });
+  return { segments: next, changed: true };
+}
+
+export function clampCuesToAudioDuration(
+  cues: TranscriptCue[],
+  audioDurationSec: number,
+): TranscriptCue[] {
+  if (!Array.isArray(cues) || cues.length === 0) return [];
+  const safeAudio = Number(audioDurationSec);
+  if (!Number.isFinite(safeAudio) || safeAudio <= 0.2) {
+    return cues.map((c) => ({ ...c, words: c.words.map((w) => ({ ...w })) }));
+  }
+
+  const maxEnd = cues.reduce((mx, c) => Math.max(mx, c.end), 0);
+  if (maxEnd <= safeAudio + 0.001) {
+    return cues.map((c) => ({ ...c, words: c.words.map((w) => ({ ...w })) }));
+  }
+
+  const canTrimTailOnly = cues.every((c) => c.start < safeAudio - 0.2);
+  const globalRatio = canTrimTailOnly ? 1 : safeAudio / Math.max(0.1, maxEnd);
+
+  return cues.map((cue) => {
+    const rawStart = cue.start * globalRatio;
+    const targetEnd = Math.min(safeAudio, Math.max(rawStart + 0.15, cue.end * globalRatio));
+    const targetStart = Math.min(rawStart, Math.max(0, targetEnd - 0.15));
+    const origSpan = Math.max(0.05, cue.end - cue.start);
+    const targetSpan = Math.max(0.1, targetEnd - targetStart);
+    const needsWordRescale =
+      !canTrimTailOnly || cue.end > safeAudio + 0.001 || cue.words.some((w) => w.end > safeAudio);
+
+    const words = cue.words.map((w) => {
+      if (!needsWordRescale) return { ...w };
+      const relS = Math.max(0, Math.min(1, (w.start - cue.start) / origSpan));
+      const relE = Math.max(relS + 0.02, Math.min(1, (w.end - cue.start) / origSpan));
+      return {
+        ...w,
+        start: Number((targetStart + relS * targetSpan).toFixed(3)),
+        end: Number(Math.min(safeAudio, targetStart + relE * targetSpan).toFixed(3)),
+      };
+    });
+
+    return {
+      ...cue,
+      start: Number(targetStart.toFixed(3)),
+      end: Number(targetEnd.toFixed(3)),
+      words,
+    };
+  });
+}
+
 export function normalizeQuoteForMatch(raw: string): string {
   return raw
     .toLowerCase()

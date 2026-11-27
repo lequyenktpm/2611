@@ -10,12 +10,13 @@ import express from 'express';
 import { load as loadHtml } from 'cheerio';
 import { MsEdgeTTS, OUTPUT_FORMAT, ProsodyOptions } from 'msedge-tts';
 import { buildFfmpegArgs } from './src/engine/ffmpegArgs.ts';
-import { alignKnownTextToPcmFloat, parseWavBufferToMonoFloat32 } from './src/engine/forcedAligner.ts';
+import { alignKnownTextToPcmFloat, detectWavSpeechBounds, parseWavBufferToMonoFloat32 } from './src/engine/forcedAligner.ts';
 import { detectReelMode, splitMultipleExercisesFromText } from './src/engine/englishReelsEngine.ts';
 import { cleanOutputTitleStem, resolveTabOutputSubfolder } from './src/engine/outputNaming.ts';
 import {
   detectVoiceLangCode,
   normalizeTtsLangCode,
+  sanitizeSpanTextForSpeech,
   splitMixedLanguageTtsSpans,
 } from './src/engine/bilingualTtsHelper.ts';
 import {
@@ -23,6 +24,7 @@ import {
   interpolateWordTimings,
   parseTranscriptAuto,
   stripTimestampsFromScript,
+  tokenizeTextForKaraoke,
 } from './src/engine/transcriptParser.ts';
 import {
   ELEVENLABS_DEFAULT_VOICES,
@@ -1756,7 +1758,7 @@ async function startServer(): Promise<void> {
             : `Đang đọc đoạn ${i + 1}/${rawSegments.length} (${segProvider === 'auto' ? 'Auto' : segProvider})...`,
         );
 
-        const normPath = path.join(tmpDir, `seg_norm_${i}.mp3`);
+        const normPath = path.join(tmpDir, `seg_norm_${i}.wav`);
         const spanFiles: string[] = [];
         const spanWordTimings: ReturnType<typeof interpolateWordTimings> = [];
         const segWordBoundaries: EdgeWordBoundary[] = [];
@@ -1764,8 +1766,10 @@ async function startServer(): Promise<void> {
 
         for (let sIdx = 0; sIdx < spans.length; sIdx++) {
           const span = spans[sIdx];
+          const spokenSpanText =
+            spans.length > 1 ? sanitizeSpanTextForSpeech(span.text) : span.text;
           const synth = await synthesizeOneSpan(
-            span.text,
+            spokenSpanText,
             span.voice,
             span.lang,
             segProvider,
@@ -1775,30 +1779,73 @@ async function startServer(): Promise<void> {
           providerUsed = synth.provider;
 
           const spanRawPath = path.join(tmpDir, `seg_raw_${i}_${sIdx}.mp3`);
-          const spanNormPath = path.join(tmpDir, `seg_norm_${i}_${sIdx}.mp3`);
+          const spanRawWavPath = path.join(tmpDir, `seg_raw_${i}_${sIdx}.wav`);
+          const spanNormPath = path.join(tmpDir, `seg_norm_${i}_${sIdx}.wav`);
           await fs.promises.writeFile(spanRawPath, synth.buffer);
           await runProcess('ffmpeg', [
             '-y',
             '-i',
             spanRawPath,
-            '-c:a',
-            'libmp3lame',
             '-ar',
             '24000',
             '-ac',
             '1',
-            '-b:a',
-            '64k',
-            spanNormPath,
+            '-c:a',
+            'pcm_s16le',
+            spanRawWavPath,
           ]);
+
+          let trimStart = 0;
+          try {
+            const wavBuf = await fs.promises.readFile(spanRawWavPath);
+            const { samples, sampleRate } = parseWavBufferToMonoFloat32(wavBuf);
+            const bounds = detectWavSpeechBounds(samples, sampleRate, {
+              leadPadSec: spans.length > 1 ? (sIdx === 0 ? 0.035 : 0.02) : 0.045,
+              tailPadSec: spans.length > 1 ? (sIdx === spans.length - 1 ? 0.075 : 0.025) : 0.09,
+              minSpeechSpanSec: 0.14,
+            });
+            const trimDur = bounds.speechEndSec - bounds.speechStartSec;
+            if (trimDur >= 0.1 && (bounds.speechStartSec > 0.015 || bounds.durationSec - bounds.speechEndSec > 0.02)) {
+              trimStart = bounds.speechStartSec;
+              const fadeOutStart = Math.max(0, Number((trimDur - 0.012).toFixed(4)));
+              await runProcess('ffmpeg', [
+                '-y',
+                '-ss',
+                bounds.speechStartSec.toFixed(4),
+                '-to',
+                bounds.speechEndSec.toFixed(4),
+                '-i',
+                spanRawWavPath,
+                '-af',
+                `afade=t=in:st=0:d=0.01,afade=t=out:st=${fadeOutStart}:d=0.012`,
+                '-ar',
+                '24000',
+                '-ac',
+                '1',
+                '-c:a',
+                'pcm_s16le',
+                spanNormPath,
+              ]);
+            } else {
+              await fs.promises.copyFile(spanRawWavPath, spanNormPath);
+            }
+          } catch {
+            await fs.promises.copyFile(spanRawWavPath, spanNormPath);
+          }
+
           const spanDur = await getAudioDurationSec(spanNormPath);
           spanFiles.push(spanNormPath);
 
           const spanAbsStart = Number((cursor + spanOffset).toFixed(3));
           const spanAbsEnd = Number((cursor + spanOffset + spanDur).toFixed(3));
+          const shiftedBoundaries: EdgeWordBoundary[] = synth.wordBoundaries.map((wb) => {
+            const st = Number(Math.max(0, Math.min(spanDur - 0.04, wb.start - trimStart)).toFixed(3));
+            const en = Number(Math.max(st + 0.04, Math.min(spanDur, wb.end - trimStart)).toFixed(3));
+            return { word: wb.word, start: st, end: en };
+          });
 
-          if (synth.wordBoundaries.length > 0) {
-            for (const wb of synth.wordBoundaries) {
+          if (shiftedBoundaries.length > 0) {
+            for (const wb of shiftedBoundaries) {
               segWordBoundaries.push({
                 word: wb.word,
                 start: Number((spanOffset + wb.start).toFixed(3)),
@@ -1808,20 +1855,20 @@ async function startServer(): Promise<void> {
           }
 
           // Track exact per-span word timings so multi-TTS segments keep accurate word highlight positions
-          const spanTokens = span.text.split(/\s+/).filter(Boolean);
-          if (synth.wordBoundaries.length > 0 && spanTokens.length > 0 && synth.wordBoundaries.length === spanTokens.length) {
+          const spanTokens = tokenizeTextForKaraoke(span.text);
+          if (shiftedBoundaries.length > 0 && spanTokens.length > 0 && shiftedBoundaries.length === spanTokens.length) {
             for (let wIdx = 0; wIdx < spanTokens.length; wIdx++) {
-              const wb = synth.wordBoundaries[wIdx];
+              const wb = shiftedBoundaries[wIdx];
               const ws = Number(Math.max(spanAbsStart, Math.min(spanAbsEnd - 0.04, spanAbsStart + wb.start)).toFixed(3));
               const we = Number(Math.max(ws + 0.04, Math.min(spanAbsEnd, spanAbsStart + wb.end)).toFixed(3));
               spanWordTimings.push({ word: spanTokens[wIdx], start: ws, end: we });
             }
             anyWordBoundaries = true;
-          } else if (synth.wordBoundaries.length >= 2) {
-            const firstStart = Math.max(spanAbsStart, spanAbsStart + synth.wordBoundaries[0].start);
+          } else if (shiftedBoundaries.length >= 2) {
+            const firstStart = Math.max(spanAbsStart, spanAbsStart + shiftedBoundaries[0].start);
             const lastEnd = Math.min(
               spanAbsEnd,
-              Math.max(firstStart + 0.2, spanAbsStart + synth.wordBoundaries[synth.wordBoundaries.length - 1].end),
+              Math.max(firstStart + 0.16, spanAbsStart + shiftedBoundaries[shiftedBoundaries.length - 1].end),
             );
             spanWordTimings.push(...interpolateWordTimings(span.text, firstStart, lastEnd));
             anyWordBoundaries = true;
@@ -1849,14 +1896,12 @@ async function startServer(): Promise<void> {
             '0',
             '-i',
             spanConcatTxt,
-            '-c:a',
-            'libmp3lame',
             '-ar',
             '24000',
             '-ac',
             '1',
-            '-b:a',
-            '64k',
+            '-c:a',
+            'pcm_s16le',
             normPath,
           ]);
         }
@@ -1866,7 +1911,7 @@ async function startServer(): Promise<void> {
 
         let actualPauseDur = 0;
         if (pauseAfterSec > 0.15) {
-          const pausePath = path.join(tmpDir, `seg_pause_${i}.mp3`);
+          const pausePath = path.join(tmpDir, `seg_pause_${i}.wav`);
           await runProcess('ffmpeg', [
             '-y',
             '-f',
@@ -1875,14 +1920,12 @@ async function startServer(): Promise<void> {
             'anullsrc=r=24000:cl=mono',
             '-t',
             String(Number(pauseAfterSec.toFixed(2))),
-            '-c:a',
-            'libmp3lame',
             '-ar',
             '24000',
             '-ac',
             '1',
-            '-b:a',
-            '64k',
+            '-c:a',
+            'pcm_s16le',
             pausePath,
           ]);
           actualPauseDur = await getAudioDurationSec(pausePath);
@@ -1896,9 +1939,9 @@ async function startServer(): Promise<void> {
 
         const start = Number(cursor.toFixed(3));
         const spokenEnd = Number((cursor + spokenDur).toFixed(3));
-        const segTokens = segText.split(/\s+/).filter(Boolean);
+        const segTokens = tokenizeTextForKaraoke(segText);
         let cueWords =
-          spanWordTimings.length === segTokens.length && spanWordTimings.length > 0
+          spanWordTimings.length > 0 && (spans.length > 1 || spanWordTimings.length === segTokens.length)
             ? spanWordTimings
             : interpolateWordTimings(segText, start, spokenEnd);
 
@@ -1915,7 +1958,7 @@ async function startServer(): Promise<void> {
             const firstStart = Math.max(start, cursor + segWordBoundaries[0].start);
             const lastEnd = Math.min(
               spokenEnd,
-              Math.max(firstStart + 0.25, cursor + segWordBoundaries[segWordBoundaries.length - 1].end),
+              Math.max(firstStart + 0.2, cursor + segWordBoundaries[segWordBoundaries.length - 1].end),
             );
             cueWords = interpolateWordTimings(segText, firstStart, lastEnd);
             anyWordBoundaries = true;
@@ -1942,7 +1985,7 @@ async function startServer(): Promise<void> {
       onProgress?.(92, 'Đang ghép file Audio MP3 hoàn chỉnh...');
       const finalAudioPath = path.join(tmpDir, 'combined.mp3');
       if (segFiles.length === 1) {
-        await fs.promises.copyFile(segFiles[0], finalAudioPath);
+        await runProcess('ffmpeg', ['-y', '-i', segFiles[0], '-c:a', 'libmp3lame', '-ar', '24000', '-ac', '1', '-b:a', '64k', finalAudioPath]);
       } else {
         const listPath = path.join(tmpDir, 'concat.txt');
         await fs.promises.writeFile(
@@ -1950,7 +1993,7 @@ async function startServer(): Promise<void> {
           segFiles.map((f) => `file '${f.replace(/'/g, "'\\''")}'`).join('\n'),
           'utf8',
         );
-        await runProcess('ffmpeg', ['-y', '-f', 'concat', '-safe', '0', '-i', listPath, '-c', 'copy', finalAudioPath]);
+        await runProcess('ffmpeg', ['-y', '-f', 'concat', '-safe', '0', '-i', listPath, '-c:a', 'libmp3lame', '-ar', '24000', '-ac', '1', '-b:a', '64k', finalAudioPath]);
       }
 
       const finalBuf = await fs.promises.readFile(finalAudioPath);

@@ -1,6 +1,6 @@
 import { TYPOGRAPHY_MOBILE_READABILITY_PROMPT_BLOCK } from './englishReelsEngine';
 import { LAYOUT_COMPOSITIONS } from './illustrationLayouts';
-import { buildSourceSegmentsFromCues } from './storyboardV19';
+import { buildSourceSegmentsFromCues, clampCuesToAudioDuration } from './storyboardV19';
 import { formatTimeToken } from './transcriptParser';
 import {
   CanvasThemeId,
@@ -28,16 +28,23 @@ export function buildSceneGenerationPrompt(
   const is3D = style === '3d-shapes';
   const isWordReveal = style === 'word-reveal-dark';
   const aiDecideComposition = options?.compositionId === 'ai-decide';
+  const isCartoonHost = !aiDecideComposition && options?.compositionId === 'cartoon-host';
 
-  const totalStart = cues.length > 0 ? formatTimeToken(cues[0].start) : '00:00:00.000';
-  const cuesLastEnd = cues.length > 0 ? cues[cues.length - 1].end : 30.0;
-  const totalEnd = formatTimeToken(cuesLastEnd + 0.4);
   const audioDur =
     typeof options?.audioDurationSec === 'number' && options.audioDurationSec > 0
       ? options.audioDurationSec
       : null;
+  const effectiveCues = audioDur !== null ? clampCuesToAudioDuration(cues, audioDur) : cues;
+
+  const totalStart = effectiveCues.length > 0 ? formatTimeToken(effectiveCues[0].start) : '00:00:00.000';
+  const rawCuesLastEnd = cues.length > 0 ? cues[cues.length - 1].end : 30.0;
+  const cuesLastEnd = effectiveCues.length > 0 ? effectiveCues[effectiveCues.length - 1].end : 30.0;
+  const wasClampedToAudio = audioDur !== null && rawCuesLastEnd > audioDur + 0.05;
+  const totalEnd = formatTimeToken(
+    audioDur !== null ? Math.min(audioDur, cuesLastEnd + 0.4) : cuesLastEnd + 0.4,
+  );
   const tailGap =
-    audioDur !== null && cues.length > 0 ? Number((audioDur - cuesLastEnd).toFixed(2)) : null;
+    audioDur !== null && effectiveCues.length > 0 ? Number((audioDur - cuesLastEnd).toFixed(2)) : null;
 
   const compMeta =
     !aiDecideComposition && options?.compositionId
@@ -45,7 +52,7 @@ export function buildSceneGenerationPrompt(
       : undefined;
 
   const { variantsListText, sceneIconsListText } = getCatalogSummaryForPrompt();
-  const sourceSegments = buildSourceSegmentsFromCues(cues);
+  const sourceSegments = buildSourceSegmentsFromCues(effectiveCues);
   const sourceSegmentsJson = JSON.stringify(sourceSegments, null, 2);
 
   // ── Style guide block ──────────────────────────────────────────────────────
@@ -132,7 +139,7 @@ Quy tắc an toàn (KHÔNG invent type hay icon ngoài danh mục):
 - Kết hợp thanh đối chiếu (\`kind: "strip"\` / \`comparison_strip\`), nhãn mục tiêu (\`kind: "pill"\`), minh họa ngữ nghĩa (\`kind: "illustration"\` — ${compMeta ? `ưu tiên "${compMeta.signatureVariant}"` : 'đa dạng kho 50+ Bootstrap/CSS & vector'} hoặc \`kind: "object"\` + \`"connector"\`), thẻ câu ví dụ (\`kind: "text"\` / \`sentence_card\`), \`staircase_3d\`, và \`tone_meter\`.`;
   }
 
-  const transcriptLines = cues
+  const transcriptLines = effectiveCues
     .map(
       (cue, idx) =>
         `[Cue ${idx + 1} | ${formatTimeToken(cue.start)} -> ${formatTimeToken(cue.end)}] ${cue.text}`,
@@ -153,11 +160,13 @@ Quy tắc an toàn (KHÔNG invent type hay icon ngoài danh mục):
   const audioDiagLine =
     audioDur !== null
       ? `- Tổng thời lượng Audio đo được: **${audioDur.toFixed(2)}s** · Segment cuối kết thúc lúc: **${cuesLastEnd.toFixed(2)}s**${
-          tailGap !== null && tailGap > 0.8
-            ? ` (dư khoảng lặng/outro **+${tailGap.toFixed(2)}s** ở cuối — giữ nguyên timestamp thật của segment, KHÔNG kéo dài sai hoặc trộn bộ timestamp khác)`
-            : ''
+          wasClampedToAudio
+            ? ` (đã tự co khớp về đúng độ dài Audio để không vượt quá thời lượng file)`
+            : tailGap !== null && tailGap > 0.8
+              ? ` (dư khoảng lặng/outro **+${tailGap.toFixed(2)}s** ở cuối — giữ nguyên timestamp thật của segment, KHÔNG kéo dài sai hoặc trộn bộ timestamp khác)`
+              : ''
         }.`
-      : `- Tổng phạm vi Transcript: \`${totalStart}\` → \`${totalEnd}\` (${cues.length} segments).`;
+      : `- Tổng phạm vi Transcript: \`${totalStart}\` → \`${totalEnd}\` (${effectiveCues.length} segments).`;
 
   const durationBudgetLine = targetMinutes
     ? `- **Thời lượng & Mật độ kiến thức mục tiêu**: Người dùng mong muốn video hoàn chỉnh dài khoảng **${targetMinutes} phút (~${Math.round(targetMinutes * 60)} giây)**. ${
@@ -257,7 +266,11 @@ ${TYPOGRAPHY_MOBILE_READABILITY_PROMPT_BLOCK}
 Đảm bảo 100% các điều kiện sau trước khi trả JSON:
 - \`source_segments\` khớp nguyên văn transcript, không sót hay sửa dấu câu.
 - Có **nhiều scene** (\`scenes.length >= 2\` nếu transcript có ≥ 4 câu), mỗi scene gắn đúng \`segment_id\` tiếp nối mạch bài học.
-- **Mỗi scene BẮT BUỘC có ít nhất 1 thành phần thị giác sinh động** (\`illustration\`, \`object\` + \`connector\`, \`shape_3d\`, hoặc \`word_stack\`) đi kèm \`pill\`/\`strip\`/\`text\` — **KHÔNG BAO GIỜ chỉ xuất mỗi \`text\` hay \`pill\` đơn điệu**.
+- **Mỗi scene BẮT BUỘC có ít nhất 1 thành phần thị giác sinh động** (\`illustration\`, \`object\` + \`connector\`, \`shape_3d\`, hoặc \`word_stack\`) đi kèm \`pill\`/\`strip\`/\`text\` — **KHÔNG BAO GIỜ chỉ xuất mỗi \`text\` hay \`pill\` đơn điệu**. ${
+    isCartoonHost
+      ? '**Ngoại lệ @Gimmys (`cartoon-host`)**: Nhân vật hoạt hình lip-sync ở vùng giữa (`y: 0.42..0.74`) do app tự động render và tự chỉ tay lên thẻ — KHÔNG nhét `illustration` / `object` / `connector` đè lên nhân vật; mỗi scene chỉ cần `pill` + `text` (`sentence_card` kèm `style.badge: "cross" | "check" | "question"` & `stampText`) + tùy chọn `meter`!'
+      : ''
+  }
 - Lưu ý: \`"animation": { "duration_s": 0.35 }\` CHỈ là tốc độ hiệu ứng bay vào/ra (transition), **KHÔNG phải thời lượng hiển thị** của component — app tự giữ component hiển thị trọn vẹn theo \`sync_anchor\` (\`full_segment\` / đến hết segment hoặc scene).
 - Mọi \`sync_anchor.segment_id\` đều tồn tại trong \`source_segments\` và \`sync_anchor.quote\` có thật trong \`segment.text\`.
 - Mọi \`sceneIcon\` đều nằm trong danh sách 42 icon chuẩn; mọi \`variant\` có trong Kho hoặc dùng \`customPrimitives\`.
@@ -267,7 +280,99 @@ ${TYPOGRAPHY_MOBILE_READABILITY_PROMPT_BLOCK}
 
 # MẪU JSON OUTPUT CHUẨN v1.9
 \`\`\`json
-{
+${
+  isCartoonHost
+    ? `{
+  "schema_version": "1.9",
+  "title": "${options?.title || '水が欲しい時、CanとCouldどっち？'}",
+  "theme": "${resolvedTemplateTheme}",
+  "compositionId": "cartoon-host",
+  "compositionReason": "Nhân vật @Gimmys chỉ tay lên thẻ ví dụ Đúng/Sai và lip-sync theo lời giảng",
+  "style_profile": {
+    "palette": "${resolvedTemplateTheme}",
+    "primaryAccent": "#2563EB",
+    "secondaryAccent": "#16A34A",
+    "cardStyle": "elevated-rounded",
+    "typography": "Outfit + Plus Jakarta Sans"
+  },
+  "source_segments": ${sourceSegmentsJson},
+  "scenes": [
+    {
+      "scene_id": "sc_01",
+      "title": "The Situation",
+      "learning_objective": "Spot why casual phrasing feels too blunt",
+      "composition": "cartoon-host",
+      "transition": "fade",
+      "elements": [
+        {
+          "element_id": "el_01",
+          "kind": "pill",
+          "role": "scene_title",
+          "content": "01 · THE SITUATION",
+          "sync_anchor": { "segment_id": "${exampleSegId}", "anchor_type": "segment_start", "quote": ${JSON.stringify(exampleQuote)} },
+          "position": { "x": 0.20, "y": 0.135, "width": 0.60, "height": 0.05 },
+          "style": { "bgColor": "#FEE2E2", "textColor": "#B91C1C" },
+          "animation": { "in": "pop-up", "out": "fade-out", "duration_s": 0.35 }
+        },
+        {
+          "element_id": "el_02",
+          "kind": "text",
+          "role": "example_sentence",
+          "content": ${JSON.stringify(exampleQuote)},
+          "subtext": "Too direct / casual in polite contexts",
+          "sync_anchor": { "segment_id": "${exampleSegId}", "anchor_type": "full_segment", "quote": ${JSON.stringify(exampleQuote)} },
+          "position": { "x": 0.08, "y": 0.20, "width": 0.84, "height": 0.17 },
+          "style": { "badge": "cross", "stampText": "AVOID", "emphasisColor": "#DC2626" },
+          "animation": { "in": "pop-up", "out": "shrink", "duration_s": 0.35 }
+        }
+      ]
+    },
+    {
+      "scene_id": "sc_02",
+      "title": "Natural Upgrade",
+      "learning_objective": "Show the natural, polite expression with Gimmy approving",
+      "composition": "cartoon-host",
+      "transition": "fade",
+      "elements": [
+        {
+          "element_id": "el_03",
+          "kind": "pill",
+          "role": "scene_title",
+          "content": "02 · NATURAL UPGRADE",
+          "sync_anchor": { "segment_id": "${exampleSegId2}", "anchor_type": "segment_start", "quote": ${JSON.stringify(exampleQuote2)} },
+          "position": { "x": 0.20, "y": 0.135, "width": 0.60, "height": 0.05 },
+          "style": { "bgColor": "#DCFCE7", "textColor": "#15803D" },
+          "animation": { "in": "pop-up", "out": "fade-out", "duration_s": 0.35 }
+        },
+        {
+          "element_id": "el_04",
+          "kind": "text",
+          "role": "example_sentence",
+          "content": ${JSON.stringify(exampleQuote2)},
+          "subtext": "Polite, natural everyday phrasing",
+          "sync_anchor": { "segment_id": "${exampleSegId2}", "anchor_type": "full_segment", "quote": ${JSON.stringify(exampleQuote2)} },
+          "position": { "x": 0.08, "y": 0.20, "width": 0.84, "height": 0.17 },
+          "style": { "badge": "check", "stampText": "NATURAL", "emphasisColor": "#16A34A" },
+          "animation": { "in": "pop-up", "out": "fade-out", "duration_s": 0.35 }
+        },
+        {
+          "element_id": "el_05",
+          "kind": "meter",
+          "role": "tone_gauge",
+          "title": "POLITENESS",
+          "leftLabel": "Direct",
+          "rightLabel": "Polite!",
+          "valueStart": 0.25,
+          "valueEnd": 0.88,
+          "sync_anchor": { "segment_id": "${exampleSegId2}", "anchor_type": "full_segment", "quote": ${JSON.stringify(exampleQuote2)} },
+          "position": { "x": 0.12, "y": 0.385, "width": 0.76, "height": 0.075 },
+          "animation": { "in": "slide-up", "out": "fade-out", "duration_s": 0.35 }
+        }
+      ]
+    }
+  ]
+}`
+    : `{
   "schema_version": "1.9",
   "title": "${options?.title || '【Đừng nói sai nữa!】Cách mở lời tự nhiên nhất'}",
   "theme": "${resolvedTemplateTheme}",
@@ -286,7 +391,7 @@ ${TYPOGRAPHY_MOBILE_READABILITY_PROMPT_BLOCK}
       "scene_id": "sc_01",
       "title": "Hook & Core Contrast",
       "learning_objective": "Introduce the core distinction visually",
-      "composition": "story-scenes",
+      "composition": "${aiDecideComposition ? 'story-scenes' : compMeta?.id || 'story-scenes'}",
       "transition": "fade",
       "elements": [
         {
@@ -315,7 +420,7 @@ ${TYPOGRAPHY_MOBILE_READABILITY_PROMPT_BLOCK}
           "element_id": "el_03",
           "kind": "illustration",
           "role": "visual",
-          "variant": "bs-card-header",
+          "variant": "${!aiDecideComposition && compMeta?.signatureVariant ? compMeta.signatureVariant : 'bs-card-header'}",
           "sceneIcon": "sparkles",
           "formula": "LESSON FOCUS",
           "title": "Key Contrast",
@@ -342,7 +447,7 @@ ${TYPOGRAPHY_MOBILE_READABILITY_PROMPT_BLOCK}
       "scene_id": "sc_02",
       "title": "Compare & Practice",
       "learning_objective": "Contrast patterns using semantic objects & connectors",
-      "composition": "story-scenes",
+      "composition": "${aiDecideComposition ? 'story-scenes' : compMeta?.id || 'story-scenes'}",
       "transition": "fade",
       "elements": [
         {
@@ -388,9 +493,10 @@ ${TYPOGRAPHY_MOBILE_READABILITY_PROMPT_BLOCK}
       ]
     }
   ]
+}`
 }
-\`\`\`
+\`\`\``,StartLine:281,TargetContent:
 
-# TRANSCRIPT THAM CHIẾU (${cues.length} CUES)
+# TRANSCRIPT THAM CHIẾU (${effectiveCues.length} CUES)
 ${transcriptLines}`;
 }

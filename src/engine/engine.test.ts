@@ -8,6 +8,7 @@ import {
   parseTranscriptAuto,
   shiftCuesAndWords,
   stripTimestampsFromScript,
+  tokenizeTextForKaraoke,
 } from './transcriptParser';
 import { inferSpokenLanguageFromText } from '../server/mediaHelpers';
 import { buildSceneGenerationPrompt } from './aiPromptBuilder';
@@ -40,6 +41,7 @@ import {
   SAMPLE_XUN52000_TRANSCRIPT,
 } from './demoPresets';
 import {
+  clampStoryboardPlanToAudioDuration,
   parseScenePlanJson,
   parseWordLevelJson,
   projectToWordsAndScenePlan,
@@ -70,6 +72,7 @@ import {
   resolveProjectOverlaps,
   STAGE_SAFE_BOTTOM,
   estimateElementBounds,
+  estimateElementHalfExtents,
 } from './layoutSolver';
 import {
   CANVAS_THEMES,
@@ -87,8 +90,12 @@ import {
 } from './vectorComponentDb';
 import {
   computeBackgroundImageDrawRect,
+  getEffectiveIntroSeconds,
+  getEffectiveOutroSeconds,
   getStageDimensionsForAspect,
   hitTestElementLayout,
+  karaokeTokenGapPx,
+  layoutKaraokeTokens,
   resolveElementLayoutForAspect,
   STAGE_HEIGHT,
   STAGE_WIDTH,
@@ -119,13 +126,22 @@ import {
   sanitizeTtsSpeech,
   splitMultipleExercisesFromText,
 } from './englishReelsEngine';
-import { pickVoiceForLangCode, splitMixedLanguageTtsSpans } from './bilingualTtsHelper';
+import {
+  pickVoiceForLangCode,
+  sanitizeSpanTextForSpeech,
+  splitMixedLanguageTtsSpans,
+} from './bilingualTtsHelper';
 import {
   compileVisualBuilderToPrimitives,
   createDefaultVisualBuilderConfig,
   VISUAL_LAYOUT_PRESETS,
 } from './visualComponentBuilder';
-import { alignKnownTextToPcmFloat, parseWavBufferToMonoFloat32, tokenizeTextForAlignment } from './forcedAligner';
+import {
+  alignKnownTextToPcmFloat,
+  detectWavSpeechBounds,
+  parseWavBufferToMonoFloat32,
+  tokenizeTextForAlignment,
+} from './forcedAligner';
 import {
   buildReadingWebAiPrompt,
   cleanReadingWorksheetInput,
@@ -4099,6 +4115,414 @@ test('@englishpracticing168 layouts and variants integrate cleanly with 0 overla
   assert.equal(pickCompositionFromContext('Voiced vs voiceless -ed ending sound /t/ /d/'), 'p168-pronunciation');
   assert.equal(pickCompositionFromContext('3 everyday situations with friends and at work'), 'p168-situations');
 });
+
+test('mixed JP/EN karaoke & alignment tokenization never splits English words or strands single-char kana tails', () => {
+  const mixedText = '「Could I take Friday off, please?」とか言うか。';
+  const karaokeTokens = tokenizeTextForKaraoke(mixedText);
+  assert.ok(
+    karaokeTokens.includes('please?」'),
+    `Expected "please?」" to remain intact, got: ${JSON.stringify(karaokeTokens)}`,
+  );
+  assert.ok(
+    !karaokeTokens.includes('plea') && !karaokeTokens.includes('se?'),
+    `English word must not be split across tokens: ${JSON.stringify(karaokeTokens)}`,
+  );
+  assert.ok(
+    !karaokeTokens.includes('か。') && !karaokeTokens.includes('か'),
+    `Trailing 1-2 char kana tail must not be split alone: ${JSON.stringify(karaokeTokens)}`,
+  );
+
+  const alignTokens = tokenizeTextForAlignment(mixedText, 'ja');
+  assert.ok(
+    !alignTokens.includes('pl') && !alignTokens.includes('ea') && !alignTokens.includes('plea'),
+    `Alignment tokenizer must keep English words intact, got: ${JSON.stringify(alignTokens)}`,
+  );
+});
+
+test('karaokeTokenGapPx and layoutKaraokeTokens preserve zero/tight CJK gaps and auto-shrink to avoid orphan 1-2 char widow lines', () => {
+  assert.equal(karaokeTokenGapPx('please?」', 'とか言うか。', 14), 2);
+  assert.equal(karaokeTokenGapPx('Could', 'I', 14), 14);
+  assert.equal(karaokeTokenGapPx('とか言', 'うか。', 14), 0);
+  assert.equal(karaokeTokenGapPx('とか言うか', '。', 14), 0);
+  assert.equal(karaokeTokenGapPx('「', 'Could', 14), 0);
+
+  const tokens = tokenizeTextForKaraoke('「Could I take Friday off, please?」とか言うか。').map((word) => ({
+    word,
+  }));
+  // Deterministic monospace-like width estimator: ~0.58 * fontSize for ASCII, ~1.0 * fontSize for CJK
+  const estimateWidth = (text: string, fSize: number) => {
+    let w = 0;
+    for (const ch of text) {
+      w += /[\u3000-\u9fff]/.test(ch) ? fSize * 1.0 : fSize * 0.56;
+    }
+    return w;
+  };
+  const baseFontSize = 36;
+  // Width slightly narrower than full line at 36px (at 36px only the final short Japanese chunk would spill onto line 2)
+  const fullWidthAt36 = tokens.reduce((acc, tok, idx) => {
+    const sep = idx > 0 ? karaokeTokenGapPx(tokens[idx - 1].word, tok.word, 36 * 0.28 * 1.42) : 0;
+    return acc + sep + estimateWidth(tok.word, 36);
+  }, 0);
+  const tightMaxLineW = fullWidthAt36 - 40;
+
+  const layout = layoutKaraokeTokens(tokens, {
+    baseFontSize,
+    maxLineW: tightMaxLineW,
+    linesPerPage: 2,
+    measureWidth: estimateWidth,
+    measureSpace: (fSize) => fSize * 0.28,
+  });
+
+  assert.ok(layout.fontSize < baseFontSize, `Expected font size to auto-shrink from ${baseFontSize}, got ${layout.fontSize}`);
+  assert.equal(layout.allLines.length, 1, 'Expected auto-shrink to keep the line intact on 1 line instead of stranding a short CJK tail');
+});
+
+test('cartoonHostAnimator smoothly retracts right arm and fades reaction badge without frame snaps', () => {
+  const recomposed = recomposeProjectWithStyle(PRESET_JP_EN_POLITE, 'cartoon-host');
+  const warnEl = recomposed.elements.find(
+    (el) => el.props.kind === 'sentence-card' && el.props.badge === 'cross',
+  );
+  assert.ok(warnEl, 'Expected a cross/warning sentence card in PRESET_JP_EN_POLITE');
+  const endT = warnEl!.endTime;
+
+  // Sample continuously across [endT - 0.05, endT + 0.65] at 30ms steps
+  const frames = [];
+  for (let dt = -0.05; dt <= 0.65; dt += 0.03) {
+    const t = Number((endT + dt).toFixed(3));
+    const ctx = computeCartoonHostContextFromElements(recomposed.elements, t);
+    const frame = computeSpeechLipSyncState(recomposed.cues, t, ctx);
+    frames.push({ t, ctx, frame });
+  }
+
+  const activeFrame = frames[0].frame;
+  assert.equal(activeFrame.badgeGlyph, 'cross');
+  assert.equal(activeFrame.badgeOpacity, 1);
+
+  // 1) Continuous wrist motion across PRESET_JP_EN_POLITE card boundary (no >22px 30ms frame jumps)
+  for (let i = 1; i < frames.length; i++) {
+    const dx = Math.abs(frames[i].frame.rightWristX - frames[i - 1].frame.rightWristX);
+    const dy = Math.abs(frames[i].frame.rightWristY - frames[i - 1].frame.rightWristY);
+    const dist = Math.hypot(dx, dy);
+    assert.ok(
+      dist < 22,
+      `Right wrist jumped ${dist.toFixed(1)}px between t=${frames[i - 1].t} and t=${frames[i].t}`,
+    );
+  }
+
+  // 2) Retraction from an isolated cross card into neutral pause/idle must gradually fade badge (1 -> <1 -> 0)
+  const isolatedElements = [warnEl!];
+  const isolatedCues = recomposed.cues.map((c) =>
+    c.end <= endT ? c : { ...c, start: c.start + 2.0, end: c.end + 2.0 },
+  );
+  const retractFrames = [];
+  for (let dt = -0.05; dt <= 0.65; dt += 0.03) {
+    const t = Number((endT + dt).toFixed(3));
+    const ctx = computeCartoonHostContextFromElements(isolatedElements, t);
+    retractFrames.push({ t, frame: computeSpeechLipSyncState(isolatedCues, t, ctx) });
+  }
+  assert.equal(retractFrames[0].frame.badgeOpacity, 1);
+  const midRetract = retractFrames.find((f) => Math.abs(f.t - (endT + 0.22)) < 0.02)!;
+  assert.ok(
+    midRetract.frame.badgeOpacity > 0 && midRetract.frame.badgeOpacity < 1,
+    `Expected gradual badge fade during neutral retraction, got ${midRetract.frame.badgeOpacity}`,
+  );
+  assert.equal(retractFrames[retractFrames.length - 1].frame.badgeOpacity, 0);
+});
+
+test('detectWavSpeechBounds trims leading/trailing silence and sanitizeSpanTextForSpeech strips dangling brackets', () => {
+  const sr = 24000;
+  const totalSamples = sr * 3; // 3.0s
+  const samples = new Float32Array(totalSamples);
+  // 0.8s silence, 1.0s 440Hz tone, 1.2s silence
+  for (let i = Math.floor(sr * 0.8); i < Math.floor(sr * 1.8); i++) {
+    samples[i] = 0.25 * Math.sin((2 * Math.PI * 440 * i) / sr);
+  }
+  const bounds = detectWavSpeechBounds(samples, sr, { leadPadSec: 0.03, tailPadSec: 0.04 });
+  assert.ok(bounds.speechStartSec >= 0.75 && bounds.speechStartSec <= 0.81, `Unexpected speechStartSec=${bounds.speechStartSec}`);
+  assert.ok(bounds.speechEndSec >= 1.79 && bounds.speechEndSec <= 1.86, `Unexpected speechEndSec=${bounds.speechEndSec}`);
+
+  assert.equal(sanitizeSpanTextForSpeech('上司が通りかかって「'), '上司が通りかかって');
+  assert.equal(sanitizeSpanTextForSpeech('Could I take Friday off, please?」'), 'Could I take Friday off, please?');
+});
+
+test('cartoonHostAnimator keeps right wrist & elbow outside torso and head silhouettes across all gestures and transitions', () => {
+  const cues = [
+    { id: 'c1', start: 0, end: 1.5, text: 'Which is natural?', words: [] },
+    { id: 'c2', start: 1.6, end: 3.2, text: 'Avoid saying Give me water.', words: [] },
+    { id: 'c3', start: 3.3, end: 5.0, text: 'Could I have some water?', words: [] },
+  ];
+  const badges: Array<'question' | 'cross' | 'check' | 'none'> = ['question', 'cross', 'check', 'none'];
+  for (const badge of badges) {
+    for (let t = 0.2; t <= 4.8; t += 0.25) {
+      const state = computeSpeechLipSyncState(cues, t, {
+        activeBadge: badge,
+        activeText: badge === 'cross' ? 'Avoid' : badge === 'check' ? 'Could I' : 'Which one?',
+        targetDirection: 'up',
+      });
+      assert.ok(
+        state.rightWristX >= 118,
+        `Right wrist X=${state.rightWristX} should stay outside torso (>=118) for badge=${badge} at t=${t}`,
+      );
+      if (state.rightWristY < -60) {
+        const headDist = Math.hypot(state.rightWristX, state.rightWristY + 135);
+        assert.ok(
+          headDist >= 118,
+          `Raised right wrist (${state.rightWristX.toFixed(1)}, ${state.rightWristY.toFixed(1)}) too close to head center (dist=${headDist.toFixed(1)})`,
+        );
+      }
+    }
+  }
+});
+
+test('cartoon-host 9:16 and 4:5 stack prevents tall 6-line Japanese sentence-card from overlapping tone-meter or character', () => {
+  const tallJapaneseText =
+    'このシーンを想像してみて。カフェにいて、すごく喉が渇いて「水、くれる？」って言うんだ。言葉は正しいけど、ちょっとぶっきらぼうに聞こえる。なぜかって？英語には丁寧に聞くための特別な表現があって、相手によって使い分けるんだ。';
+  const elements: SceneElement[] = [
+    {
+      id: 'pill-1',
+      type: 'topic-pill',
+      label: 'Watch closely',
+      startTime: 0,
+      endTime: 10,
+      enterAnimation: 'pop-up',
+      exitAnimation: 'fade-out',
+      layout: { x: 540, y: 315, width: 320, scale: 1, zIndex: 12 },
+      props: { kind: 'topic-pill', text: 'Watch closely', bgColor: '#FFE4E6', textColor: '#991B1B' },
+    },
+    {
+      id: 'card-tall',
+      type: 'sentence-card',
+      label: 'Tall JP Card',
+      startTime: 0,
+      endTime: 10,
+      enterAnimation: 'pop-up',
+      exitAnimation: 'shrink',
+      layout: { x: 540, y: 590, width: 820, scale: 1, zIndex: 22 },
+      props: {
+        kind: 'sentence-card',
+        text: tallJapaneseText,
+        badge: 'cross',
+        stampText: 'AVOID',
+      },
+    },
+    {
+      id: 'meter-1',
+      type: 'tone-meter',
+      label: 'Tone Meter',
+      startTime: 0,
+      endTime: 10,
+      enterAnimation: 'slide-up',
+      exitAnimation: 'fade-out',
+      layout: { x: 540, y: 760, width: 760, scale: 1, zIndex: 18 },
+      props: {
+        kind: 'tone-meter',
+        title: 'TONE',
+        leftLabel: 'basic',
+        rightLabel: 'natural',
+        valueStart: 0.25,
+        valueEnd: 0.25,
+        animateStart: 0,
+        animateEnd: 2,
+      },
+    },
+    {
+      id: 'host-1',
+      type: 'illustration-prop',
+      label: 'Gimmy',
+      startTime: 0,
+      endTime: 10,
+      enterAnimation: 'fade-scale',
+      exitAnimation: 'fade-out',
+      layout: { x: 540, y: 1245, width: 540, scale: 1, zIndex: 14 },
+      props: { kind: 'illustration-prop', variant: 'cartoon-host' },
+    },
+    {
+      id: 'kara-1',
+      type: 'karaoke-card',
+      label: 'Karaoke',
+      startTime: 0,
+      endTime: 10,
+      enterAnimation: 'slide-up',
+      exitAnimation: 'fade-out',
+      layout: { x: 540, y: 1620, width: 920, scale: 1, zIndex: 40 },
+      props: {
+        kind: 'karaoke-card',
+        cueId: 'c1',
+        words: [{ word: tallJapaneseText, start: 0, end: 10 }],
+        activeColor: '#DC2626',
+        inactiveColor: '#78350F',
+        spokenColor: '#991B1B',
+        variant: 'yellow-pill',
+      },
+    },
+  ];
+
+  for (const aspect of ['9:16', '4:5'] as const) {
+    const resolved = resolveElementLayoutForAspect(elements, 2.0, aspect, undefined, 'cartoon-host');
+    const cardLay = resolved.get('card-tall')!;
+    const meterLay = resolved.get('meter-1')!;
+    const hostLay = resolved.get('host-1')!;
+    const karaLay = resolved.get('kara-1')!;
+
+    const cardExt = estimateElementHalfExtents({ ...elements[1], layout: cardLay });
+    const meterExt = estimateElementHalfExtents({ ...elements[2], layout: meterLay });
+    const hostExt = estimateElementHalfExtents({ ...elements[3], layout: hostLay });
+    const karaExt = estimateElementHalfExtents({ ...elements[4], layout: karaLay });
+
+    const cardBottom = cardLay.y + cardExt.halfH;
+    const meterTop = meterLay.y - meterExt.halfH;
+    const meterBottom = meterLay.y + meterExt.halfH;
+    const hostTop = hostLay.y - hostExt.halfH;
+    const hostBottom = hostLay.y + hostExt.halfH;
+    const karaTop = karaLay.y - karaExt.halfH;
+
+    assert.ok(
+      meterTop - cardBottom >= 18,
+      `${aspect}: sentence-card bottom (${cardBottom.toFixed(1)}) overlaps tone-meter top (${meterTop.toFixed(1)})`,
+    );
+    assert.ok(
+      hostTop - meterBottom >= 14,
+      `${aspect}: tone-meter bottom (${meterBottom.toFixed(1)}) overlaps cartoon-host top (${hostTop.toFixed(1)})`,
+    );
+    assert.ok(
+      karaTop - hostBottom >= 8,
+      `${aspect}: cartoon-host bottom (${hostBottom.toFixed(1)}) overlaps karaoke top (${karaTop.toFixed(1)})`,
+    );
+  }
+});
+
+test('getEffectiveIntroSeconds and getEffectiveOutroSeconds clamp bounds cleanly and support optional fields', () => {
+  assert.equal(getEffectiveIntroSeconds(PRESET_JP_EN_POLITE), 0);
+  assert.equal(getEffectiveOutroSeconds(PRESET_JP_EN_POLITE), 0);
+
+  const projWithBranding = {
+    ...PRESET_JP_EN_POLITE,
+    watermark: {
+      introSeconds: 2.5,
+      introBadge: 'BÀI HỌC HÔM NAY',
+      introTitle: 'Can vs Could',
+      watermarkEnabled: true,
+      watermarkText: '@KineticSub',
+      watermarkCorner: 'bottom-right' as const,
+      watermarkOpacity: 0.7,
+      outroSeconds: 3.5,
+      outroLine1: 'Thanks!',
+      outroLine2: '',
+    },
+  };
+  assert.equal(getEffectiveIntroSeconds(projWithBranding), 2.5);
+  assert.equal(getEffectiveOutroSeconds(projWithBranding), 3.5);
+
+  // Blank outro lines should result in 0 effective outro even if outroSeconds > 0
+  const blankOutro = {
+    ...projWithBranding,
+    watermark: {
+      ...projWithBranding.watermark,
+      introSeconds: 12,
+      outroSeconds: 4,
+      outroLine1: '   ',
+      outroLine2: '',
+    },
+  };
+  assert.equal(getEffectiveIntroSeconds(blankOutro), 6);
+  assert.equal(getEffectiveOutroSeconds(blankOutro), 0);
+});
+
+test('SEGMENT_EXCEEDS_AUDIO gracefully warns and auto-clamps modest overhang while rejecting severe mismatches', () => {
+  const docWithMinorOverhang = {
+    schema_version: '1.9',
+    title: 'Test Overhang',
+    theme: 'pastel-sunrise' as const,
+    source_segments: [
+      { segment_id: 'seg_001', start: 0, end: 45.0, text: 'First half of lesson.' },
+      { segment_id: 'seg_002', start: 45.2, end: 93.39, text: 'Second half ending slightly past audio.' },
+    ],
+    scenes: [
+      {
+        scene_id: 'sc_01',
+        title: 'Scene 1',
+        elements: [
+          {
+            element_id: 'el_1',
+            kind: 'text',
+            content: 'First half of lesson.',
+            sync_anchor: { segment_id: 'seg_001', anchor_type: 'full_segment' as const },
+            position: { x: 0.08, y: 0.25, width: 0.84, height: 0.16 },
+          },
+        ],
+      },
+      {
+        scene_id: 'sc_02',
+        title: 'Scene 2',
+        elements: [
+          {
+            element_id: 'el_2',
+            kind: 'illustration',
+            variant: 'bs-card-header' as const,
+            title: 'Key Tip',
+            sync_anchor: { segment_id: 'seg_002', anchor_type: 'full_segment' as const },
+            position: { x: 0.08, y: 0.25, width: 0.84, height: 0.2 },
+          },
+        ],
+      },
+    ],
+  };
+
+  // 1) Minor overhang (93.39s vs 92.07s audio -> +1.32s) is a non-blocking warning, not error
+  const minorReport = validateStoryboardDocument(docWithMinorOverhang, [], { audioDurationSec: 92.07 });
+  assert.equal(minorReport.errors.length, 0, `Expected 0 errors, got: ${JSON.stringify(minorReport.errors)}`);
+  assert.ok(
+    minorReport.warnings.some((w) => w.code === 'SEGMENT_EXCEEDS_AUDIO'),
+    'Expected SEGMENT_EXCEEDS_AUDIO warning for minor overhang',
+  );
+
+  // 2) Severe overhang (140s vs 92.07s) remains a hard error
+  const severeDoc = {
+    ...docWithMinorOverhang,
+    source_segments: [
+      docWithMinorOverhang.source_segments[0],
+      { segment_id: 'seg_002', start: 45.2, end: 140.0, text: 'Way too long segment.' },
+    ],
+  };
+  const severeReport = validateStoryboardDocument(severeDoc, [], { audioDurationSec: 92.07 });
+  assert.ok(
+    severeReport.errors.some((e) => e.code === 'SEGMENT_EXCEEDS_AUDIO'),
+    'Expected SEGMENT_EXCEEDS_AUDIO error for severe duration mismatch',
+  );
+
+  // 3) AI Prompt clamps source_segments to audioDurationSec so AI never generates 93.39s
+  const oversizedCues = [
+    {
+      id: 'seg_001',
+      start: 0,
+      end: 45.0,
+      text: 'First half of lesson.',
+      words: interpolateWordTimings('First half of lesson.', 0, 45.0),
+    },
+    {
+      id: 'seg_002',
+      start: 45.2,
+      end: 93.39,
+      text: 'Second half ending slightly past audio.',
+      words: interpolateWordTimings('Second half ending slightly past audio.', 45.2, 93.39),
+    },
+  ];
+  const prompt = buildSceneGenerationPrompt(oversizedCues, { audioDurationSec: 92.07 });
+  assert.ok(!prompt.includes('93.39'), 'Prompt source_segments must be clamped below 92.07s');
+  assert.ok(prompt.includes('92.07'), 'Prompt should display clamped audio duration 92.07s');
+
+  // 4) clampStoryboardPlanToAudioDuration + scenePlanToProject clamp segments, cues & project duration cleanly
+  const clampedDoc = clampStoryboardPlanToAudioDuration(docWithMinorOverhang, 92.07);
+  assert.ok(clampedDoc.source_segments![1].end <= 92.07);
+  const afterClampReport = validateStoryboardDocument(clampedDoc, [], { audioDurationSec: 92.07 });
+  assert.equal(afterClampReport.errors.length, 0);
+  assert.ok(!afterClampReport.warnings.some((w) => w.code === 'SEGMENT_EXCEEDS_AUDIO'));
+
+  const proj = scenePlanToProject([], docWithMinorOverhang, { audioDurationSec: 92.07 });
+  assert.ok(proj.duration <= 92.07, `Project duration ${proj.duration} should match audio 92.07`);
+  assert.ok(proj.cues[proj.cues.length - 1].end <= 92.07);
+});
+
 
 
 

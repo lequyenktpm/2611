@@ -16,6 +16,7 @@ import {
   type CartoonHostContext,
   type CartoonLipSyncFrame,
 } from './cartoonHostAnimator';
+import { estimateElementHalfExtents } from './layoutSolver';
 import type { ExportAspectRatioId } from './mp4Config';
 import {
   BackgroundFitMode,
@@ -73,6 +74,29 @@ function resolveKaraokeTargetY(
   return aspectRatio === '16:9' ? 948 : aspectRatio === '1:1' ? 920 : aspectRatio === '4:5' ? 1160 : 1585;
 }
 
+export function getEffectiveIntroSeconds(
+  project: Pick<LessonProject, 'watermark' | 'title'>,
+): number {
+  const wm = project.watermark;
+  if (!wm || !(Number(wm.introSeconds) > 0)) return 0;
+  const hasContent = Boolean(
+    wm.introTitle?.trim() ||
+      wm.introSubtitle?.trim() ||
+      wm.introBadge?.trim() ||
+      project.title?.trim(),
+  );
+  return hasContent ? Math.max(0, Math.min(6, Number(wm.introSeconds) || 0)) : 0;
+}
+
+export function getEffectiveOutroSeconds(
+  project: Pick<LessonProject, 'watermark'>,
+): number {
+  const wm = project.watermark;
+  if (!wm || !(Number(wm.outroSeconds) > 0)) return 0;
+  const hasContent = Boolean(wm.outroLine1?.trim() || wm.outroLine2?.trim());
+  return hasContent ? Math.max(0, Math.min(10, Number(wm.outroSeconds) || 0)) : 0;
+}
+
 export function resolveElementLayoutForAspect(
   elements: SceneElement[],
   time: number,
@@ -97,6 +121,81 @@ export function resolveElementLayoutForAspect(
     const hasTopStrip916 = visible916.some(
       (el) => el.type === 'comparison-strip' && el.layout.y < 900 && !el.id.includes('-quiz-opts-'),
     );
+    const isTopSub916 = explicitPos === 'top';
+    let cartoonStackBottom916 = isTopSub916 ? 360 : 154;
+
+    if (isCartoonHostProject) {
+      const stripEl916 = visible916.find(
+        (el) => el.type === 'comparison-strip' && el.layout.y < 900 && !el.id.includes('-quiz-opts-'),
+      );
+      if (stripEl916) {
+        const stripY = isTopSub916
+          ? Math.max(stripEl916.layout.y, 355)
+          : Math.max(stripEl916.layout.y, 196);
+        const stripScale = Math.min(stripEl916.layout.scale || 1, 0.9);
+        const stripExt = estimateElementHalfExtents({
+          ...stripEl916,
+          layout: { ...stripEl916.layout, scale: stripScale },
+        });
+        out.set(stripEl916.id, { ...stripEl916.layout, y: stripY, scale: stripScale });
+        cartoonStackBottom916 = stripY + stripExt.halfH;
+      }
+
+      const pillEl916 = visible916.find((el) => el.type === 'topic-pill' && el.layout.y < 520);
+      if (pillEl916) {
+        const pillScale = Math.min(pillEl916.layout.scale || 1, 0.92);
+        const pillExt = estimateElementHalfExtents({
+          ...pillEl916,
+          layout: { ...pillEl916.layout, scale: pillScale },
+        });
+        const preferredPillY = isTopSub916
+          ? Math.max(pillEl916.layout.y, 445)
+          : hasTopStrip916
+            ? Math.max(pillEl916.layout.y, 296)
+            : Math.max(pillEl916.layout.y, 204);
+        const pillY = Math.max(preferredPillY, cartoonStackBottom916 + 18 + pillExt.halfH);
+        out.set(pillEl916.id, { ...pillEl916.layout, y: pillY, scale: pillScale });
+        cartoonStackBottom916 = pillY + pillExt.halfH;
+      }
+
+      const cardEls916 = visible916.filter((el) => el.type === 'sentence-card');
+      for (const cardEl of cardEls916) {
+        const cardScale = Math.min(cardEl.layout.scale || 1, 0.9);
+        const cardWidth = Math.min(860, cardEl.layout.width || 860);
+        const cardExt = estimateElementHalfExtents({
+          ...cardEl,
+          layout: { ...cardEl.layout, width: cardWidth, scale: cardScale },
+        });
+        const cardY = Math.max(
+          isTopSub916 ? 560 : hasTopStrip916 ? 450 : 375,
+          cartoonStackBottom916 + 22 + cardExt.halfH,
+        );
+        out.set(cardEl.id, { ...cardEl.layout, y: cardY, width: cardWidth, scale: cardScale });
+        cartoonStackBottom916 = Math.max(cartoonStackBottom916, cardY + cardExt.halfH);
+      }
+
+      const meterEls916 = visible916.filter((el) => el.type === 'tone-meter');
+      for (const meterEl of meterEls916) {
+        const meterScale = Math.min(meterEl.layout.scale || 0.78, 0.78);
+        const meterExt = estimateElementHalfExtents({
+          ...meterEl,
+          layout: { ...meterEl.layout, width: 700, scale: meterScale },
+        });
+        const meterY = Math.max(
+          isTopSub916 ? 760 : 595,
+          cartoonStackBottom916 + 28 + meterExt.halfH,
+        );
+        out.set(meterEl.id, {
+          ...meterEl.layout,
+          x: 540,
+          y: meterY,
+          width: 700,
+          scale: meterScale,
+        });
+        cartoonStackBottom916 = Math.max(cartoonStackBottom916, meterY + meterExt.halfH);
+      }
+    }
+
     for (const el of elements) {
       if (el.layout.manualPosition) {
         out.set(el.id, el.layout);
@@ -111,12 +210,14 @@ export function resolveElementLayoutForAspect(
         });
         continue;
       }
+      if (out.has(el.id)) continue;
+
       if (isCartoonHostProject) {
-        const isTopSub = explicitPos === 'top';
+        const isTopSub = isTopSub916;
         if (el.type === 'comparison-strip' && el.layout.y < 900 && !el.id.includes('-quiz-opts-')) {
           out.set(el.id, {
             ...el.layout,
-            y: isTopSub ? Math.max(el.layout.y, 350) : Math.max(el.layout.y, 196),
+            y: isTopSub ? Math.max(el.layout.y, 355) : Math.max(el.layout.y, 196),
             scale: Math.min(el.layout.scale || 1, 0.9),
           });
           continue;
@@ -124,36 +225,68 @@ export function resolveElementLayoutForAspect(
         if (el.type === 'topic-pill' && el.layout.y < 520) {
           out.set(el.id, {
             ...el.layout,
-            y: isTopSub ? Math.max(el.layout.y, 445) : hasTopStrip916 ? Math.max(el.layout.y, 296) : Math.max(el.layout.y, 205),
+            y: isTopSub
+              ? Math.max(el.layout.y, 445)
+              : hasTopStrip916
+                ? Math.max(el.layout.y, 296)
+                : Math.max(el.layout.y, 204),
             scale: Math.min(el.layout.scale || 1, 0.92),
           });
           continue;
         }
         if (el.type === 'sentence-card') {
+          const cardScale = Math.min(el.layout.scale || 1, 0.9);
+          const cardWidth = Math.min(860, el.layout.width || 860);
+          const cardExt = estimateElementHalfExtents({
+            ...el,
+            layout: { ...el.layout, width: cardWidth, scale: cardScale },
+          });
           out.set(el.id, {
             ...el.layout,
-            y: isTopSub ? Math.max(el.layout.y, 600) : hasTopStrip916 ? Math.max(465, Math.min(el.layout.y, 505)) : Math.max(385, Math.min(el.layout.y, 435)),
-            scale: Math.min(el.layout.scale || 1, 0.92),
+            y: Math.max(isTopSub ? 570 : 375, cartoonStackBottom916 + 22 + cardExt.halfH),
+            width: cardWidth,
+            scale: cardScale,
           });
           continue;
         }
         if (el.type === 'tone-meter') {
+          const meterScale = Math.min(el.layout.scale || 0.78, 0.78);
+          const meterExt = estimateElementHalfExtents({
+            ...el,
+            layout: { ...el.layout, width: 700, scale: meterScale },
+          });
           out.set(el.id, {
             ...el.layout,
             x: 540,
-            y: isTopSub ? 760 : 595,
+            y: Math.max(isTopSub ? 760 : 595, cartoonStackBottom916 + 28 + meterExt.halfH),
             width: 700,
-            scale: Math.min(el.layout.scale || 0.78, 0.78),
+            scale: meterScale,
           });
           continue;
         }
         if (el.props.kind === 'illustration-prop' && el.props.variant === 'cartoon-host') {
+          let hostScale = Math.min(el.layout.scale || 0.92, 0.92);
+          const maxHostBottom = isTopSub ? 1810 : 1482;
+          const halfHBase = 335;
+          let hostY = Math.max(
+            isTopSub ? 1135 : 1085,
+            cartoonStackBottom916 + 24 + Math.round(halfHBase * hostScale),
+          );
+          if (hostY + Math.round(346 * hostScale) > maxHostBottom) {
+            const avail = Math.max(440, maxHostBottom - (cartoonStackBottom916 + 24));
+            hostScale = Math.max(0.68, Math.min(hostScale, Number((avail / (halfHBase + 346)).toFixed(3))));
+            hostY = Math.max(
+              isTopSub ? 1135 : 1085,
+              cartoonStackBottom916 + 22 + Math.round(halfHBase * hostScale),
+            );
+            hostY = Math.min(hostY, maxHostBottom - Math.round(346 * hostScale));
+          }
           out.set(el.id, {
             ...el.layout,
             x: 540,
-            y: isTopSub ? 1135 : 1085,
+            y: hostY,
             width: 820,
-            scale: Math.min(el.layout.scale || 0.92, 0.92),
+            scale: hostScale,
           });
           continue;
         }
@@ -204,12 +337,49 @@ export function resolveElementLayoutForAspect(
       midCards.length > 0 || midQuizOpts.length > 0 || midMeters.length > 0 || hasTopStrip || visible.some(isTopPill);
 
     if (aspectRatio === '4:5') {
-      // 1080 x 1350: Clean stacked responsive vertical layout (Header -> Strip -> Pill -> Card -> Gimmy -> Karaoke)
+      // 1080 x 1350: Clean stacked responsive vertical layout (Header -> Strip -> Pill -> Card -> Meter -> Gimmy -> Karaoke)
+      let stackBottom45 = hasTopSubCollision ? 305 : 132;
+      const stripEl45 = visible.find((el) => el.type === 'comparison-strip' && !isQuizOptStrip(el));
+      if (stripEl45) {
+        const sy = hasTopSubCollision ? 345 : 172;
+        out.set(stripEl45.id, { ...stripEl45.layout, x: 540, y: sy, width: 880, scale: 0.84 });
+        stackBottom45 = sy + 52;
+      }
+      const pillEl45 = visible.find(isTopPill);
+      if (pillEl45) {
+        const pillExt = estimateElementHalfExtents({
+          ...pillEl45,
+          layout: { ...pillEl45.layout, width: 620, scale: 0.84 },
+        });
+        const py = Math.max(hasTopSubCollision ? (hasTopStrip ? 425 : 350) : hasTopStrip ? 248 : 178, stackBottom45 + 16 + pillExt.halfH);
+        out.set(pillEl45.id, { ...pillEl45.layout, x: 540, y: py, width: 620, scale: 0.84 });
+        stackBottom45 = py + pillExt.halfH;
+      }
+      for (const cardEl45 of visible.filter((el) => el.type === 'sentence-card')) {
+        const cardExt = estimateElementHalfExtents({
+          ...cardEl45,
+          layout: { ...cardEl45.layout, width: 820, scale: 0.8 },
+        });
+        const cy = Math.max(hasTopSubCollision ? 545 : hasTopStrip ? 385 : 330, stackBottom45 + 18 + cardExt.halfH);
+        out.set(cardEl45.id, { ...cardEl45.layout, x: 540, y: cy, width: 820, scale: 0.8 });
+        stackBottom45 = Math.max(stackBottom45, cy + cardExt.halfH);
+      }
+      for (const lowerEl45 of visible.filter((el) => el.type === 'tone-meter' || isQuizOptStrip(el) || isCountdownMeter(el))) {
+        const lowerExt = estimateElementHalfExtents({
+          ...lowerEl45,
+          layout: { ...lowerEl45.layout, width: 780, scale: 0.72 },
+        });
+        const ly = Math.max(hasTopSubCollision ? 690 : 530, stackBottom45 + 20 + lowerExt.halfH);
+        out.set(lowerEl45.id, { ...lowerEl45.layout, x: 540, y: ly, width: 780, scale: 0.72 });
+        stackBottom45 = Math.max(stackBottom45, ly + lowerExt.halfH);
+      }
+
       for (const el of elements) {
         if (el.layout.manualPosition) {
           out.set(el.id, el.layout);
           continue;
         }
+        if (out.has(el.id)) continue;
         if (el.type === 'karaoke-card') {
           out.set(el.id, {
             ...el.layout,
@@ -246,7 +416,7 @@ export function resolveElementLayoutForAspect(
             x: 540,
             y: hasTopSubCollision ? 545 : hasTopStrip ? 385 : 330,
             width: 820,
-            scale: 0.82,
+            scale: 0.8,
           });
           continue;
         }
@@ -254,19 +424,41 @@ export function resolveElementLayoutForAspect(
           out.set(el.id, {
             ...el.layout,
             x: 540,
-            y: hasTopSubCollision ? 690 : 530,
+            y: Math.max(hasTopSubCollision ? 690 : 530, stackBottom45 + 20 + 58),
             width: 780,
             scale: 0.72,
           });
           continue;
         }
         if (isCartoonHostEl(el)) {
+          let hScale = hasLowerRight ? 0.66 : 0.72;
+          const maxB = hasTopSubCollision ? 1270 : 1065;
+          const halfHBase = 335;
+          const footBase = 346;
+          let hy = Math.max(
+            hasTopSubCollision ? 920 : hasLowerRight ? 835 : 795,
+            stackBottom45 + 18 + Math.round(halfHBase * hScale),
+          );
+          if (hy + Math.round(footBase * hScale) > maxB) {
+            const avail = Math.max(300, maxB - (stackBottom45 + 16));
+            hScale = Math.max(
+              0.44,
+              Math.min(hScale, Number((avail / (halfHBase + footBase)).toFixed(3))),
+            );
+            hy = Math.max(
+              stackBottom45 + 16 + Math.round(halfHBase * hScale),
+              Math.min(
+                maxB - Math.round(footBase * hScale),
+                stackBottom45 + 18 + Math.round(halfHBase * hScale),
+              ),
+            );
+          }
           out.set(el.id, {
             ...el.layout,
             x: 540,
-            y: hasTopSubCollision ? 920 : hasLowerRight ? 835 : 795,
+            y: hy,
             width: 780,
-            scale: hasLowerRight ? 0.68 : 0.74,
+            scale: hScale,
           });
           continue;
         }
@@ -680,8 +872,8 @@ export function resolveElementLayoutForAspect(
   return out;
 }
 
-const FONT_DISPLAY = '"Outfit", "Plus Jakarta Sans", "Noto Sans JP", "Hiragino Sans", "Yu Gothic", sans-serif';
-const FONT_SANS = '"Plus Jakarta Sans", "Noto Sans JP", "Hiragino Sans", "Yu Gothic", sans-serif';
+const FONT_DISPLAY = '"Outfit", "Plus Jakarta Sans", "Noto Sans JP", "Noto Sans SC", "Noto Sans KR", "Hiragino Sans", "Yu Gothic", "Meiryo", system-ui, sans-serif';
+const FONT_SANS = '"Plus Jakarta Sans", "Noto Sans JP", "Noto Sans SC", "Noto Sans KR", "Hiragino Sans", "Yu Gothic", "Meiryo", system-ui, sans-serif';
 
 function drawRoundedRectPath(
   ctx: CanvasRenderingContext2D,
@@ -1043,319 +1235,347 @@ function drawCartoonHostCharacter(
 
   ctx.save();
 
-  // Helper to draw a fanned cartoon hand at wrist (wx, wy)
-  const drawCartoonHand = (wx: number, wy: number, baseAngle: number, spreadFlip = 1, compact = false) => {
-    const fingerOffsets = compact ? [-0.26, 0, 0.26] : [-0.46, -0.14, 0.18, 0.52];
-    const fingerLens = compact ? [19, 23, 19] : [26, 33, 31, 24];
-    ctx.save();
-    ctx.strokeStyle = ink;
-    ctx.lineWidth = compact ? 4.8 : 5.4;
-    ctx.lineCap = 'round';
-    ctx.lineJoin = 'round';
-    fingerOffsets.forEach((off, idx) => {
-      const a = baseAngle + off * spreadFlip;
-      const len = fingerLens[idx];
-      const fx = wx + Math.cos(a) * len;
-      const fy = wy + Math.sin(a) * len;
-      const cx = wx + Math.cos(a - 0.08 * spreadFlip) * (len * 0.52);
-      const cy = wy + Math.sin(a - 0.08 * spreadFlip) * (len * 0.52);
-      ctx.beginPath();
-      ctx.moveTo(wx, wy);
-      ctx.quadraticCurveTo(cx, cy, fx, fy);
-      ctx.stroke();
-    });
-    ctx.restore();
-  };
+  const skinLight = '#ECC094';
 
-  // Pointing hand with crisp index finger + subtle curled palm fingers
-  const drawPointingHand = (
+  // Helper to draw a chunky, clearly visible skin-filled cartoon palm + bold fingers at wrist (wx, wy)
+  const drawBlendedRightHand = (
     wx: number,
     wy: number,
     dirAngle: number,
-    glyph: CartoonLipSyncFrame['pointerGlyph'],
+    pointMix: number,
+    compactMix: number,
   ) => {
     ctx.save();
-    ctx.strokeStyle = ink;
+    ctx.translate(wx, wy);
+    ctx.rotate(dirAngle);
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
-    // Extended index finger
-    const tipX = wx + Math.cos(dirAngle) * 40;
-    const tipY = wy + Math.sin(dirAngle) * 40;
-    ctx.lineWidth = 6.2;
+
+    if (pointMix >= 0.45) {
+      // Warm filled palm oval + bold outlined pointing index finger + thumb + curled knuckles
+      ctx.fillStyle = skinLight;
+      ctx.strokeStyle = ink;
+      ctx.lineWidth = 4.2;
+
+      // Curled back knuckles behind index finger
+      ctx.beginPath();
+      ctx.ellipse(5, 8, 9, 6.5, 0.25, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+
+      // Clear side thumb
+      ctx.beginPath();
+      ctx.ellipse(9, -11, 9.5, 5.2, -0.55, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+
+      // Main rounded cartoon palm
+      ctx.beginPath();
+      ctx.ellipse(4, 1, 13.5, 11.5, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+
+      // Thick unmistakable pointing index finger
+      const extLen = 36 + 8 * pointMix;
+      ctx.beginPath();
+      ctx.moveTo(6, -5.5);
+      ctx.lineTo(extLen, -4.5);
+      ctx.arc(extLen, 0.5, 5.0, -Math.PI / 2, Math.PI / 2);
+      ctx.lineTo(6, 5.5);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+    } else {
+      const compact = compactMix >= 0.65;
+      const spreadScale = compact ? 0.78 : 1;
+      const palmRx = compact ? 11.5 : 13.5;
+      const palmRy = compact ? 9.5 : 11.5;
+
+      // Spread outlined skin fingers radiating from palm
+      const fingerSpecs = compact
+        ? [
+            { a: -0.34, len: 23, w: 7.2 },
+            { a: 0, len: 26, w: 7.5 },
+            { a: 0.34, len: 22, w: 7.2 },
+          ]
+        : [
+            { a: -0.92, len: 23, w: 8.2 }, // thumb
+            { a: -0.34, len: 31, w: 8.4 },
+            { a: 0.02, len: 34, w: 8.6 },
+            { a: 0.38, len: 31, w: 8.4 },
+            { a: 0.72, len: 25, w: 7.8 },
+          ];
+
+      fingerSpecs.forEach((f) => {
+        ctx.save();
+        ctx.rotate(f.a);
+        const fLen = f.len * spreadScale;
+        ctx.fillStyle = skinLight;
+        ctx.strokeStyle = ink;
+        ctx.lineWidth = 3.8;
+        ctx.beginPath();
+        ctx.roundRect(6, -f.w / 2, fLen, f.w, f.w / 2);
+        ctx.fill();
+        ctx.stroke();
+        ctx.restore();
+      });
+
+      // Warm filled palm overlapping finger roots cleanly
+      ctx.fillStyle = skinLight;
+      ctx.strokeStyle = ink;
+      ctx.lineWidth = 4.2;
+      ctx.beginPath();
+      ctx.ellipse(4, 0, palmRx, palmRy, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+    }
+    ctx.restore();
+  };
+
+  // Large, crisp, unmistakable vector reaction badge positioned clear of the hand & fingertips
+  const drawHandReactionBadge = (
+    wx: number,
+    wy: number,
+    dirAngle: number,
+    pointMix: number,
+    glyph: CartoonLipSyncFrame['badgeGlyph'],
+    opacity: number,
+    scale: number,
+  ) => {
+    if (!glyph || opacity <= 0.02 || scale <= 0.1) return;
+    const anchorDist = pointMix >= 0.45 ? 98 : 82;
+    const badgeAngle = pointMix >= 0.45 ? dirAngle + 0.28 : dirAngle;
+    const offsetX =
+      pointMix >= 0.45 ? Math.cos(badgeAngle) * anchorDist : 54;
+    const offsetY =
+      pointMix >= 0.45 ? Math.sin(badgeAngle) * anchorDist : -66;
+    const gx = wx + offsetX;
+    const gy = wy + offsetY;
+    const pulse = 1 + Math.sin(time * 4.2) * 0.04;
+
+    const badgeFill =
+      glyph === 'cross'
+        ? '#DC2626'
+        : glyph === 'check'
+          ? '#16A34A'
+          : glyph === 'question'
+            ? '#D97706'
+            : '#2563EB';
+
+    ctx.save();
+    ctx.globalAlpha *= clamp01(opacity);
+    ctx.translate(gx, gy);
+    ctx.scale(scale * pulse, scale * pulse);
+
+    // Outer drop shadow + solid vivid disc + crisp white halo ring
+    ctx.save();
+    ctx.shadowColor = 'rgba(15, 23, 42, 0.26)';
+    ctx.shadowBlur = 14;
+    ctx.shadowOffsetY = 4;
+    ctx.fillStyle = badgeFill;
     ctx.beginPath();
-    ctx.moveTo(wx, wy);
-    ctx.lineTo(tipX, tipY);
+    ctx.arc(0, 0, 32, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+
+    ctx.strokeStyle = '#FFFFFF';
+    ctx.lineWidth = 4.6;
+    ctx.beginPath();
+    ctx.arc(0, 0, 32, 0, Math.PI * 2);
     ctx.stroke();
 
-    // Two curled helper fingers
-    ctx.lineWidth = 4.6;
-    [-0.45, 0.48].forEach((off) => {
-      const a = dirAngle + off;
+    // Bold crisp vector symbol inside disc
+    ctx.strokeStyle = '#FFFFFF';
+    ctx.fillStyle = '#FFFFFF';
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    if (glyph === 'check') {
+      ctx.lineWidth = 6.5;
       ctx.beginPath();
-      ctx.moveTo(wx, wy);
-      ctx.lineTo(wx + Math.cos(a) * 16, wy + Math.sin(a) * 16);
+      ctx.moveTo(-13, 1);
+      ctx.lineTo(-3.5, 11);
+      ctx.lineTo(14, -10);
       ctx.stroke();
+    } else if (glyph === 'cross') {
+      ctx.lineWidth = 6.5;
+      ctx.beginPath();
+      ctx.moveTo(-11, -11);
+      ctx.lineTo(11, 11);
+      ctx.moveTo(11, -11);
+      ctx.lineTo(-11, 11);
+      ctx.stroke();
+    } else if (glyph === 'question') {
+      ctx.font = `900 38px ${FONT_DISPLAY}`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('?', 0, 2);
+    } else {
+      ctx.font = `900 38px ${FONT_DISPLAY}`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('!', 0, 2);
+    }
+    ctx.restore();
+  };
+
+  // Helper to draw a chunky, skin-filled fanned cartoon left hand at wrist (wx, wy)
+  const drawCartoonHand = (wx: number, wy: number, baseAngle: number, spreadFlip = 1, compact = false) => {
+    ctx.save();
+    ctx.translate(wx, wy);
+    ctx.rotate(baseAngle);
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+
+    const fingerSpecs = compact
+      ? [
+          { a: -0.32 * spreadFlip, len: 22, w: 7.2 },
+          { a: 0, len: 25, w: 7.5 },
+          { a: 0.32 * spreadFlip, len: 21, w: 7.2 },
+        ]
+      : [
+          { a: -0.88 * spreadFlip, len: 22, w: 8.0 }, // thumb
+          { a: -0.32 * spreadFlip, len: 30, w: 8.2 },
+          { a: 0.02 * spreadFlip, len: 33, w: 8.4 },
+          { a: 0.36 * spreadFlip, len: 30, w: 8.2 },
+          { a: 0.68 * spreadFlip, len: 24, w: 7.6 },
+        ];
+
+    fingerSpecs.forEach((f) => {
+      ctx.save();
+      ctx.rotate(f.a);
+      ctx.fillStyle = skinLight;
+      ctx.strokeStyle = ink;
+      ctx.lineWidth = 3.8;
+      ctx.beginPath();
+      ctx.roundRect(5, -f.w / 2, f.len, f.w, f.w / 2);
+      ctx.fill();
+      ctx.stroke();
+      ctx.restore();
     });
 
-    // Subtle crisp reaction badge near pointing tip (never overlapping face/cards)
-    if (glyph) {
-      const gx = tipX + Math.cos(dirAngle) * 28;
-      const gy = tipY + Math.sin(dirAngle) * 28;
-      const badgeColor =
-        glyph === 'cross'
-          ? '#DC2626'
-          : glyph === 'check'
-            ? '#16A34A'
-            : glyph === 'question'
-              ? '#D97706'
-              : '#2563EB';
-      const symbol =
-        glyph === 'cross'
-          ? '✕'
-          : glyph === 'check'
-            ? '✓'
-            : glyph === 'question'
-              ? '?'
-              : '!';
-
-      ctx.fillStyle = '#FFFFFF';
-      ctx.beginPath();
-      ctx.arc(gx, gy, 18, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.strokeStyle = badgeColor;
-      ctx.lineWidth = 3.5;
-      ctx.stroke();
-
-      ctx.fillStyle = badgeColor;
-      ctx.font = `900 21px ${FONT_DISPLAY}`;
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText(symbol, gx, gy + 1);
-    }
+    ctx.fillStyle = skinLight;
+    ctx.strokeStyle = ink;
+    ctx.lineWidth = 4.2;
+    ctx.beginPath();
+    ctx.ellipse(4, 0, compact ? 11.5 : 13.5, compact ? 9.5 : 11.5, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
     ctx.restore();
   };
 
-  // Smooth articulated Bezier arm
-  const drawArticulatedArm = (
-    sx: number,
-    sy: number,
-    upperAngle: number,
-    elbowDelta: number,
-    dir: -1 | 1,
-    drawHandOnEnd: boolean,
-  ) => {
-    const upperLen = 100;
-    const foreLen = 92;
-    const a1 = dir === -1 ? Math.PI * 0.62 + upperAngle * 0.52 : Math.PI * 0.38 - upperAngle * 0.52;
-    const ex = sx + Math.cos(a1) * upperLen;
-    const ey = sy + Math.sin(a1) * upperLen;
-    const a2 = a1 + (dir === -1 ? 0.34 + elbowDelta * 0.42 : -0.34 - elbowDelta * 0.42);
-    const wx = ex + Math.cos(a2) * foreLen;
-    const wy = ey + Math.sin(a2) * foreLen;
+  // Continuous viewer-left arm drawn cleanly in front of tunic edge (never hidden behind torso)
+  const drawSmoothLeftArm = (sway: number) => {
+    const sx = -78;
+    const sy = 16;
+    const openMix = clamp01((lip.leftShoulderAngle - 0.44) / 0.24);
+    const smoothOpen = openMix * openMix * (3 - 2 * openMix);
+
+    // Clear hip-resting coordinates outside tunic boundary
+    const hipEx = -146 - sway * 0.35;
+    const hipEy = 112;
+    const hipWx = -122 - sway * 0.2;
+    const hipWy = 204;
+    const hipHandAngle = Math.PI * 0.5 - 0.14;
+
+    // Articulated open coordinates
+    const upperLen = 104;
+    const foreLen = 94;
+    const a1 = Math.PI * 0.66 + lip.leftShoulderAngle * 0.52;
+    const artEx = sx + Math.cos(a1) * upperLen;
+    const artEy = sy + Math.sin(a1) * upperLen;
+    const a2 = a1 + (0.34 + lip.leftElbowAngle * 0.42);
+    const artWx = artEx + Math.cos(a2) * foreLen;
+    const artWy = artEy + Math.sin(a2) * foreLen;
+
+    const ex = Math.min(-112, hipEx + (artEx - hipEx) * smoothOpen);
+    const ey = hipEy + (artEy - hipEy) * smoothOpen;
+    const wx = Math.min(-114, hipWx + (artWx - hipWx) * smoothOpen);
+    const wy = hipWy + (artWy - hipWy) * smoothOpen;
+    const handAngle = hipHandAngle + (a2 - hipHandAngle) * smoothOpen;
 
     ctx.save();
     ctx.strokeStyle = ink;
-    ctx.lineWidth = 6.6;
+    ctx.lineWidth = 9.2;
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
     ctx.beginPath();
     ctx.moveTo(sx, sy);
-    ctx.quadraticCurveTo(ex + dir * 4, ey, wx, wy);
+    ctx.quadraticCurveTo(ex - 4 * smoothOpen, ey, wx, wy);
     ctx.stroke();
     ctx.restore();
-
-    if (drawHandOnEnd) {
-      drawCartoonHand(wx, wy, a2, dir);
-    }
+    drawCartoonHand(wx, wy, handAngle, -1, smoothOpen < 0.4);
   };
 
-  // Bent-elbow hip-resting arm matching reference silhouette
-  const drawHipRestingArm = (dir: -1 | 1, sway: number) => {
-    const sx = dir * 74;
-    const sy = 10;
-    const ex = dir * 124 + sway * dir * 0.35;
-    const ey = 112;
-    const wx = dir * 90 + sway * dir * 0.2;
-    const wy = 200;
+  // Unified continuous viewer-right arm (never snaps between discrete gesture branches)
+  const drawContinuousRightArm = () => {
+    const sx = 78;
+    const sy = 16;
+    const ex = lip.rightElbowX;
+    const ey = lip.rightElbowY;
+    const wx = lip.rightWristX;
+    const wy = lip.rightWristY;
+
     ctx.save();
     ctx.strokeStyle = ink;
-    ctx.lineWidth = 6.6;
+    ctx.lineWidth = 9.2;
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
     ctx.beginPath();
     ctx.moveTo(sx, sy);
-    ctx.lineTo(ex, ey);
-    ctx.lineTo(wx, wy);
+    ctx.quadraticCurveTo(ex, ey, wx, wy);
     ctx.stroke();
     ctx.restore();
-    drawCartoonHand(wx, wy, Math.PI * 0.5 + dir * 0.14, dir, true);
-  };
 
-  // Context-driven right arm gesture helper (pointing up toward cards, pointing right in widescreen, warning stop, or chin question)
-  const drawContextualRightArm = (sway: number) => {
-    const bob = Math.sin(time * 3.1) * 4;
-    if (lip.gestureMode === 'point-up' || lip.gestureMode === 'approve-tip') {
-      const sx = 72;
-      const sy = 10;
-      const ex = 138 + sway * 0.4;
-      const ey = -48 + bob * 0.4;
-      const wx = 122 + sway * 0.3;
-      const wy = -168 + bob;
-      ctx.save();
-      ctx.strokeStyle = ink;
-      ctx.lineWidth = 6.8;
-      ctx.lineCap = 'round';
-      ctx.lineJoin = 'round';
-      ctx.beginPath();
-      ctx.moveTo(sx, sy);
-      ctx.quadraticCurveTo(ex, ey, wx, wy);
-      ctx.stroke();
-      ctx.restore();
-      drawPointingHand(wx, wy, -Math.PI * 0.54, lip.pointerGlyph);
-      return;
-    }
-
-    if (lip.gestureMode === 'point-right') {
-      const sx = 72;
-      const sy = 14;
-      const ex = 160 + sway * 0.4;
-      const ey = 28 + bob * 0.4;
-      const wx = 248 + Math.sin(time * 2.8) * 6;
-      const wy = -32 + bob;
-      ctx.save();
-      ctx.strokeStyle = ink;
-      ctx.lineWidth = 6.8;
-      ctx.lineCap = 'round';
-      ctx.lineJoin = 'round';
-      ctx.beginPath();
-      ctx.moveTo(sx, sy);
-      ctx.quadraticCurveTo(ex, ey, wx, wy);
-      ctx.stroke();
-      ctx.restore();
-      drawPointingHand(wx, wy, -0.22, lip.pointerGlyph);
-      return;
-    }
-
-    if (lip.gestureMode === 'warn-avoid') {
-      const sx = 74;
-      const sy = 12;
-      const ex = 148 + sway * 0.3;
-      const ey = 8 + Math.sin(time * 5.0) * 5;
-      const wx = 166 + Math.sin(time * 5.0) * 6;
-      const wy = -104 + Math.cos(time * 4.5) * 4;
-      ctx.save();
-      ctx.strokeStyle = ink;
-      ctx.lineWidth = 6.8;
-      ctx.lineCap = 'round';
-      ctx.lineJoin = 'round';
-      ctx.beginPath();
-      ctx.moveTo(sx, sy);
-      ctx.quadraticCurveTo(ex, ey, wx, wy);
-      ctx.stroke();
-      ctx.restore();
-      drawCartoonHand(wx, wy, -Math.PI * 0.48, 1, false);
-      // Crisp ✕ warning badge near warning hand
-      ctx.save();
-      ctx.fillStyle = '#FFFFFF';
-      ctx.beginPath();
-      ctx.arc(wx + 34, wy - 44, 19, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.strokeStyle = '#DC2626';
-      ctx.lineWidth = 3.8;
-      ctx.stroke();
-      ctx.fillStyle = '#DC2626';
-      ctx.font = `900 22px ${FONT_DISPLAY}`;
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText('✕', wx + 34, wy - 43);
-      ctx.restore();
-      return;
-    }
-
-    if (lip.gestureMode === 'question') {
-      const sx = 72;
-      const sy = 14;
-      const ex = 126 + sway * 0.3;
-      const ey = 62;
-      const wx = 58;
-      const wy = -26 + bob * 0.4;
-      ctx.save();
-      ctx.strokeStyle = ink;
-      ctx.lineWidth = 6.6;
-      ctx.lineCap = 'round';
-      ctx.lineJoin = 'round';
-      ctx.beginPath();
-      ctx.moveTo(sx, sy);
-      ctx.quadraticCurveTo(ex, ey, wx, wy);
-      ctx.stroke();
-      ctx.restore();
-      drawCartoonHand(wx, wy, -Math.PI * 0.72, -1, true);
-      return;
-    }
-
-    if (lip.gestureMode === 'cheer') {
-      drawArticulatedArm(72, 14, lip.rightShoulderAngle, lip.rightElbowAngle, 1, true);
-      return;
-    }
-
-    if (lip.gestureMode === 'explain' && lip.mouthOpen > 0.2) {
-      drawArticulatedArm(72, 14, lip.rightShoulderAngle, lip.rightElbowAngle, 1, true);
-      return;
-    }
-
-    drawHipRestingArm(1, sway);
+    drawBlendedRightHand(wx, wy, lip.rightHandAngle, lip.rightHandPointMix, lip.rightHandCompactMix);
+    drawHandReactionBadge(
+      wx,
+      wy,
+      lip.rightHandAngle,
+      lip.rightHandPointMix,
+      lip.badgeGlyph,
+      lip.badgeOpacity,
+      lip.badgeScale,
+    );
   };
 
   // 0. Ground radial shadow under shoes
   ctx.save();
-  const floorShadow = ctx.createRadialGradient(0, 344, 14, 0, 344, 155);
+  const floorShadow = ctx.createRadialGradient(0, 344, 14, 0, 344, 165);
   floorShadow.addColorStop(0, 'rgba(12, 62, 128, 0.28)');
   floorShadow.addColorStop(0.6, 'rgba(12, 62, 128, 0.12)');
   floorShadow.addColorStop(1, 'rgba(12, 62, 128, 0)');
   ctx.fillStyle = floorShadow;
   ctx.beginPath();
-  ctx.ellipse(0, 344, 155, 22, 0, 0, Math.PI * 2);
+  ctx.ellipse(0, 344, 165, 24, 0, 0, Math.PI * 2);
   ctx.fill();
   ctx.restore();
 
-  // 1. Stick Legs + crisp black oval shoes
+  // 1. Thicker cartoon legs + larger oval shoes
   ctx.save();
   ctx.strokeStyle = ink;
-  ctx.lineWidth = 6.8;
+  ctx.lineWidth = 9.6;
   ctx.lineCap = 'round';
   ctx.beginPath();
-  ctx.moveTo(-40, 194);
-  ctx.quadraticCurveTo(-45, 266, -42, 336);
-  ctx.moveTo(40, 194);
-  ctx.quadraticCurveTo(45, 266, 42, 336);
+  ctx.moveTo(-44, 194);
+  ctx.quadraticCurveTo(-50, 266, -46, 335);
+  ctx.moveTo(44, 194);
+  ctx.quadraticCurveTo(50, 266, 46, 335);
   ctx.stroke();
 
   ctx.fillStyle = ink;
   ctx.beginPath();
-  ctx.ellipse(-52, 339, 27, 11, -0.18, 0, Math.PI * 2);
+  ctx.ellipse(-58, 339, 34, 13.5, -0.16, 0, Math.PI * 2);
   ctx.fill();
   ctx.beginPath();
-  ctx.ellipse(52, 339, 27, 11, 0.18, 0, Math.PI * 2);
+  ctx.ellipse(58, 339, 34, 13.5, 0.16, 0, Math.PI * 2);
   ctx.fill();
   ctx.restore();
 
-  // 2. Breathing torso & contextual arms
+  // 2. Breathing torso & contextual arms (arms drawn ON TOP of tunic so hands never hide behind body)
   ctx.save();
   ctx.translate(0, lip.headBobY);
 
   const lSway = Math.sin(time * 1.35) * 4;
-  const rSway = Math.sin(time * 1.45 + 0.8) * 4;
-
-  // Viewer-left arm: reacts openly during cheer/warn/explain, rests comfortably when right arm points
-  if (
-    lip.gestureMode === 'cheer' ||
-    lip.gestureMode === 'warn-avoid' ||
-    (lip.gestureMode === 'explain' && lip.mouthOpen > 0.25)
-  ) {
-    drawArticulatedArm(-72, 14, lip.leftShoulderAngle, lip.leftElbowAngle, -1, true);
-  } else {
-    drawHipRestingArm(-1, lSway);
-  }
 
   // Soft drop shadow beneath tunic bottom
   ctx.fillStyle = 'rgba(15, 23, 42, 0.08)';
@@ -1385,8 +1605,9 @@ function drawCartoonHostCharacter(
   ctx.stroke();
   ctx.restore();
 
-  // Viewer-right contextual gesture arm
-  drawContextualRightArm(rSway);
+  // Left arm & viewer-right contextual gesture arm rendered cleanly in front of tunic edge
+  drawSmoothLeftArm(lSway);
+  drawContinuousRightArm();
 
   // 3. Slightly oval Tan Head rotating around neck pivot with subtle context shake/tilt
   ctx.save();
@@ -2483,19 +2704,48 @@ function wrapTextLines(
   const paragraphs = text.split(/\r?\n/);
   const lines: string[] = [];
 
-  const pushWrappedWord = (word: string) => {
-    if (ctx.measureText(word).width <= safeMaxW) {
-      lines.push(word);
-      return;
+  const splitMixedAtoms = (token: string): string[] => {
+    if (!/[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff]/.test(token)) {
+      return [token];
     }
-    let chunk = '';
-    for (const ch of word) {
-      const next = chunk + ch;
+    const rawParts =
+      token.match(
+        /[「『（【《〈"']*?[A-Za-z0-9\u00C0-\u024F\u1E00-\u1EFF][A-Za-z0-9\u00C0-\u024F\u1E00-\u1EFF'’\-.,!?;:]*[」』）】》〉"']*|[「『（【《〈]?[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fffー々]|[^\s]/g,
+      ) || [token];
+    const glued: string[] = [];
+    for (const part of rawParts) {
+      if (/^[」』）】》〉。、！？.,!?;:]+$/.test(part) && glued.length > 0) {
+        glued[glued.length - 1] += part;
+      } else {
+        glued.push(part);
+      }
+    }
+    return glued;
+  };
+
+  const pushWrappedWord = (word: string, seedLine = '') => {
+    const atoms = splitMixedAtoms(word);
+    let chunk = seedLine;
+    for (let i = 0; i < atoms.length; i++) {
+      const atom = atoms[i];
+      if (ctx.measureText(atom).width > safeMaxW && !/[A-Za-z0-9]/.test(atom)) {
+        for (const ch of atom) {
+          const next = chunk + ch;
+          if (ctx.measureText(next).width <= safeMaxW || chunk.length === 0) {
+            chunk = next;
+          } else {
+            lines.push(chunk);
+            chunk = ch;
+          }
+        }
+        continue;
+      }
+      const next = chunk + atom;
       if (ctx.measureText(next).width <= safeMaxW || chunk.length === 0) {
         chunk = next;
       } else {
         lines.push(chunk);
-        chunk = ch;
+        chunk = atom;
       }
     }
     if (chunk) lines.push(chunk);
@@ -2518,6 +2768,9 @@ function wrapTextLines(
       const candidate = `${current} ${word}`;
       if (ctx.measureText(candidate).width <= safeMaxW) {
         current = candidate;
+      } else if (/[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff]/.test(word)) {
+        pushWrappedWord(word, `${current} `);
+        current = lines.pop() ?? '';
       } else {
         lines.push(current);
         if (ctx.measureText(word).width <= safeMaxW) {
@@ -2555,22 +2808,34 @@ function fitWrappedTextBlock(
   const safeW = Math.max(24, maxWidth);
   const safeH = Math.max(24, maxHeight);
 
+  const hasShortOrphan = (wrapped: string[]): boolean => {
+    if (wrapped.length < 2) return false;
+    const lastClean = wrapped[wrapped.length - 1].replace(/\s+/g, '');
+    return lastClean.length <= 2;
+  };
+
   let fontSize = Math.max(minFont, options.maxFontSize);
+  let firstFit: { fontSize: number; lineHeight: number; lines: string[] } | null = null;
   let bestLines: string[] = [];
-  let bestLh = Math.round(fontSize * lhRatio);
 
   while (fontSize >= minFont) {
     ctx.font = `${weight} ${fontSize}px ${family}`;
     const wrapped = wrapTextLines(ctx, text, safeW);
     const lh = Math.round(fontSize * lhRatio);
     bestLines = wrapped;
-    bestLh = lh;
     if (wrapped.length <= maxLines && wrapped.length * lh <= safeH) {
-      return { fontSize, lineHeight: lh, lines: wrapped };
+      if (!firstFit) {
+        firstFit = { fontSize, lineHeight: lh, lines: wrapped };
+      }
+      // If shrinking slightly avoids a 1-2 char orphan tail line (e.g. "か。"), take the cleaner wrap
+      if (!hasShortOrphan(wrapped) || fontSize <= Math.max(minFont, options.maxFontSize * 0.78)) {
+        return { fontSize, lineHeight: lh, lines: wrapped };
+      }
     }
     fontSize -= 2;
   }
 
+  if (firstFit) return firstFit;
   return {
     fontSize: minFont,
     lineHeight: Math.round(minFont * lhRatio),
@@ -6633,6 +6898,175 @@ function drawShape3D(
   }
 }
 
+const RE_HAS_CJK_OR_HANGUL = /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af]/;
+const RE_ENDS_CJK_OR_CLOSE_PUNCT = /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af」』）】》〉。、！？]$/;
+const RE_STARTS_CJK_OR_PUNCT = /^[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af「『（【《〈」』）】》〉。、！？]/;
+const RE_ENDS_OPEN_CJK_PUNCT = /[「『（【《〈]$/;
+const RE_STARTS_CLOSE_CJK_PUNCT = /^[」』）】》〉。、！？]/;
+
+export function karaokeTokenGapPx(prevWord: string, nextWord: string, asciiSpaceW: number): number {
+  if (RE_ENDS_OPEN_CJK_PUNCT.test(prevWord) || RE_STARTS_CLOSE_CJK_PUNCT.test(nextWord)) {
+    return 0;
+  }
+  const prevCjkOnly = RE_HAS_CJK_OR_HANGUL.test(prevWord) && !/[A-Za-z0-9]/.test(prevWord);
+  const nextCjkOnly = RE_HAS_CJK_OR_HANGUL.test(nextWord) && !/[A-Za-z0-9]/.test(nextWord);
+  if (prevCjkOnly && nextCjkOnly) {
+    return 0;
+  }
+  if (RE_ENDS_CJK_OR_CLOSE_PUNCT.test(prevWord) && RE_STARTS_CJK_OR_PUNCT.test(nextWord)) {
+    return 2;
+  }
+  return asciiSpaceW;
+}
+
+export interface KaraokeWrappedLine<T extends { word: string }> {
+  tokens: T[];
+  lineWidth: number;
+}
+
+/**
+ * Pure layout solver for karaoke subtitle lines:
+ * - Preserves compact CJK / mixed CJK-punct gaps (no spaces inserted between "please?」" and "とか")
+ * - Automatically shrinks fontSize slightly when wrapping would leave a tiny 1-2 char/word orphan
+ *   (e.g. "か。") or overflow by 1-2 tokens onto an extra line
+ * - Rebalances 2-line breaks if shrinking still requires 2 lines so the final line never holds just 1-2 chars
+ */
+export function layoutKaraokeTokens<T extends { word: string }>(
+  words: T[],
+  options: {
+    baseFontSize: number;
+    minFontSize?: number;
+    maxLineW: number;
+    linesPerPage: number;
+    measureWidth: (text: string, fontSize: number) => number;
+    measureSpace: (fontSize: number) => number;
+  },
+): {
+  fontSize: number;
+  allLines: KaraokeWrappedLine<T>[];
+} {
+  const minFont = Math.max(20, options.minFontSize ?? Math.round(options.baseFontSize * 0.72));
+  const maxLineW = Math.max(160, options.maxLineW);
+
+  const buildLinesAtSize = (fSize: number): KaraokeWrappedLine<T>[] => {
+    const spaceW = Math.max(10, options.measureSpace(fSize) * 1.42);
+    const out: KaraokeWrappedLine<T>[] = [];
+    let cur: T[] = [];
+    let curW = 0;
+
+    for (const token of words) {
+      const wW = options.measureWidth(token.word, fSize);
+      const prev = cur.length > 0 ? cur[cur.length - 1].word : null;
+      const sep = prev !== null ? karaokeTokenGapPx(prev, token.word, spaceW) : 0;
+      const nextW = cur.length === 0 ? wW : curW + sep + wW;
+      if (nextW > maxLineW && cur.length > 0) {
+        out.push({ tokens: cur, lineWidth: curW });
+        cur = [token];
+        curW = wW;
+      } else {
+        cur.push(token);
+        curW = nextW;
+      }
+    }
+    if (cur.length > 0) {
+      out.push({ tokens: cur, lineWidth: curW });
+    }
+    return out;
+  };
+
+  const lineWidthOf = (tokens: T[], fSize: number): number => {
+    const spaceW = Math.max(10, options.measureSpace(fSize) * 1.42);
+    let w = 0;
+    for (let i = 0; i < tokens.length; i++) {
+      const tw = options.measureWidth(tokens[i].word, fSize);
+      const sep = i > 0 ? karaokeTokenGapPx(tokens[i - 1].word, tokens[i].word, spaceW) : 0;
+      w += sep + tw;
+    }
+    return w;
+  };
+
+  const hasWidowLine = (lines: KaraokeWrappedLine<T>[], fSize: number): boolean => {
+    if (lines.length < 2) return false;
+    const last = lines[lines.length - 1];
+    const prev = lines[lines.length - 2];
+    const lastCharCount = last.tokens.map((t) => t.word).join('').replace(/\s+/g, '').length;
+    if (lastCharCount <= 3) return true;
+    if (
+      last.tokens.length === 1 &&
+      prev.tokens.length >= 3 &&
+      last.lineWidth < Math.max(prev.lineWidth * 0.48, fSize * 6.5)
+    ) {
+      return true;
+    }
+    if (
+      last.tokens.length <= 2 &&
+      prev.tokens.length >= 4 &&
+      last.lineWidth < Math.max(prev.lineWidth * 0.42, fSize * 4.5)
+    ) {
+      return true;
+    }
+    return false;
+  };
+
+  let fontSize = Math.max(minFont, options.baseFontSize);
+  while (fontSize > minFont) {
+    const hasWideWord = words.some((tok) => options.measureWidth(tok.word, fontSize) > maxLineW);
+    if (!hasWideWord) break;
+    fontSize -= 2;
+  }
+
+  let bestLines = buildLinesAtSize(fontSize);
+  const initialLinesCount = bestLines.length;
+  const initialWidow = hasWidowLine(bestLines, fontSize);
+  const initialExceedsPage = initialLinesCount > options.linesPerPage;
+
+  // Auto-shrink slightly to prevent pushing 1-2 orphan chars/words onto a new line or new page
+  if ((initialWidow || initialExceedsPage) && fontSize > minFont) {
+    for (let trial = fontSize - 2; trial >= minFont; trial -= 2) {
+      const candidate = buildLinesAtSize(trial);
+      const fitsFewerLines = candidate.length < initialLinesCount;
+      const clearedWidow = initialWidow && !hasWidowLine(candidate, trial);
+      const fitsSinglePage = initialExceedsPage && candidate.length <= options.linesPerPage;
+      if (fitsSinglePage || (fitsFewerLines && !hasWidowLine(candidate, trial)) || clearedWidow) {
+        fontSize = trial;
+        bestLines = candidate;
+        if (!hasWidowLine(candidate, trial) && candidate.length <= options.linesPerPage) {
+          break;
+        }
+      }
+    }
+  }
+
+  // If a multi-line sentence still has a tiny widow tail after modest shrinking, pull 1-2 tokens down to balance lines
+  if (bestLines.length >= 2 && hasWidowLine(bestLines, fontSize)) {
+    const lastIdx = bestLines.length - 1;
+    const prevTokens = [...bestLines[lastIdx - 1].tokens];
+    const lastTokens = [...bestLines[lastIdx].tokens];
+    while (prevTokens.length >= 3 && lastTokens.length < 3) {
+      const moved = prevTokens.pop()!;
+      const candidateLast = [moved, ...lastTokens];
+      const candW = lineWidthOf(candidateLast, fontSize);
+      if (candW > maxLineW) {
+        prevTokens.push(moved);
+        break;
+      }
+      lastTokens.unshift(moved);
+      const charCount = lastTokens.map((t) => t.word).join('').replace(/\s+/g, '').length;
+      if (charCount >= 5 && lastTokens.length >= 2) break;
+    }
+    bestLines[lastIdx - 1] = {
+      tokens: prevTokens,
+      lineWidth: lineWidthOf(prevTokens, fontSize),
+    };
+    bestLines[lastIdx] = {
+      tokens: lastTokens,
+      lineWidth: lineWidthOf(lastTokens, fontSize),
+    };
+  }
+
+  return { fontSize, allLines: bestLines };
+}
+
 function drawKaraokeCard(
   ctx: CanvasRenderingContext2D,
   props: KaraokeCardProps,
@@ -6673,44 +7107,39 @@ function drawKaraokeCard(
     stageW >= 1600
       ? Math.round(minDim * (hasHelperNote && (subCfg?.position ?? 'bottom') !== 'center' ? 0.041 : 0.046))
       : Math.round(minDim * 0.043);
-  let fontSize = Math.max(26, Math.min(88, Math.round(baseFont * sizeMul)));
+  const startFontSize = Math.max(26, Math.min(88, Math.round(baseFont * sizeMul)));
+  const linesPerPage = isPlain && (subCfg?.position ?? 'center') === 'center' ? 3 : 2;
 
-  while (fontSize > 24) {
-    ctx.font = `700 ${fontSize}px ${FONT_DISPLAY}`;
-    const hasWideWord = words.some((tok) => ctx.measureText(tok.word).width > maxLineW);
-    if (!hasWideWord) break;
-    fontSize -= 2;
-  }
-  ctx.font = `700 ${fontSize}px ${FONT_DISPLAY}`;
-  const asciiSpaceW = Math.max(12, ctx.measureText(' ').width * 1.42);
-  const isCjkOnly = (s: string) => /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff]/.test(s) && !/[A-Za-z0-9]/.test(s);
-  const gapBetween = (a: string, b: string) => (isCjkOnly(a) && isCjkOnly(b) ? 3 : asciiSpaceW);
-
-  // Build wrapped lines of WordTiming tokens
-  const allLines: { tokens: typeof words; lineWidth: number }[] = [];
-  let currentLine: typeof words = [];
-  let currentW = 0;
-
-  for (const token of words) {
-    const wWidth = ctx.measureText(token.word).width;
-    const prevWord = currentLine.length > 0 ? currentLine[currentLine.length - 1].word : null;
-    const sep = prevWord ? gapBetween(prevWord, token.word) : 0;
-    const nextW = currentLine.length === 0 ? wWidth : currentW + sep + wWidth;
-    if (nextW > maxLineW && currentLine.length > 0) {
-      allLines.push({ tokens: currentLine, lineWidth: currentW });
-      currentLine = [token];
-      currentW = wWidth;
-    } else {
-      currentLine.push(token);
-      currentW = nextW;
+  let cachedMeasureFontSize = -1;
+  const ensureMeasureFont = (fSize: number) => {
+    if (cachedMeasureFontSize !== fSize) {
+      ctx.font = `700 ${fSize}px ${FONT_DISPLAY}`;
+      cachedMeasureFontSize = fSize;
     }
-  }
-  if (currentLine.length > 0) {
-    allLines.push({ tokens: currentLine, lineWidth: currentW });
-  }
+  };
+
+  const solved = layoutKaraokeTokens(words, {
+    baseFontSize: startFontSize,
+    minFontSize: Math.max(22, Math.round(startFontSize * 0.72)),
+    maxLineW,
+    linesPerPage,
+    measureWidth: (text, fSize) => {
+      ensureMeasureFont(fSize);
+      return ctx.measureText(text).width;
+    },
+    measureSpace: (fSize) => {
+      ensureMeasureFont(fSize);
+      return ctx.measureText(' ').width;
+    },
+  });
+
+  const fontSize = solved.fontSize;
+  const allLines = solved.allLines;
+  ctx.font = `700 ${fontSize}px ${FONT_DISPLAY}`;
+  const asciiSpaceW = Math.max(10, ctx.measureText(' ').width * 1.42);
+  const gapBetween = (a: string, b: string) => karaokeTokenGapPx(a, b, asciiSpaceW);
 
   // Group into pages (up to 3 lines when centered/clean so multi-clause sentences breathe naturally)
-  const linesPerPage = isPlain && (subCfg?.position ?? 'center') === 'center' ? 3 : 2;
   const pages: { tokens: typeof words; lineWidth: number }[][] = [];
   for (let i = 0; i < allLines.length; i += linesPerPage) {
     pages.push(allLines.slice(i, i + linesPerPage));
@@ -6985,12 +7414,48 @@ export function renderProjectFrame(
   ctx.fillStyle = glow2;
   ctx.fillRect(0, 0, stageW, stageH);
 
+  const introSec = getEffectiveIntroSeconds(project);
+  const outroSec = getEffectiveOutroSeconds(project);
+  const lessonTime = Math.max(0, time - introSec);
+
+  const drawWatermarkCornerOverlay = () => {
+    const wm = project.watermark;
+    if (!wm || !wm.watermarkEnabled || !wm.watermarkText.trim()) return;
+    const wmText = wm.watermarkText.trim();
+    ctx.save();
+    ctx.globalAlpha = Math.max(0.15, Math.min(1, wm.watermarkOpacity ?? 0.65));
+    ctx.font = '700 24px "Plus Jakarta Sans", "Inter", sans-serif';
+    const tw = ctx.measureText(wmText).width;
+    const boxW = Math.min(stageW - 80, tw + 36);
+    const boxH = 48;
+    const padX = 36;
+    const padY = 44;
+    const x =
+      wm.watermarkCorner === 'top-left' || wm.watermarkCorner === 'bottom-left'
+        ? padX
+        : stageW - padX - boxW;
+    const y =
+      wm.watermarkCorner === 'top-left' || wm.watermarkCorner === 'top-right'
+        ? padY
+        : stageH - padY - boxH;
+    ctx.fillStyle = 'rgba(15, 23, 42, 0.58)';
+    drawRoundedRectPath(ctx, x, y, boxW, boxH, 14);
+    ctx.fill();
+    ctx.fillStyle = '#FFFFFF';
+    ctx.textBaseline = 'middle';
+    ctx.textAlign = 'left';
+    ctx.fillText(wmText, x + 18, y + boxH / 2, boxW - 36);
+    ctx.restore();
+  };
+
   // Determine whether learning content is currently on screen so background dims softly for readability
-  const isLearningMomentActive = project.elements.some((el) => {
-    if (time < el.startTime || time > el.endTime) return false;
-    if (el.type === 'karaoke-card' || el.type === 'sentence-card') return true;
-    return false;
-  });
+  const isLearningMomentActive =
+    time >= introSec &&
+    project.elements.some((el) => {
+      if (lessonTime < el.startTime || lessonTime > el.endTime) return false;
+      if (el.type === 'karaoke-card' || el.type === 'sentence-card') return true;
+      return false;
+    });
 
   // Optional preset / uploaded video / uploaded image background
   const bg = project.backgroundImage;
@@ -7102,11 +7567,118 @@ export function renderProjectFrame(
     ctx.restore();
   }
 
+  // Optional Intro Card overlay during [0, introSec)
+  if (introSec > 0 && time < introSec) {
+    const wm = project.watermark;
+    const enterP = easeOutQuint(clamp01(time / 0.42));
+    const exitFade = time > introSec - 0.32 ? clamp01((introSec - time) / 0.32) : 1;
+    const cardAlpha = enterP * exitFade;
+    const badgeText = wm?.introBadge?.trim() || 'BÀI HỌC HÔM NAY';
+    const introTitle = wm?.introTitle?.trim() || project.title || 'English Practice';
+    const introSubtitle =
+      wm?.introSubtitle?.trim() || `${project.cues.length} câu hội thoại thực tế`;
+
+    ctx.save();
+    ctx.fillStyle = palette.isDark
+      ? 'rgba(15, 23, 42, 0.62)'
+      : 'rgba(15, 23, 42, 0.36)';
+    ctx.fillRect(0, 0, stageW, stageH);
+
+    const cardW = Math.min(stageW - 96, 860);
+    const maxTitleW = cardW - 96;
+    const fittedTitle = fitWrappedTextBlock(ctx, introTitle, maxTitleW, 340, {
+      fontWeight: 800,
+      maxFontSize: (project.aspectRatio || '9:16') === '16:9' ? 54 : 50,
+      minFontSize: 28,
+      maxLines: 4,
+      lineHeightRatio: 1.18,
+    });
+    const fittedSub = introSubtitle
+      ? fitWrappedTextBlock(ctx, introSubtitle, maxTitleW, 130, {
+          fontWeight: 600,
+          maxFontSize: 28,
+          minFontSize: 18,
+          maxLines: 2,
+          lineHeightRatio: 1.3,
+        })
+      : null;
+
+    const cardH =
+      148 +
+      fittedTitle.lines.length * fittedTitle.lineHeight +
+      (fittedSub ? fittedSub.lines.length * fittedSub.lineHeight + 28 : 0);
+    const cardX = (stageW - cardW) / 2;
+    const cardY = (stageH - cardH) / 2 + (1 - enterP) * 28;
+
+    ctx.globalAlpha = cardAlpha;
+    fillCardWithShadow(
+      ctx,
+      cardX,
+      cardY,
+      cardW,
+      cardH,
+      36,
+      palette.isDark ? '#1E293B' : '#FFFFFF',
+      0.24,
+    );
+    ctx.strokeStyle = palette.isDark ? 'rgba(148, 163, 184, 0.35)' : 'rgba(99, 102, 241, 0.25)';
+    ctx.lineWidth = 3;
+    drawRoundedRectPath(ctx, cardX, cardY, cardW, cardH, 36);
+    ctx.stroke();
+
+    // Badge pill
+    ctx.font = `800 22px ${FONT_SANS}`;
+    const bw = Math.min(cardW - 80, ctx.measureText(badgeText).width + 48);
+    const bx = stageW / 2 - bw / 2;
+    const by = cardY + 34;
+    ctx.fillStyle = palette.accentBlue || '#4F46E5';
+    drawRoundedRectPath(ctx, bx, by, bw, 46, 23);
+    ctx.fill();
+    ctx.fillStyle = '#FFFFFF';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(badgeText, stageW / 2, by + 23, bw - 24);
+
+    // Main title
+    let textCursorY = by + 78 + fittedTitle.lineHeight / 2;
+    ctx.font = `800 ${fittedTitle.fontSize}px ${FONT_DISPLAY}`;
+    ctx.fillStyle = palette.isDark ? '#F8FAFC' : '#0F172A';
+    fittedTitle.lines.forEach((ln) => {
+      ctx.fillText(ln, stageW / 2, textCursorY, maxTitleW);
+      textCursorY += fittedTitle.lineHeight;
+    });
+
+    if (fittedSub) {
+      textCursorY += 12;
+      ctx.font = `600 ${fittedSub.fontSize}px ${FONT_SANS}`;
+      ctx.fillStyle = palette.isDark ? '#CBD5E1' : '#475569';
+      fittedSub.lines.forEach((ln) => {
+        ctx.fillText(ln, stageW / 2, textCursorY, maxTitleW);
+        textCursorY += fittedSub.lineHeight;
+      });
+    }
+
+    // Smooth bottom progress bar
+    const progW = Math.min(260, cardW * 0.44);
+    const progX = stageW / 2 - progW / 2;
+    const progY = cardY + cardH - 34;
+    ctx.fillStyle = palette.isDark ? 'rgba(255,255,255,0.16)' : 'rgba(15, 23, 42, 0.1)';
+    drawRoundedRectPath(ctx, progX, progY, progW, 8, 4);
+    ctx.fill();
+    ctx.fillStyle = palette.accentBlue || '#4F46E5';
+    drawRoundedRectPath(ctx, progX, progY, Math.max(12, progW * clamp01(time / introSec)), 8, 4);
+    ctx.fill();
+    ctx.restore();
+
+    drawWatermarkCornerOverlay();
+    return;
+  }
+
   // 2. Sort elements by zIndex & resolve aspect layout
   const sorted = [...project.elements].sort((a, b) => a.layout.zIndex - b.layout.zIndex);
   const layoutMap = resolveElementLayoutForAspect(
     sorted,
-    time,
+    lessonTime,
     project.aspectRatio,
     project.subtitleConfig,
     project.compositionId,
@@ -7118,7 +7690,7 @@ export function renderProjectFrame(
       (el) => el.props.kind === 'illustration-prop' && el.props.variant === 'cartoon-host',
     );
   const cartoonHostContext = isCartoonStage
-    ? computeCartoonHostContextFromElements(sorted, time, project.cues, project.aspectRatio)
+    ? computeCartoonHostContextFromElements(sorted, lessonTime, project.cues, project.aspectRatio)
     : undefined;
 
   if (isCartoonStage) {
@@ -7126,8 +7698,8 @@ export function renderProjectFrame(
       (project.aspectRatio === '16:9' || project.aspectRatio === '1:1') &&
       sorted.some(
         (el) =>
-          time >= el.startTime - 0.01 &&
-          time <= el.endTime + 0.01 &&
+          lessonTime >= el.startTime - 0.01 &&
+          lessonTime <= el.endTime + 0.01 &&
           !(el.props.kind === 'illustration-prop' && el.props.variant === 'cartoon-host') &&
           el.type !== 'karaoke-card',
       );
@@ -7142,7 +7714,7 @@ export function renderProjectFrame(
   }
 
   for (const el of sorted) {
-    const frame = computeElementFrameState(el, time);
+    const frame = computeElementFrameState(el, lessonTime);
     if (!frame.visible) continue;
 
     const activeLayout = layoutMap.get(el.id) || el.layout;
@@ -7162,7 +7734,7 @@ export function renderProjectFrame(
 
     switch (el.props.kind) {
       case 'comparison-strip':
-        drawComparisonStrip(ctx, el.props, clampedWidth, time, el.startTime);
+        drawComparisonStrip(ctx, el.props, clampedWidth, lessonTime, el.startTime);
         break;
       case 'topic-pill':
         drawTopicPill(ctx, el.props, clampedWidth);
@@ -7187,7 +7759,7 @@ export function renderProjectFrame(
           drawIllustrationProp(
             ctx,
             el.props,
-            time,
+            lessonTime,
             el.startTime,
             project.cues,
             el.props.variant === 'cartoon-host' ? cartoonHostContext : undefined,
@@ -7197,7 +7769,7 @@ export function renderProjectFrame(
           drawIllustrationProp(
             ctx,
             el.props,
-            time,
+            lessonTime,
             el.startTime,
             project.cues,
             el.props.variant === 'cartoon-host' ? cartoonHostContext : undefined,
@@ -7206,19 +7778,19 @@ export function renderProjectFrame(
         break;
       }
       case 'sentence-card':
-        drawSentenceCard(ctx, el.props, clampedWidth, Math.max(0, time - el.startTime));
+        drawSentenceCard(ctx, el.props, clampedWidth, Math.max(0, lessonTime - el.startTime));
         break;
       case 'tone-meter':
-        drawToneMeter(ctx, el.props, clampedWidth, time);
+        drawToneMeter(ctx, el.props, clampedWidth, lessonTime);
         break;
       case 'word-stack':
-        drawWordStack(ctx, el.props, clampedWidth, time);
+        drawWordStack(ctx, el.props, clampedWidth, lessonTime);
         break;
       case 'shape-3d':
-        drawShape3D(ctx, el.props, clampedWidth, activeLayout.height ?? 200, Math.max(0, time - el.startTime));
+        drawShape3D(ctx, el.props, clampedWidth, activeLayout.height ?? 200, Math.max(0, lessonTime - el.startTime));
         break;
       case 'karaoke-card':
-        drawKaraokeCard(ctx, el.props, clampedWidth, time, {
+        drawKaraokeCard(ctx, el.props, clampedWidth, lessonTime, {
           subtitleConfig: project.subtitleConfig,
           stageW,
           stageH,
@@ -7250,44 +7822,24 @@ export function renderProjectFrame(
   // 3. Optional Watermark & Outro overlay (shared across 9:16, 16:9, & English Reels)
   const wm = project.watermark;
   if (wm) {
-    if (wm.watermarkEnabled && wm.watermarkText.trim()) {
-      const wmText = wm.watermarkText.trim();
-      ctx.save();
-      ctx.globalAlpha = Math.max(0.15, Math.min(1, wm.watermarkOpacity ?? 0.65));
-      ctx.font = '700 24px "Plus Jakarta Sans", "Inter", sans-serif';
-      const tw = ctx.measureText(wmText).width;
-      const boxW = Math.min(stageW - 80, tw + 36);
-      const boxH = 48;
-      const padX = 36;
-      const padY = 44;
-      const x =
-        wm.watermarkCorner === 'top-left' || wm.watermarkCorner === 'bottom-left'
-          ? padX
-          : stageW - padX - boxW;
-      const y =
-        wm.watermarkCorner === 'top-left' || wm.watermarkCorner === 'top-right'
-          ? padY
-          : stageH - padY - boxH;
-      ctx.fillStyle = 'rgba(15, 23, 42, 0.58)';
-      drawRoundedRectPath(ctx, x, y, boxW, boxH, 14);
-      ctx.fill();
-      ctx.fillStyle = '#FFFFFF';
-      ctx.textBaseline = 'middle';
-      ctx.textAlign = 'left';
-      ctx.fillText(wmText, x + 18, y + boxH / 2, boxW - 36);
-      ctx.restore();
-    }
+    drawWatermarkCornerOverlay();
 
     const outroLines = [wm.outroLine1?.trim() || '', wm.outroLine2?.trim() || ''].filter(Boolean);
-    if (wm.outroSeconds > 0 && outroLines.length > 0 && project.duration > 0) {
-      const outroStart = Math.max(0, project.duration - wm.outroSeconds);
+    if (outroSec > 0 && outroLines.length > 0 && project.duration > 0) {
+      const outroStart = Math.max(introSec, project.duration - outroSec);
       if (time >= outroStart) {
-        const fadeDur = Math.min(0.55, wm.outroSeconds);
+        const fadeDur = Math.min(0.55, outroSec);
         const progress = fadeDur > 0 ? Math.min(1, (time - outroStart) / fadeDur) : 1;
         ctx.save();
-        ctx.fillStyle = `rgba(15, 23, 42, ${(0.9 * progress).toFixed(3)})`;
+        ctx.fillStyle = `rgba(15, 23, 42, ${(0.92 * progress).toFixed(3)})`;
         ctx.fillRect(0, 0, stageW, stageH);
         ctx.globalAlpha = progress;
+
+        // Subtle accent rule above outro lines
+        ctx.fillStyle = palette.accentBlue || '#6366F1';
+        drawRoundedRectPath(ctx, stageW / 2 - 48, stageH / 2 - 110, 96, 6, 3);
+        ctx.fill();
+
         ctx.fillStyle = '#FFFFFF';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
@@ -7315,6 +7867,9 @@ function estimateElementBoxDimensions(
     return { width, height: Math.max(360, activeLayout.height ?? 450) };
   }
   if (el.props.kind === 'illustration-prop') {
+    if (el.props.variant === 'cartoon-host') {
+      return { width: Math.min(width, 620), height: activeLayout.height ?? 660 };
+    }
     return { width, height: Math.max(220, activeLayout.height ?? 300) };
   }
   if (el.props.kind === 'comparison-strip') {
@@ -7343,6 +7898,56 @@ function estimateElementBoxDimensions(
     return { width, height: activeLayout.height ?? 84 };
   }
   return { width, height: activeLayout.height ?? 160 };
+}
+
+export type CanvasOverlayZone = 'intro' | 'outro' | 'watermark';
+
+export function hitTestCanvasOverlayZone(
+  project: LessonProject,
+  canvasX: number,
+  canvasY: number,
+  time: number,
+  aspectRatio: ExportAspectRatioId = '9:16',
+): CanvasOverlayZone | null {
+  const stage = getStageDimensionsForAspect(aspectRatio);
+  const stageW = stage.width;
+  const stageH = stage.height;
+  const introSec = getEffectiveIntroSeconds(project);
+  const outroSec = getEffectiveOutroSeconds(project);
+  const wm = project.watermark;
+
+  if (wm && wm.watermarkEnabled && wm.watermarkText.trim()) {
+    const approxTextW = Math.max(120, wm.watermarkText.trim().length * 14.5);
+    const boxW = Math.min(stageW - 80, approxTextW + 36);
+    const boxH = 48;
+    const padX = 36;
+    const padY = 44;
+    const x =
+      wm.watermarkCorner === 'top-left' || wm.watermarkCorner === 'bottom-left'
+        ? padX
+        : stageW - padX - boxW;
+    const y =
+      wm.watermarkCorner === 'top-left' || wm.watermarkCorner === 'top-right'
+        ? padY
+        : stageH - padY - boxH;
+    if (canvasX >= x - 12 && canvasX <= x + boxW + 12 && canvasY >= y - 12 && canvasY <= y + boxH + 12) {
+      return 'watermark';
+    }
+  }
+
+  if (introSec > 0 && time < introSec) {
+    return 'intro';
+  }
+
+  if (wm && outroSec > 0 && project.duration > 0) {
+    const outroLines = [wm.outroLine1?.trim() || '', wm.outroLine2?.trim() || ''].filter(Boolean);
+    const outroStart = Math.max(introSec, project.duration - outroSec);
+    if (outroLines.length > 0 && time >= outroStart) {
+      return 'outro';
+    }
+  }
+
+  return null;
 }
 
 export function hitTestElementLayout(

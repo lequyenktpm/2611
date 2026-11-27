@@ -1,5 +1,5 @@
 {
-  "activeTab": "reels",
+  "activeTab": "studio",
   "studio": {
     "aspectRatio": "9:16",
     "resolution": "540p",
@@ -16,9 +16,22 @@
     "learningScrimOpacity": 0.45,
     "bgmPreset": "soft-rain",
     "bgmVolume": 0.03,
-    "descriptionStyle": "auto"
+    "descriptionStyle": "auto",
+    "watermark": {
+      "introSeconds": 0,
+      "introBadge": "BÀI HỌC HÔM NAY",
+      "introTitle": "",
+      "introSubtitle": "Nghe kỹ & luyện nói theo nhịp",
+      "watermarkEnabled": false,
+      "watermarkText": "@KineticSub",
+      "watermarkCorner": "bottom-right",
+      "watermarkOpacity": 0.7,
+      "outroSeconds": 0,
+      "outroLine1": "Thanks for watching!",
+      "outroLine2": "Subscribe & Practice daily"
+    }
   },
-  "updatedAt": 1795734364266,
+  "updatedAt": 1795738533405,
   "reels": {
     "reelCreationMode": "creator",
     "creatorTopicHint": "",

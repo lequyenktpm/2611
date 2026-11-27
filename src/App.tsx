@@ -19,6 +19,10 @@ import {
   choreographFromTranscript,
   resyncProjectTimingToCues,
 } from './engine/autoChoreographer';
+import {
+  getEffectiveIntroSeconds,
+  getEffectiveOutroSeconds,
+} from './engine/canvasRenderer';
 import { syncCustomComponentsFromServer } from './engine/customComponentStore';
 import { buildVideoDescription, VideoDescriptionStyle } from './engine/videoDescriptionBuilder';
 import { hydrateClientApiKeysFromServer } from './utils/apiKeysStore';
@@ -173,10 +177,19 @@ export default function App() {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const rafRef = useRef<number | null>(null);
   const lastFrameTsRef = useRef<number | null>(null);
+  const currentTimeRef = useRef<number>(currentTime);
+  currentTimeRef.current = currentTime;
   const exportAbortControllerRef = useRef<AbortController | null>(null);
 
-  // Sync playback loop
+  // Sync playback loop (accounts for non-destructive Intro & Outro tails around voiceover audio)
   useEffect(() => {
+    const introSec = getEffectiveIntroSeconds(project);
+    const outroSec = getEffectiveOutroSeconds(project);
+    const speechEndLimit =
+      audioDurationSec && audioDurationSec > 0
+        ? introSec + audioDurationSec
+        : Math.max(introSec, project.duration - outroSec);
+
     if (!isPlaying) {
       if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
       lastFrameTsRef.current = null;
@@ -187,35 +200,59 @@ export default function App() {
     }
 
     if (audioRef.current && audioUrl) {
-      audioRef.current.currentTime = currentTime;
-      audioRef.current.play().catch(() => {
-        // Ignore autoplay restrictions
-      });
+      if (currentTimeRef.current >= introSec && currentTimeRef.current < speechEndLimit - 0.04) {
+        audioRef.current.currentTime = Math.max(0, currentTimeRef.current - introSec);
+        audioRef.current.play().catch(() => {
+          // Ignore autoplay restrictions
+        });
+      } else {
+        if (!audioRef.current.paused) audioRef.current.pause();
+        if (currentTimeRef.current < introSec) {
+          audioRef.current.currentTime = 0;
+        }
+      }
     }
 
     const tick = (now: number) => {
       if (audioRef.current && audioUrl && !audioRef.current.paused) {
-        const nextT = audioRef.current.currentTime;
+        lastFrameTsRef.current = now;
+        const nextT = introSec + audioRef.current.currentTime;
         if (nextT >= project.duration) {
+          currentTimeRef.current = 0;
           setCurrentTime(0);
           setIsPlaying(false);
           return;
         }
+        currentTimeRef.current = nextT;
         setCurrentTime(nextT);
       } else {
         if (lastFrameTsRef.current === null) {
           lastFrameTsRef.current = now;
         }
-        const dt = (now - lastFrameTsRef.current) / 1000;
+        const dt = Math.min(0.1, Math.max(0, (now - lastFrameTsRef.current) / 1000));
         lastFrameTsRef.current = now;
-        setCurrentTime((prev) => {
-          const next = prev + dt;
-          if (next >= project.duration) {
-            setIsPlaying(false);
-            return 0;
-          }
-          return next;
-        });
+        const next = currentTimeRef.current + dt;
+        if (next >= project.duration) {
+          currentTimeRef.current = 0;
+          setCurrentTime(0);
+          setIsPlaying(false);
+          return;
+        }
+        currentTimeRef.current = next;
+        setCurrentTime(next);
+
+        if (
+          audioRef.current &&
+          audioUrl &&
+          audioRef.current.paused &&
+          next >= introSec &&
+          next < speechEndLimit - 0.04
+        ) {
+          audioRef.current.currentTime = Math.max(0, next - introSec);
+          audioRef.current.play().catch(() => {
+            // Ignore autoplay restrictions
+          });
+        }
       }
       rafRef.current = requestAnimationFrame(tick);
     };
@@ -225,7 +262,7 @@ export default function App() {
       if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isPlaying, project.duration, audioUrl]);
+  }, [isPlaying, project.duration, project.watermark, audioDurationSec, audioUrl]);
 
   useEffect(() => {
     void syncCustomComponentsFromServer();
@@ -277,7 +314,12 @@ export default function App() {
             nextTheme !== prev.theme || nextComp !== prev.compositionId
               ? recomposeProjectWithStyle(patched, nextComp || 'story-scenes', { theme: nextTheme })
               : patched;
-          return nextSub ? { ...recomposed, subtitleConfig: nextSub } : recomposed;
+          const withSub = nextSub ? { ...recomposed, subtitleConfig: nextSub } : recomposed;
+          const hydratedExtra =
+            getEffectiveIntroSeconds(withSub) + getEffectiveOutroSeconds(withSub);
+          return hydratedExtra > 0
+            ? { ...withSub, duration: Number((withSub.duration + hydratedExtra).toFixed(2)) }
+            : withSub;
         });
         if (s.studio.bgmPreset) setStudioBgmPreset(s.studio.bgmPreset);
         if (typeof s.studio.bgmVolume === 'number') setStudioBgmVolume(s.studio.bgmVolume);
@@ -365,14 +407,20 @@ export default function App() {
             : presetId === 'xun'
               ? PRESET_XUN52000_DARK
               : PRESET_3D_SHAPES_KARAOKE;
-    setProject((prev) => ({
-      ...next,
-      aspectRatio: prev.aspectRatio ?? mp4Settings.aspectRatio ?? '9:16',
-      subtitleConfig: prev.subtitleConfig,
-      backgroundImage: prev.backgroundImage,
-      watermark: prev.watermark,
-    }));
-    setCurrentTime(
+    let nextIntroOffset = 0;
+    setProject((prev) => {
+      nextIntroOffset = getEffectiveIntroSeconds(prev);
+      const extraSec = nextIntroOffset + getEffectiveOutroSeconds(prev);
+      return {
+        ...next,
+        duration: Number((next.duration + extraSec).toFixed(2)),
+        aspectRatio: prev.aspectRatio ?? mp4Settings.aspectRatio ?? '9:16',
+        subtitleConfig: prev.subtitleConfig,
+        backgroundImage: prev.backgroundImage,
+        watermark: prev.watermark,
+      };
+    });
+    const baseSeek =
       presetId === 'jp-en'
         ? 4.8
         : presetId === 'water'
@@ -381,8 +429,8 @@ export default function App() {
             ? 3.8
             : presetId === 'xun'
               ? 2.8
-              : 1.65,
-    );
+              : 1.65;
+    setCurrentTime(baseSeek + nextIntroOffset);
     setSelectedElementId(null);
   }, []);
 
@@ -414,6 +462,7 @@ export default function App() {
   const handleApplyTranscript = useCallback(
     (cues: TranscriptCue[], title: string) => {
       setIsPlaying(false);
+      const introSec = getEffectiveIntroSeconds(project);
       setProject((prev) => {
         const built = choreographFromTranscript(cues, {
           title,
@@ -421,9 +470,11 @@ export default function App() {
           compositionId: prev.compositionId,
           audioFileName,
         });
-        const nextDur = audioDurationSec
+        const extraSec = getEffectiveIntroSeconds(prev) + getEffectiveOutroSeconds(prev);
+        const baseDur = audioDurationSec
           ? Number(Math.max(built.duration, audioDurationSec).toFixed(2))
           : built.duration;
+        const nextDur = Number((baseDur + extraSec).toFixed(2));
         const withMeta: LessonProject = {
           ...built,
           aspectRatio: prev.aspectRatio ?? mp4Settings.aspectRatio ?? '9:16',
@@ -445,12 +496,12 @@ export default function App() {
       });
       const firstCue = cues[0];
       const previewTime = firstCue
-        ? Number((firstCue.start + Math.min(0.5, (firstCue.end - firstCue.start) * 0.45)).toFixed(2))
-        : 0.4;
+        ? Number((introSec + firstCue.start + Math.min(0.5, (firstCue.end - firstCue.start) * 0.45)).toFixed(2))
+        : Number((introSec + 0.4).toFixed(2));
       setCurrentTime(previewTime);
       setSelectedElementId(null);
     },
-    [audioFileName, audioDurationSec],
+    [audioFileName, audioDurationSec, mp4Settings.aspectRatio, project],
   );
 
   const handleApplyScenePlan = useCallback(
@@ -467,14 +518,18 @@ export default function App() {
         theme: flexPlan.theme,
         compositionId: flexPlan.compositionId ?? project.compositionId,
         audioFileName,
+        audioDurationSec,
         cuesOverride,
       });
+      const introSec = getEffectiveIntroSeconds(project);
+      const extraSec = introSec + getEffectiveOutroSeconds(project);
+      const baseDur = audioDurationSec
+        ? Number(Math.max(built.duration, audioDurationSec).toFixed(2))
+        : built.duration;
       const next: LessonProject = {
         ...built,
         aspectRatio: project.aspectRatio ?? mp4Settings.aspectRatio ?? '9:16',
-        duration: audioDurationSec
-          ? Number(Math.max(built.duration, audioDurationSec).toFixed(2))
-          : built.duration,
+        duration: Number((baseDur + extraSec).toFixed(2)),
         subtitleConfig: project.subtitleConfig,
         backgroundImage: project.backgroundImage,
         watermark: project.watermark,
@@ -485,24 +540,39 @@ export default function App() {
       setCurrentTime(
         Math.min(
           next.duration,
-          Number(((firstVisual?.startTime ?? firstWord?.start ?? 0) + 0.6).toFixed(2)),
+          Number((introSec + (firstVisual?.startTime ?? firstWord?.start ?? 0) + 0.6).toFixed(2)),
         ),
       );
       setSelectedElementId(null);
       return next;
     },
-    [audioFileName, audioDurationSec, project.backgroundImage, project.compositionId, project.watermark],
+    [
+      audioFileName,
+      audioDurationSec,
+      mp4Settings.aspectRatio,
+      project,
+    ],
   );
 
   const handleSeek = useCallback(
     (time: number) => {
+      const introSec = getEffectiveIntroSeconds(project);
       const clamped = Math.max(0, Math.min(project.duration, time));
+      currentTimeRef.current = clamped;
       setCurrentTime(clamped);
       if (audioRef.current && audioUrl) {
-        audioRef.current.currentTime = clamped;
+        if (clamped < introSec) {
+          if (!audioRef.current.paused) audioRef.current.pause();
+          audioRef.current.currentTime = 0;
+        } else {
+          const targetAudioTime = Math.max(0, clamped - introSec);
+          audioRef.current.currentTime = Number.isFinite(audioRef.current.duration)
+            ? Math.min(audioRef.current.duration, targetAudioTime)
+            : targetAudioTime;
+        }
       }
     },
-    [project.duration, audioUrl],
+    [project, audioUrl],
   );
 
   const handleChangeComposition = useCallback(
@@ -782,29 +852,33 @@ export default function App() {
     [audioFile, project.cues, audioDurationSec],
   );
 
-  const handleChangeWatermark = useCallback((wm: WatermarkOutroConfig) => {
-    setProject((prev) => {
-      const cuesMax = prev.cues.reduce((mx, c) => Math.max(mx, c.end), 0);
-      const elMax = prev.elements.reduce((mx, el) => Math.max(mx, el.endTime), 0);
-      const prevHasOutro = Boolean(
-        prev.watermark &&
-          prev.watermark.outroSeconds > 0 &&
-          (prev.watermark.outroLine1.trim() || prev.watermark.outroLine2.trim()),
-      );
-      const prevOutroSec = prevHasOutro ? Number(prev.watermark?.outroSeconds || 0) : 0;
-      const baseDur = Math.max(3, cuesMax, elMax, Number((prev.duration - prevOutroSec).toFixed(2)));
-      const nextHasOutro = Boolean(
-        wm.outroSeconds > 0 && (wm.outroLine1.trim() || wm.outroLine2.trim()),
-      );
-      const nextOutroSec = nextHasOutro ? Math.max(0, Number(wm.outroSeconds || 0)) : 0;
-      const nextDuration = Number((baseDur + nextOutroSec).toFixed(2));
-      return {
-        ...prev,
-        duration: nextDuration,
-        watermark: wm,
-      };
-    });
-  }, []);
+  const handleChangeWatermark = useCallback(
+    (wm: WatermarkOutroConfig) => {
+      setProject((prev) => {
+        const cuesMax = prev.cues.reduce((mx, c) => Math.max(mx, c.end), 0);
+        const elMax = prev.elements.reduce((mx, el) => Math.max(mx, el.endTime), 0);
+        const prevIntroSec = getEffectiveIntroSeconds(prev);
+        const prevOutroSec = getEffectiveOutroSeconds(prev);
+        const baseDur = Math.max(
+          3,
+          cuesMax,
+          elMax,
+          audioDurationSec ?? 0,
+          Number((prev.duration - prevIntroSec - prevOutroSec).toFixed(2)),
+        );
+        const nextWithWm = { ...prev, watermark: wm };
+        const nextIntroSec = getEffectiveIntroSeconds(nextWithWm);
+        const nextOutroSec = getEffectiveOutroSeconds(nextWithWm);
+        const nextDuration = Number((baseDur + nextIntroSec + nextOutroSec).toFixed(2));
+        return {
+          ...prev,
+          duration: nextDuration,
+          watermark: wm,
+        };
+      });
+    },
+    [audioDurationSec],
+  );
 
   const handleRandomizeComposition = useCallback(() => {
     setIsPlaying(false);
@@ -1005,17 +1079,30 @@ export default function App() {
           : studioDescription;
 
         let finalAudioForExport: File | null = audioFile;
+        const introSec = getEffectiveIntroSeconds(targetProject);
+        const outroSec = getEffectiveOutroSeconds(targetProject);
         const shouldMixBgm =
           (studioBgmPreset !== 'none' || Boolean(studioCustomBgmFile)) && studioBgmVolume > 0;
-        if (shouldMixBgm) {
-          setExportStageLabel('Đang hòa âm nhạc nền + âm thanh...');
-          const speechWindows = targetProject.cues.map((c) => ({ start: c.start, end: c.end }));
+        if (shouldMixBgm || (introSec > 0 && Boolean(audioFile))) {
+          setExportStageLabel(
+            introSec > 0 && !shouldMixBgm
+              ? 'Đang căn khoảng lặng Intro cho âm thanh...'
+              : 'Đang hòa âm nhạc nền + âm thanh...',
+          );
+          const speechWindows = targetProject.cues.map((c) => ({
+            start: c.start + introSec,
+            end: c.end + introSec,
+          }));
           const mixed = await mixVoiceWithBgmPreset({
             voiceFile: audioFile,
             bgmPreset: studioBgmPreset,
             bgmVolume: studioBgmVolume,
             customBgmFile: studioCustomBgmFile,
+            voiceDelaySec: introSec,
             speechWindows,
+            introEndSec: introSec,
+            outroStartSec:
+              outroSec > 0 ? Math.max(introSec, targetProject.duration - outroSec) : undefined,
             minTotalDurationSec: targetProject.duration,
             outputFileName: `${cleanFileBase}.wav`,
           });
@@ -1116,10 +1203,13 @@ export default function App() {
             const dur = e.currentTarget.duration;
             if (Number.isFinite(dur) && dur > 0.5) {
               setAudioDurationSec(dur);
-              setProject((prev) => ({
-                ...prev,
-                duration: Number(Math.max(prev.duration, dur).toFixed(2)),
-              }));
+              setProject((prev) => {
+                const extraSec = getEffectiveIntroSeconds(prev) + getEffectiveOutroSeconds(prev);
+                return {
+                  ...prev,
+                  duration: Number(Math.max(prev.duration, dur + extraSec).toFixed(2)),
+                };
+              });
             }
           }}
         />

@@ -23,11 +23,43 @@ export function formatTimeToken(sec: number): string {
   return `${pad(h)}:${pad(m)}:${pad(s)}.${pad(ms, 3)}`;
 }
 
-// Split CJK runs into readable 3-4 char karaoke chunks while preserving English words intact
-function tokenizeTextForKaraoke(text: string): string[] {
+// Split CJK runs into readable 3-4 char karaoke chunks while preserving Latin/English words intact
+export function tokenizeTextForKaraoke(text: string): string[] {
   const rawTokens = text.trim().split(/\s+/).filter(Boolean);
   const result: string[] = [];
   const hasCjk = (s: string) => /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff]/.test(s);
+  const hasLatinOrDigit = (s: string) => /[A-Za-z0-9\u00C0-\u024F\u1E00-\u1EFF]/.test(s);
+  const isTrailingCjkPunct = (s: string) => /^[。、！？「」『』（）()【】《》.,!?;:]+$/.test(s);
+
+  const pushCjkRun = (run: string) => {
+    const clauses = run.split(/(?<=[。、！？「」『』,.!?])/).filter(Boolean);
+    for (const clause of clauses) {
+      if (isTrailingCjkPunct(clause) && result.length > 0) {
+        result[result.length - 1] += clause;
+        continue;
+      }
+      if (clause.length <= 5) {
+        result.push(clause);
+        continue;
+      }
+      // Split into balanced 3-5 char chunks so no chunk exceeds 5 chars and no 1-2 char orphan tail is created
+      let i = 0;
+      while (i < clause.length) {
+        const rem = clause.length - i;
+        if (rem <= 5) {
+          if (rem <= 2 && result.length > 0 && result[result.length - 1].length + rem <= 5) {
+            result[result.length - 1] += clause.slice(i);
+          } else {
+            result.push(clause.slice(i));
+          }
+          break;
+        }
+        const take = rem === 6 ? 3 : 4;
+        result.push(clause.slice(i, i + take));
+        i += take;
+      }
+    }
+  };
 
   for (const tok of rawTokens) {
     if (!hasCjk(tok) || tok.length <= 5) {
@@ -35,15 +67,19 @@ function tokenizeTextForKaraoke(text: string): string[] {
       continue;
     }
 
-    // Split along Japanese punctuation first, then slice long runs into 4-char chunks
-    const clauses = tok.split(/(?<=[。、！？「」,.!?])/).filter(Boolean);
-    for (const clause of clauses) {
-      if (clause.length <= 5) {
-        result.push(clause);
+    // Separate Latin/digit runs (with attached quotes/punct) from pure CJK runs so English words are NEVER sliced
+    const scriptParts =
+      tok.match(
+        /[「『（【《〈"']*?[A-Za-z0-9\u00C0-\u024F\u1E00-\u1EFF][A-Za-z0-9\u00C0-\u024F\u1E00-\u1EFF'’\-.,!?;:]*[」』）】》〉"']*|[「『（【《〈]?[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fffー々、。！？「」『』（）()【】《》]+|[^\s]/g,
+      ) || [tok];
+
+    for (const part of scriptParts) {
+      if (isTrailingCjkPunct(part) && result.length > 0) {
+        result[result.length - 1] += part;
+      } else if (hasLatinOrDigit(part) || !hasCjk(part)) {
+        result.push(part);
       } else {
-        for (let i = 0; i < clause.length; i += 4) {
-          result.push(clause.slice(i, i + 4));
-        }
+        pushCjkRun(part);
       }
     }
   }

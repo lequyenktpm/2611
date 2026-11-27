@@ -316,12 +316,14 @@ export async function mixVoiceWithBgmPreset(params: {
   countdownWindows?: CountdownCueWindow[];
   enableCountdownSfx?: boolean;
   speechWindows?: SpeechWindow[];
+  voiceDelaySec?: number;
   introEndSec?: number;
   outroStartSec?: number;
   minTotalDurationSec?: number;
   outputFileName?: string;
 }): Promise<{ file: File | null; durationSec: number }> {
   const safeVol = Math.max(0, Math.min(0.65, Number(params.bgmVolume) || 0));
+  const safeDelay = Math.max(0, Number(params.voiceDelaySec) || 0);
   const wantsBgm = Boolean((params.customBgmFile || params.bgmPreset !== 'none') && safeVol > 0);
   const activeCountdowns =
     params.enableCountdownSfx !== false && Array.isArray(params.countdownWindows)
@@ -332,7 +334,7 @@ export async function mixVoiceWithBgmPreset(params: {
   if (!params.voiceFile && !wantsBgm && !wantsCountdownSfx) {
     return { file: null, durationSec: params.minTotalDurationSec ?? 0 };
   }
-  if (params.voiceFile && !wantsBgm && !wantsCountdownSfx) {
+  if (params.voiceFile && !wantsBgm && !wantsCountdownSfx && safeDelay <= 0) {
     const tmpCtx = new AudioContext();
     try {
       const dec = await tmpCtx.decodeAudioData(await params.voiceFile.arrayBuffer());
@@ -375,7 +377,7 @@ export async function mixVoiceWithBgmPreset(params: {
       }
     }
 
-    if (!bgmBuf && !wantsCountdownSfx) {
+    if (!bgmBuf && !wantsCountdownSfx && safeDelay <= 0) {
       return {
         file: params.voiceFile,
         durationSec: voiceBuf ? Number(voiceBuf.duration.toFixed(3)) : (params.minTotalDurationSec ?? 0),
@@ -384,7 +386,7 @@ export async function mixVoiceWithBgmPreset(params: {
 
     const totalDur = Math.max(
       1,
-      voiceBuf?.duration ?? 0,
+      voiceBuf ? voiceBuf.duration + safeDelay : 0,
       params.minTotalDurationSec ?? 0,
     );
     const totalSamples = Math.max(1, Math.ceil(totalDur * sampleRate));
@@ -394,7 +396,7 @@ export async function mixVoiceWithBgmPreset(params: {
       const voiceSrc = offline.createBufferSource();
       voiceSrc.buffer = voiceBuf;
       voiceSrc.connect(offline.destination);
-      voiceSrc.start(0);
+      voiceSrc.start(safeDelay);
     }
 
     if (bgmBuf && safeVol > 0) {
@@ -407,7 +409,7 @@ export async function mixVoiceWithBgmPreset(params: {
         params.speechWindows && params.speechWindows.length > 0
           ? params.speechWindows
           : voiceBuf
-            ? [{ start: 0, end: voiceBuf.duration }]
+            ? [{ start: safeDelay, end: safeDelay + voiceBuf.duration }]
             : [];
 
       // Sample gain envelope at 20Hz for ultra-smooth ducking & fades

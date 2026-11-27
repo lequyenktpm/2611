@@ -941,3 +941,17 @@ export function splitMixedLanguageTtsSpans(
     voice: voiceForLang(span.lang),
   }));
 }
+
+/**
+ * Cleans dangling quote/bracket wrappers at language-split boundaries so TTS voices
+ * do not insert unnatural sentence pauses between embedded foreign phrases and native text.
+ */
+export function sanitizeSpanTextForSpeech(rawText: string): string {
+  const cleaned = String(rawText || '')
+    .replace(/^[\s「『（【《〈"“”‘’]+/, '')
+    .replace(/[\s「『（【《〈」』）】》〉"“”‘’]+$/, '')
+    .replace(/[「『」』]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return cleaned || String(rawText || '').trim();
+}

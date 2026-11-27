@@ -33,30 +33,44 @@ export function estimateWrappedLineCount(
 ): number {
   const clean = text.trim();
   if (!clean) return 1;
-  const avgCharW = hasCjk(clean) ? fontPx * 0.96 : fontPx * 0.56;
-  const charsPerLine = Math.max(6, Math.floor(maxWidthPx / avgCharW));
-  const words = clean.split(/\s+/).filter(Boolean);
-  if (words.length === 0) return 1;
+  // Estimate line wrapping by measuring approximate per-character visual width (handles mixed JP/EN cleanly)
+  const effectiveMaxW = Math.max(80, maxWidthPx);
+  const tokens = clean.match(/[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af]|[^\s\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af]+|\s+/g) ?? [clean];
 
   let lines = 1;
-  let lineChars = 0;
-  for (const w of words) {
-    if (w.length > charsPerLine) {
-      if (lineChars > 0) {
-        lines += 1;
-        lineChars = 0;
-      }
-      const extraLines = Math.ceil(w.length / charsPerLine) - 1;
-      lines += extraLines;
-      lineChars = w.length % charsPerLine || charsPerLine;
+  let lineW = 0;
+  for (const tok of tokens) {
+    if (/^\s+$/.test(tok)) {
+      if (lineW > 0) lineW += fontPx * 0.28;
       continue;
     }
-    const nextLen = lineChars === 0 ? w.length : lineChars + 1 + w.length;
-    if (nextLen > charsPerLine) {
+    let tokW = 0;
+    for (const ch of tok) {
+      if (/[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af]/.test(ch)) {
+        tokW += fontPx * 1.02;
+      } else if (/[A-ZMW@]/.test(ch)) {
+        tokW += fontPx * 0.68;
+      } else if (/[ilI.,:;!|'"()「」]/.test(ch)) {
+        tokW += fontPx * 0.34;
+      } else {
+        tokW += fontPx * 0.56;
+      }
+    }
+    if (tokW > effectiveMaxW) {
+      if (lineW > 0) {
+        lines += 1;
+        lineW = 0;
+      }
+      const extraLines = Math.ceil(tokW / effectiveMaxW) - 1;
+      lines += extraLines;
+      lineW = tokW % effectiveMaxW || effectiveMaxW;
+      continue;
+    }
+    if (lineW > 0 && lineW + tokW > effectiveMaxW) {
       lines += 1;
-      lineChars = w.length;
+      lineW = tokW;
     } else {
-      lineChars = nextLen;
+      lineW += tokW;
     }
   }
   return Math.max(1, lines);
@@ -153,7 +167,7 @@ export function estimateElementHalfExtents(el: SceneElement): {
       } else if (variant === 'avatar-speech') {
         baseHalfH = 116;
       } else if (variant === 'cartoon-host') {
-        baseHalfH = 325;
+        baseHalfH = 335;
       } else if (
         variant === 'p168-step-quiz-formula' ||
         variant === 'p168-situation-cards'
@@ -232,9 +246,10 @@ export function estimateElementHalfExtents(el: SceneElement): {
       const baseFont = textLen > 95 ? 36 : textLen > 52 ? 40 : 46;
       const headFontSize = Math.max(22, Math.round(baseFont * widthScale));
       const lineH = Math.round(headFontSize * 1.28);
-      const lines = (el.props.text || '')
+      const rawLines = (el.props.text || '')
         .split(/\r?\n/)
         .reduce((acc, part) => acc + estimateWrappedLineCount(part, innerW, headFontSize), 0);
+      const lines = Math.min(6, Math.max(1, rawLines));
       const subFont = Math.max(19, Math.round(30 * widthScale));
       const subLineH = Math.round(subFont * 1.26);
       const subLines = el.props.subtext
@@ -246,9 +261,10 @@ export function estimateElementHalfExtents(el: SceneElement): {
           )
         : 0;
       const subH = subLines > 0 ? subLines * subLineH + 18 : 0;
-      const cardH = Math.max(156, lines * lineH + subH + 74);
-      const badgeExtra = el.props.badge && el.props.badge !== 'none' ? 16 : 0;
-      const stampExtra = el.props.stampText ? 28 : 0;
+      const stampPad = el.props.stampText ? 18 : 0;
+      const cardH = Math.max(156, lines * lineH + subH + 74 + stampPad);
+      const badgeExtra = el.props.badge && el.props.badge !== 'none' ? 18 : 0;
+      const stampExtra = el.props.stampText ? 22 : 0;
       baseHalfH = Math.ceil((cardH + badgeExtra + stampExtra) / 2);
       break;
     }
@@ -264,7 +280,7 @@ export function estimateElementHalfExtents(el: SceneElement): {
       break;
     }
     case 'tone-meter':
-      baseHalfH = 74;
+      baseHalfH = 82;
       break;
     case 'karaoke-card':
       baseHalfH = 104;

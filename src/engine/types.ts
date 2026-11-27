@@ -438,9 +438,13 @@ export interface WatermarkOutroConfig {
   watermarkText: string;
   watermarkCorner: WatermarkCorner;
   watermarkOpacity: number; // 0.15..1.0
-  outroSeconds: number; // 0..6
+  outroSeconds: number; // 0..10
   outroLine1: string;
   outroLine2: string;
+  introSeconds?: number; // 0..6
+  introBadge?: string;
+  introTitle?: string;
+  introSubtitle?: string;
 }
 
 export interface LessonProject {
@@ -488,7 +492,8 @@ export interface ScenePlanText {
 }
 
 export interface ScenePlanEntry {
-  id: string;
+  id?: string;
+  scene_id?: string;
   shapes?: ScenePlanShape[];
   texts?: ScenePlanText[];
 }
